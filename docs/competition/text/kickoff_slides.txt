@@ -1,0 +1,310 @@
+
+--- Slide 1 ---
+KTH Edge AI
+Robotics Challenge
+Kick-off meeting
+2026.10.07
+
+--- Slide 2 ---
+Challenge overview
+02
+Each team will control a group of approximately four wheeled mobile robots operating in an unknown indoor environment. During the mission, the robots may need to:
+Explore an initially unknown environment
+Detect, identify, and localize different targets
+Share information between robots and edge node
+Allocate tasks among robots
+Form robot groups to complete specific rescue tasks
+Adapt their behavior according to mission updates
+Manage computation, communication, or energy consumption
+Core theme: AI + Robotics + Edge Computing + Communication + Control
+
+--- Slide 3 ---
+System architecture - overview
+03
+1. Mobile robot team
+Robots perform sensing, local computation, motion control, and exploration. 
+Robots can communicate and share local information with each other.
+2. Edge computing node
+A single local computing server is available to each team. 
+Teams decide which tasks are executed onboard and which are offloaded to the edge. 
+Typical edge functions may include: multi-robot coordination; perception/object detection; map fusion; task allocation; LLM inference.
+3. Human operator + LLM
+The human operator provides natural-language mission updates. 
+The LLM interprets the instructions and converts them into executable tasks.
+
+--- Slide 4 ---
+Competition environment
+05
+Illustrative arena
+In-door, flat-floor environment of approximately 5m × 5m (final dimensions are TBD), containing rooms, walls, and static obstacles.
+Rescue targets are represented by ArUco visual markers and divided into two types:  Normal Targets and Cooperative Targets.
+Rescue zone is used for rescue-completion verification. Each ArUco marker corresponds to one or more predefined Rescue Zones.
+A rescue is completed when the robot enters the corresponding Rescue Zone and remains there continuously for the required duration.
+
+--- Slide 5 ---
+Overall competition flow
+05
+Task 1
+Explore, map
+and detect
+Handover
+Save unified
+outputs
+Task 2A
+Autonomous
+rescue
+Safe Mode
+Verify results and reposition
+Task 2B
+LLM-guided
+mission
+Two main tasks
+
+--- Slide 6 ---
+Task 1   Autonomous exploration, mapping, and detection
+06
+Teams may use up to two robots starting from a designated start area to autonomously explore an unknown environment and build a unified 2D occupancy grid map within limited time:
+The robot system shall operate autonomously based on the current map and sensor information, performing path planning, obstacle avoidance, and motion execution toward the selected target;
+Existing ROS 2 SLAM, navigation, and other open-source software packages are allowed.
+
+--- Slide 7 ---
+Task 1   Autonomous exploration, mapping, and detection
+06
+Teams may use up to two robots starting from a designated start area to autonomously explore an unknown environment and build a unified 2D occupancy grid map within limited time:
+The robot system shall operate autonomously based on the current map and sensor information, performing path planning, obstacle avoidance, and motion execution toward the selected target;
+Existing ROS 2 SLAM, navigation, and other open-source software packages are allowed.
+Target detection and localization
+The system shall perform the following pipeline:
+01
+ArUco observation
+02
+Identify target ID and type
+03
+Pose in
+map frame
+04
+Update
+target list
+Estimate relative position
+05
+Required output: A 2D occupancy map and a target list
+Task 2A   Multi-robot rescue
+08
+Task 2 uses the unified map and target list generated in Task 1. Multiple robots cooperate to complete rescue tasks. Teams may use up to four robots and use the organizer-provided edge node for global state aggregation, task planning, and multi-robot coordination.
+Task 1 Outputs
+Unified Map
+ID   Type
+T1   Normal
+TC1  Coop.
+Target List
+Map + target information from Task 1
+Edge Node
+Task assignments
+State / progress
+Task planning – What should be done next?
+Robot allocation – Which robot(s) should do it?
+Coordination – How should robots cooperate?
+Global state – Track progress and update plans
+Multiple Robots
+Autonomous Navigation & Rescue Execution (path planning, motion control, obstacle avoidance)
+Design the robot–edge communication interface
+Build global robot and target state management
+Develop task planning and robot allocation
+Teams develop
+Implement multi-robot coordination
+Integrate task assignments with autonomous navigation and rescue execution
+Normal and cooperative rescue
+09
+Normal Target
+Cooperative Target
+Rescue Zone
+Zone A
+Zone B
+1 robot
+Continuous dwell
+2 different robots
+Simultaneous continuous dwell
+Rescue zone position is determined from the marker pose using unified and publicly specified geometric rules (TBD) 
+Task 2A is also time-limited and ends when one of the following conditions occurs: (1) The competition time limit is reached; (2) All valid rescue targets have been successfully completed; (3) The referee terminates the run due to safety, equipment failure, or another necessary reason. 
+After Task 2A results have been verified, the organizers will reposition the robots to predefined Task 2B starting positions. The map, target list, and other environment information obtained previously are retained. 
+
+--- Slide 10 ---
+Task 2B   LLM-guided mission: Task flow
+11
+In this task, the LLM acts as a high-level mission interpreter and planner. Its primary role is to understand the natural-language mission instruction and convert mission objectives and high-level constraints into a structured mission plan.
+Edge Node
+Task assignments
+State / progress
+Multiple Robots
+Autonomous Navigation & Rescue Execution
+Operator 
+Natural-language
+mission input
+LLM Mission Interpreter
+Interpret instruction，Extract objectives & constraints，
+Generate a structured mission plan
+Multi-Robot Coordinator
+Execution planning ，Robot allocation，Coordination，
+Global state management
+Structured mission plan
+Natural-language mission input interface
+LLM prompting and mission interpretation
+Structured mission-plan representation
+Teams develop
+Integrate the LLM mission layer with the existing Task 2A coordination framework
+Retained 
+information
+Task 2B   LLM-guided mission: Task flow
+11
+In this task, the LLM acts as a high-level mission interpreter and planner. Its primary role is to understand the natural-language mission instruction and convert mission objectives and high-level constraints into a structured mission plan.
+Edge Node
+Task assignments
+State / progress
+Multiple Robots
+Autonomous Navigation & Rescue Execution
+Operator 
+Natural-language
+mission input
+LLM Mission Interpreter
+Interpret instruction，Extract objectives & constraints，
+Generate a structured mission plan
+Multi-Robot Coordinator
+Execution planning ，Robot allocation，Coordination，
+Global state management
+Structured mission plan
+Retained 
+information
+Simple Example
+Natural-language mission
+“Rescue T2 first. Then T1 and T3.
+Complete TC1 last.”
+LLM → Structured mission plan
+T2  →  {T1, T3}  →  TC1
+Coordinator / Robots
+Robot assignment, navigation,
+coordination and rescue execution
+
+--- Slide 12 ---
+Robot platform and development environment
+04
+The competition uses differential-drive wheeled mobile robots:
+Differential-drive platform 
+Wheel encoders
+Mobile Base
+Perception
+RPLIDAR — mapping & obstacle sensing. 
+RealSense D435i — RGB-D perception & ArUco detection
+State Estimation
+Wheel encoders
+IMU
+Odometry/localization support
+Onboard Computing
+Intel NUC11TNKi5
+NVIDIA GT 1030
+ROS 2 onboard software
+More information about the robot can be found at: https://canvas.kth.se/courses/59505/pages/robot-setup?module_item_id=1339720 
+Edge node information to be announced later…
+
+--- Slide 13 ---
+Robot platform and development environment
+04
+Environments used to develop, test, integrate, and deploy the challenge system:
+1. Robot & Edge computing
+• Ubuntu Linux
+• ROS 2
+• Python / C++
+• ROS 2 workspace & package system
+Provides the common runtime and development environment for robot-side and edge-node applications.
+2. Simulation environment
+• Gazebo
+• Simulated robot model
+• Simulated indoor competition arena
+• Simulated LiDAR/RGB-D sensors
+Enables autonomy and multi-robot behaviors to be developed and tested before physical deployment.
+3. Communication environment
+• Local Wi-Fi/LAN
+• ROS 2 DDS communication
+• Topics / services / actions
+• Robot IDs and namespaces
+Supports communication between robots, the edge node, and the operator, including task dispatching, state sharing, feedback, and coordination.
+4. Development & Debugging
+• RViz
+• ROS 2 CLI & colcon
+• rosbag
+• Git / VS Code / terminal tools…
+Supports visualization, debugging, data recording, software integration, and team collaboration.
+Task 2B add-on: LLM inference runtime and model on the edge node — exact backend/model to be specified later.
+
+--- Slide 14 ---
+What we provide vs. What teams develop
+Organizer Provides
+Teams Develop
+Status:
+Available
+Partial
+To do
+Available
+Robot platform & onboard hardware
+Available
+ROS 2 / Gazebo development environment
+Available
+Basic robot model for Gazebo simulation
+Available
+Simulated sensor / Single-robot SLAM baseline
+Partial
+Basic setup/ simulation tutorial
+Partial
+Competition task/ arena / target specification
+Real-robot ROS 2 I/O interface
+Robot-edge basic network connectivity
+To do
+Edge-node base runtime / LLM environment
+• Autonomous exploration and navigation integration
+• Target detection and localization
+• Robot–edge communication and information sharing
+• Global robot / target / task-state management
+• Task planning and robot allocation
+• Multi-robot coordination and cooperative rescue
+• Feedback, failure handling, and replanning
+• LLM mission interpretation and integration for Task 2B
+• Overall system integration and testing
+To do
+To do
+
+--- Slide 15 ---
+Milestone and development timeline
+13
+End-to-end autonomous rescue baseline (simulation demo is sufficient)
+Autonomous exploration, ArUco detection and localization
+Autonomous map-based navigation
+At least two robots should connect, with their states available to the system
+Basic robot–edge communication demonstrated
+Basic task planning and robot allocation
+At least one Normal Rescue and one Cooperative Rescue
+Week 0
+Kick-off
+Week 4
+Mid-term milestone
+Week 8
+Final
+Early Development Phase
+Integration and real-robot validation
+• Focus primarily on Gazebo simulation
+• Develop and test exploration, SLAM, navigation, multi-robot coordination…
+• Use simulation for rapid iteration and debugging 
+• Physical robots are used mainly for validation and system integration
+• Teams that need real-robot testing should book a time slot in advance
+
+--- Slide 16 ---
+Resources and next steps
+14
+Resources
+Rulebook v0
+Robot Setup and Technical Tutorial
+ROS 2 workspace and Gazebo resources
+After this meeting
+1   Set up and run the simulation
+2   Check interfaces and SLAM
+3   Implement autonomous exploration
+4   Assign team responsibilities
+Questions and discussion
