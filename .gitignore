@@ -10,11 +10,32 @@ log/
 # Python generated files
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
 
 # TF debugging outputs
 frames_*.gv
 frames_*.pdf
 
-# Editor / temporary files
+# Local map exports (README saves to <repo>/maps/); packaged maps live in src/*/maps/
+/maps/
+
+# rosbag recordings
+rosbag2_*/
+*.db3
+*.mcap
+
+# Secrets (e.g. LLM API keys)
+.env
+.env.*
+
+# Editor / IDE
+.vscode/
+.idea/
 *~
 *.swp
+
+# OS files
+.DS_Store
+Thumbs.db
