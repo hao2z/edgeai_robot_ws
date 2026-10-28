@@ -101,6 +101,13 @@ follow = rectangle['controller_server']['ros__parameters']['FollowPath']
 follow['critics'] = [v.replace('BaseObstacle', 'ObstacleFootprint') for v in follow['critics']]
 follow.pop('BaseObstacle.scale', None)
 follow['ObstacleFootprint.scale'] = 0.02
+follow.update(plugin='nav2_rotation_shim_controller::RotationShimController',
+              primary_controller='dwb_core::DWBLocalPlanner',
+              angular_dist_threshold=0.785, angular_disengage_threshold=0.25,
+              forward_sampling_distance=0.35, rotate_to_heading_angular_vel=0.5,
+              max_angular_accel=0.8, simulate_ahead_time=1.5,
+              rotate_to_heading_once=True, rotate_to_goal_heading=False,
+              use_path_orientations=True, closed_loop=True)
 rectangle['planner_server']['ros__parameters']['GridBased'] = {
     'plugin': 'nav2_smac_planner::SmacPlannerLattice',
     'tolerance': 0.15, 'allow_unknown': True, 'max_iterations': 500000,

@@ -31,8 +31,8 @@ frontier_explorer:
     dp_solver_candidate_limit: 12
     dp_planning_horizon: 8
     frontier_map_optimization_enabled: true
-    goal_preemption_enabled: true
-    goal_preemption_min_interval_s: 2.0
+    goal_preemption_enabled: false
+    goal_preemption_min_interval_s: 12.0
     goal_skip_on_blocked_goal: true
     post_goal_settle_enabled: false
     post_goal_min_settle: 1.5
@@ -51,7 +51,7 @@ frontier_explorer:
     sigma_s: 2.0
     sigma_r: 30.0
     dilation_kernel_radius_cells: 1
-    goal_preemption_complete_if_within_m: 0.2
+    goal_preemption_complete_if_within_m: 0.15
     goal_preemption_lidar_range_m: 12.0
     goal_preemption_lidar_fov_deg: 360.0
     goal_preemption_lidar_ray_step_deg: 1.0

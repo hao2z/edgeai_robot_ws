@@ -78,6 +78,7 @@ registration, directory, pid, partition, arena, profile, duration = sys.argv[1:]
 record = dict(pid=int(pid), start_ticks=pathlib.Path(f'/proc/{pid}/stat').read_text().split()[21],
               directory=directory, partition=partition, domain=os.environ['ROS_DOMAIN_ID'],
               arena=arena, profile=profile, duration=int(duration))
+record['mode'] = 'isolated_turn_check' if os.environ.get('EDGEAI_TURN_TEST') == 'true' else 'exploration'
 for path in (pathlib.Path(registration), pathlib.Path(directory)/'session.json'):
     path.write_text(json.dumps(record, indent=2))
 PY
@@ -167,9 +168,16 @@ if ! $ready; then
     exit 1
 fi
 echo "Nav2 is active; launching upstream explorer: $backend"
-event 'Nav2 已就绪，开始自主探索'
+if [[ ${EDGEAI_TURN_TEST:-false} == true ]]; then
+    event 'Nav2 已就绪，开始后方目标转向检查；本轮不启动探索器'
+else
+    event 'Nav2 已就绪，开始自主探索'
+fi
 touch "$temp_dir/ready"
-if [[ $backend == frontier ]]; then
+if [[ ${EDGEAI_TURN_TEST:-false} == true ]]; then
+    setsid python -u "$PROJECT_ROOT/tests/exploration/navigation_turn_check.py" \
+        --output "$temp_dir/turn-result.json" --ros-args -p use_sim_time:=true >"$temp_dir/explore.log" 2>&1 &
+elif [[ $backend == frontier ]]; then
     python -u "$PROJECT_ROOT/algorithms/exploration/watch_exploration_completion.py" "$temp_dir/completed" >"$temp_dir/watch.log" 2>&1 &
     watch_pid=$!
     setsid ros2 run frontier_exploration_ros2 frontier_explorer --ros-args \
@@ -181,6 +189,10 @@ explore_pid=$!
 start=$SECONDS
 reason=time_limit
 while (( SECONDS-start < duration )); do
+    if [[ ${EDGEAI_TURN_TEST:-false} == true && -f "$temp_dir/turn-result.json" ]]; then
+        reason=isolated_turn_check_finished
+        break
+    fi
     if ! kill -0 "$sim_pid" 2>/dev/null || ! kill -0 "$nav_pid" 2>/dev/null || ! kill -0 "$explore_pid" 2>/dev/null; then
         echo 'A required process stopped before the test ended.' >&2
         event '必要进程提前退出，测试失败'
@@ -235,3 +247,10 @@ if [[ -n $map_basename ]]; then
 fi
 echo 'Recent navigation events:'
 grep -E 'Begin navigating|Goal succeeded|Goal failed|Failed to make progress|Aborting' "$temp_dir/nav.log" | tail -n 25 || true
+if [[ ${EDGEAI_TURN_TEST:-false} == true ]]; then
+    python - "$temp_dir/turn-result.json" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+sys.exit(0 if p.exists() and json.loads(p.read_text()).get('success') else 1)
+PY
+fi

@@ -48,6 +48,15 @@ pad=local['footprint_padding']
 length,width=xmax-xmin+2*pad,ymax-ymin+2*pad
 assert width < .40 < (length+width)/math.sqrt(2)
 assert 'ObstacleFootprint' in config['controller_server']['ros__parameters']['FollowPath']['critics']
+follow = config['controller_server']['ros__parameters']['FollowPath']
+assert follow['plugin'] == 'nav2_rotation_shim_controller::RotationShimController'
+assert follow['primary_controller'] == 'dwb_core::DWBLocalPlanner'
+assert follow['use_path_orientations'] and follow['closed_loop']
+assert follow['rotate_to_heading_angular_vel'] <= follow['max_vel_theta']
+assert follow['max_angular_accel'] <= follow['acc_lim_theta']
+frontier = yaml.safe_load((share/'config/frontier_exploration.yaml').read_text())['frontier_explorer']['ros__parameters']
+assert not frontier['goal_preemption_enabled'] and frontier['goal_skip_on_blocked_goal']
+assert frontier['goal_preemption_complete_if_within_m'] <= config['controller_server']['ros__parameters']['general_goal_checker']['xy_goal_tolerance']
 assert config['planner_server']['ros__parameters']['GridBased']['plugin'].endswith('SmacPlannerLattice')
 primitive_path = share/'config'/config['planner_server']['ros__parameters']['GridBased']['lattice_filepath']
 lattice = json.loads(primitive_path.read_text())
