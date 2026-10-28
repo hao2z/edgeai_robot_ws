@@ -1,6 +1,41 @@
 # EdgeAI Robot Workspace
 
+The canonical development workspace is this repository, on branch
+[`codex/Junnan-dev`](https://github.com/hao2z/edgeai_robot_ws/tree/codex/Junnan-dev).
+
+| Directory | Purpose |
+|---|---|
+| `src/` | ROS package, models, worlds, launch files and runtime configuration |
+| `simulation/` | Competition arena generation and visualization tools |
+| `algorithms/exploration/` | Pinned open-source explorer/Nav2 integration |
+| `tests/` | Simulation and exploration checks, observation documentation |
+| `scripts/` | Build, environment, simulation, display and capture tools |
+| `docs/competition/` | Competition source documents |
+| `runtime/`, `tests/results/` | Local state and per-run logs/screenshots; excluded from Git |
+
+Windows/WSL entry points, run from this directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1 -SLAM
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Arena competition -Duration 300
+```
+
+Test restart closes previous project processes and terminal tabs. Gazebo opens
+maximized with an inclined arena overview. Raw logs, readable key events and
+startup/progress/final screenshots are retained per run. See the
+[observation workflow](tests/docs/test-observation.md) and
+[exploration results and limitations](AUTONOMOUS_EXPLORATION.md).
+Current axle-centred footprint, smaller curve primitives and the distinction
+between goal tolerance and measured accuracy are documented in
+[geometry and accuracy](docs/geometry-and-accuracy.md).
+
 A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
+
+The simulator now includes a noisy raw IMU, four development ArUco targets,
+configurable rescue-zone visuals and optional 1–4 robot namespaces. See
+[SIMULATION.md](SIMULATION.md) for configuration, frame conventions and tests.
+Independent per-robot SLAM is supported; map fusion and rescue autonomy are
+separate integration stages.
 
 ## Environment
 
@@ -14,23 +49,33 @@ The manifest and lockfile define the workspace dependencies. Use the Pixi enviro
 ## Install and build
 
 ```bash
-git clone https://github.com/dongjw-hit/edgeai_robot_ws.git
+git clone --branch codex/Junnan-dev https://github.com/hao2z/edgeai_robot_ws.git
 cd edgeai_robot_ws
-pixi install
-pixi run colcon build --symlink-install
+bash scripts/setup/install-workspace.sh
 ```
 
-Run these commands from the repository root. Rebuild after changing package resources or adding configuration files.
+Run these commands from the repository root. Build output is placed in
+`~/.cache/edgeai-robot-build`, overridable with `EDGEAI_BUILD_ROOT`. The build
+uses this checkout's `src`; no separate editable WSL copy is required.
+Rebuild with `bash scripts/setup/build-workspace.sh` after package changes.
+For autonomous navigation, prepare the pinned environment and explorer first:
+
+```bash
+bash scripts/setup/prepare-open-source.sh
+```
 
 ## Start the simulation
 
 From the repository root:
 
 ```bash
-./start_sim.sh
+bash start_sim.sh
 ```
 
-The script resolves the workspace relative to its own location, activates Pixi, sources `install/setup.bash`, launches `simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`. It requires a completed build and does not depend on a fixed home-directory path. Press **Ctrl+C** in its terminal to stop the launched session.
+The script resolves the workspace relative to its own location, activates Pixi,
+sources the build cache's `install/local_setup.bash`, launches
+`simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`.
+Press **Ctrl+C** in its terminal to stop the launched session.
 
 The launch file loads `edgeai_robot_real.urdf.xacro`, starts the world in `worlds/empty.sdf`, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. The old simple model and its launch script have been removed; `start_sim.sh` is the current entry point.
 
@@ -43,7 +88,7 @@ In each additional terminal, enter the cloned repository and activate its enviro
 ```bash
 cd /path/to/edgeai_robot_ws
 pixi shell
-source install/setup.bash
+source "${EDGEAI_BUILD_ROOT:-$HOME/.cache/edgeai-robot-build}/install/local_setup.bash"
 ```
 
 Replace `/path/to/edgeai_robot_ws` with your clone location. The following commands assume this setup and a running simulation.

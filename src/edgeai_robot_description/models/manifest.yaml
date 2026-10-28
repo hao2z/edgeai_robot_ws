@@ -1,0 +1,8 @@
+dictionary: DICT_4X4_50
+ids:
+- 1
+- 2
+- 3
+- 10
+marker_size_m: 0.2
+panel_size_m: 0.24

@@ -48,7 +48,8 @@
 <xacro:property name="caster_bearing_height" value="0.005"/>
 
 
-  <!-- Ground reference -->
+  <!-- Navigation/odometry reference: drive axle midpoint projected to ground.
+       Chassis dimensions and wheel/sensor placements stay in base_link. -->
 
   <link name="base_footprint"/>
 
@@ -120,7 +121,7 @@
   <joint name="base_footprint_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 0.049" rpy="0 0 0"/>
+    <origin xyz="${-wheel_x} 0 ${wheel_radius}" rpy="0 0 0"/>
   </joint>
 
 
@@ -759,6 +760,28 @@
 
     </sensor>
 
+  </gazebo>
+
+  <!-- Noise is filled from config/imu.yaml by simulation_support.prepare_robot. -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <gazebo reference="base_link">
+    <sensor name="imu_sensor" type="imu">
+      <pose>0 0 0.02 0 0 0</pose>
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>/imu/data_raw</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <enable_orientation>false</enable_orientation>
+        <angular_velocity/>
+        <linear_acceleration/>
+      </imu>
+    </sensor>
   </gazebo>
 
   <!-- Gazebo DiffDrive plugin -->

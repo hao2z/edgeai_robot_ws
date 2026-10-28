@@ -1,0 +1,51 @@
+# Development fixtures inspired by kickoff slide 4; not official target locations.
+dictionary: DICT_4X4_50
+marker_size_m: 0.2
+panel_size_m: 0.24
+development_rescue_geometry:
+  normal_offset_m: 0.7
+  cooperative_lateral_offset_m: 0.4
+  radius_m: 0.18
+  normal_dwell_s: 3.0
+  cooperative_dwell_s: 5.0
+targets:
+- id: 1
+  name: T1
+  type: normal
+  pose:
+  - -1.75
+  - 2.42
+  - 0.24
+  - 0
+  - 0
+  - -1.57079632679
+- id: 2
+  name: T2
+  type: normal
+  pose:
+  - 1.75
+  - 2.42
+  - 0.24
+  - 0
+  - 0
+  - -1.57079632679
+- id: 3
+  name: T3
+  type: normal
+  pose:
+  - 2.42
+  - -1.15
+  - 0.24
+  - 0
+  - 0
+  - 3.14159265359
+- id: 10
+  name: TC1
+  type: cooperative
+  pose:
+  - 0
+  - 2.42
+  - 0.24
+  - 0
+  - 0
+  - -1.57079632679

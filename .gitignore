@@ -18,3 +18,11 @@ frames_*.pdf
 # Editor / temporary files
 *~
 *.swp
+
+# Machine-local state, credentials, test output and source backups
+/runtime/*
+!/runtime/README.md
+/tests/results/*
+!/tests/results/README.md
+*.pid
+*.xauth

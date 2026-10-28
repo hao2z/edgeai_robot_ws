@@ -1,0 +1,16 @@
+# Development noise model, not a calibration of the competition Phidget.
+# Units: angular velocity rad/s; acceleration m/s^2; time seconds.
+update_rate: 100.0
+enable_orientation: false
+angular_velocity:
+  stddev: 0.002
+  bias_mean: 0.0
+  bias_stddev: 0.0005
+  dynamic_bias_stddev: 0.00002
+  dynamic_bias_correlation_time: 300.0
+linear_acceleration:
+  stddev: 0.02
+  bias_mean: 0.0
+  bias_stddev: 0.01
+  dynamic_bias_stddev: 0.0001
+  dynamic_bias_correlation_time: 300.0

@@ -1,0 +1,4 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/src/edgeai_robot_description",
+    "cmake.autoDetectSourceDirectory": false
+}

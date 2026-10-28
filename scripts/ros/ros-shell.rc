@@ -1,0 +1,4 @@
+source "$HOME/.bashrc"
+source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
+source "$EDGEAI_BUILD_ROOT/install/local_setup.bash"
+cd "$PROJECT_ROOT"
