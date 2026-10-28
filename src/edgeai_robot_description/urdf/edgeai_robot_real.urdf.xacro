@@ -734,7 +734,7 @@
       <!-- Frame carried in the LiDAR message -->
       <gz_frame_id>lidar_link</gz_frame_id>
 
-      <update_rate>10</update_rate>
+      <update_rate>20</update_rate>
 
       <lidar>
 

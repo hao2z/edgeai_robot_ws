@@ -6,8 +6,11 @@ from pathlib import Path
 import re
 import time
 import sys
+import errno
 
 RULES = [
+    (r'TIME CHECK OK', '时间对齐诊断就绪：消息时效及同一时刻TF检查通过'),
+    (r'WAIT/STALE', '时间对齐诊断等待数据或发现过期消息，详见 alignment.log'),
     (r'Begin navigating|Navigating to|Sending.*goal', '导航开始前往新的目标'),
     (r'Goal succeeded|Reached.*goal|Goal reached', '已到达导航目标'),
     (r'Start occupied', '规划失败：起点被代价地图判为占用；这不等于已发生物理碰撞'),
@@ -24,7 +27,9 @@ def follow(directory):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     directory = Path(directory)
-    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch')
+    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment')
+    for name in names:
+        (directory / f'{name}.log').touch(exist_ok=True)
     handles = {name: (directory / f'{name}.log').open(encoding='utf-8', errors='replace')
                for name in names}
     pending = dict.fromkeys(names, '')
@@ -45,7 +50,14 @@ def follow(directory):
                     events.write(text + '\n')
                     captured.add(path.name)
             for name, handle in handles.items():
-                pending[name] += handle.read()
+                try:
+                    pending[name] += handle.read()
+                except OSError as error:
+                    # WSL's Windows drive can temporarily return ENODATA while
+                    # another process appends. Retry without losing offsets.
+                    if error.errno in (errno.ENODATA, errno.EAGAIN, errno.EINTR):
+                        continue
+                    raise
                 lines = pending[name].split('\n')
                 pending[name] = lines.pop()
                 for line in lines:

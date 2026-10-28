@@ -28,6 +28,8 @@ for section in ('local_costmap', 'global_costmap'):
     p['robot_base_frame'] = 'base_footprint'
     p['robot_radius'] = circle_radius
     p['inflation_layer']['inflation_radius'] = 0.45
+    p.update(use_sim_time=True, update_frequency=20.0, publish_frequency=10.0,
+             transform_tolerance=0.2)
 local = config['local_costmap']['local_costmap']['ros__parameters']
 local['plugins'] = ['obstacle_layer', 'inflation_layer']
 local['obstacle_layer'] = config['global_costmap']['global_costmap']['ros__parameters']['obstacle_layer'].copy()

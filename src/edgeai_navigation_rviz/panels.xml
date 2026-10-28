@@ -1,0 +1,5 @@
+<library path="navigation_panel">
+  <class name="edgeai_navigation_rviz/NavigationPanel" type="edgeai_navigation_rviz::NavigationPanel" base_class_type="rviz_common::Panel">
+    <description>Navigation color legend, timestamp ages and received topic frequencies.</description>
+  </class>
+</library>

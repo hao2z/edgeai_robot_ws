@@ -176,8 +176,8 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 20.0
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
@@ -216,6 +216,8 @@ local_costmap:
         plugin: nav2_costmap_2d::StaticLayer
         map_subscribe_transient_local: true
       always_send_full_costmap: true
+      use_sim_time: true
+      transform_tolerance: 0.2
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
@@ -233,8 +235,8 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      update_frequency: 20.0
+      publish_frequency: 10.0
       global_frame: map
       robot_base_frame: base_footprint
       robot_radius: 0.36
@@ -266,6 +268,8 @@ global_costmap:
         cost_scaling_factor: 3.0
         inflation_radius: 0.45
       always_send_full_costmap: true
+      use_sim_time: true
+      transform_tolerance: 0.2
 map_saver:
   ros__parameters:
     save_map_timeout: 5.0

@@ -28,6 +28,8 @@ startup/progress/final screenshots are retained per run. See the
 Current axle-centred footprint, smaller curve primitives and the distinction
 between goal tolerance and measured accuracy are documented in
 [geometry and accuracy](docs/geometry-and-accuracy.md).
+RViz also shows global/local costs and paths, same-time footprint comparisons,
+SLAM correction and message ages; see [visualization and time alignment](docs/rviz-navigation-observability.md).
 
 A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
 

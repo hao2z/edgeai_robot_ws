@@ -37,3 +37,5 @@ manager['Displays'].append({
 manager['Views']['Current'].update(Pitch=1.5707, Yaw=0.0, Distance=9.0,
                                   **{'Target Frame': 'map', 'Focal Point': {'X': 1.5, 'Y': 1.5, 'Z': 0.0}})
 (rviz_path.parent / 'exploration.rviz').write_text(yaml.safe_dump(rviz, sort_keys=False), encoding='utf-8')
+from prepare_rviz_diagnostics import configure
+configure(rviz_path.parent / 'exploration.rviz')

@@ -19,6 +19,7 @@ Windows Terminal 标签页。只包含项目标签页的窗口会关闭；共用
 | console.log | 各组件输出汇总，增加接收时间和来源标记 |
 | events.log | 中文关键事件、阶段变化和截图结果，监测窗口实时显示 |
 | events.jsonl | 从原始日志识别的事件，包含对应原文证据 |
+| alignment.log, alignment.jsonl | 同时刻TF诊断、各消息年龄和SLAM相对里程计锚点的修正 |
 | ros/ | ROS 原生日志目录 |
 | session.json | 自主探索测试参数、PID 标识、ROS 域、Gazebo partition |
 | map.*, map-save.log, evaluation.log | 地图及保存、离线覆盖率评估结果 |

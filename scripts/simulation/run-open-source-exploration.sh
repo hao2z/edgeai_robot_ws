@@ -69,7 +69,7 @@ if 'lattice_filepath' in planner:
 output.write_text(yaml.safe_dump(config, sort_keys=False))
 PY
 nav_config="$temp_dir/nav2-runtime.yaml"
-for name in sim nav explore rviz rosout watch; do touch "$temp_dir/$name.log"; done
+for name in sim nav explore rviz rosout watch alignment; do touch "$temp_dir/$name.log"; done
 event() { printf '%s [session] %s\n' "$(date --iso-8601=seconds)" "$*" | tee -a "$temp_dir/events.log"; }
 registration="$PROJECT_ROOT/runtime/exploration-$ROS_DOMAIN_ID.json"
 python - "$registration" "$temp_dir" "$$" "$GZ_PARTITION" "$arena" "$profile" "$duration" <<'PY'
@@ -84,7 +84,7 @@ PY
 printf '%s\n' "$temp_dir" > "$PROJECT_ROOT/runtime/latest-session.txt"
 python -u "$PROJECT_ROOT/scripts/ros/stream_session_logs.py" "$temp_dir" 2>"$temp_dir/stream-errors.log" &
 tail_pid=$!
-sim_pid='' nav_pid='' explore_pid='' watch_pid='' rviz_pid='' monitor_pid=''
+sim_pid='' nav_pid='' explore_pid='' watch_pid='' rviz_pid='' monitor_pid='' diagnostic_pid=''
 cleanup() {
     result=$?
     trap - EXIT INT TERM
@@ -98,6 +98,7 @@ cleanup() {
     touch "$temp_dir/stopping"
     event "正在关闭本次测试的仿真、导航与探索进程（退出码 $result），日志保留在 $temp_dir"
     [[ -z $monitor_pid ]] || kill -INT "$monitor_pid" 2>/dev/null || true
+    [[ -z $diagnostic_pid ]] || kill -TERM "$diagnostic_pid" 2>/dev/null || true
     [[ -z $watch_pid ]] || kill -INT "$watch_pid" 2>/dev/null || true
     [[ -z $watch_pid ]] || wait "$watch_pid" 2>/dev/null || true
     [[ -z $rviz_pid ]] || kill -TERM -- "-$rviz_pid" 2>/dev/null || true
@@ -133,6 +134,9 @@ python "$PROJECT_ROOT/simulation/tools/prepare_observation_world.py" "$world_sou
 arena_args+=("world_file:=$temp_dir/observation.sdf")
 python -u "$PROJECT_ROOT/scripts/ros/monitor_ros.py" >"$temp_dir/rosout.log" 2>&1 &
 monitor_pid=$!
+python -u "$PROJECT_ROOT/scripts/ros/navigation_diagnostics.py" --ros-args \
+    -p use_sim_time:=true -p "log_directory:=$temp_dir" >"$temp_dir/alignment.log" 2>&1 &
+diagnostic_pid=$!
 
 setsid ros2 launch edgeai_robot_description simulation_real.launch.py \
     multi_robot:=false robot_count:=1 gui:="$gui" rviz:=false slam:=true "${arena_args[@]}" >"$temp_dir/sim.log" 2>&1 &
