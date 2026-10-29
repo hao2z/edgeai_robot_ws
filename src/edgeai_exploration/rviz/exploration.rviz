@@ -305,6 +305,15 @@ Visualization Manager:
         Value: true
       base_footprint:
         Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Name: ArUco targets (ID + position)
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /targets/markers
+      Depth: 1
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

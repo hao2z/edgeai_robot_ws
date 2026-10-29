@@ -8,6 +8,7 @@
     [switch]$CheckOnly,
     [switch]$InCurrentWindow,
     [switch]$TurnTest,
+    [switch]$Scan360,
     [ValidateSet('forward','reverse','turn','axes')][string]$MotionTest,
     [ValidateSet('map','rotated')][string]$MotionFrame = 'map',
     [switch]$MotionGoalOnly,
@@ -25,6 +26,7 @@ if (-not $Backend) {
 }
 if ($Backend -notin @('native', 'pixi')) { throw "Invalid ROS backend: $Backend" }
 if ($MotionTest) { $TurnTest = $true }
+if ($Scan360 -and ($TurnTest -or $RecoveryTest)) { throw 'Scan360 cannot be combined with motion/recovery tests.' }
 if ($MotionGoalOnly -and (-not $MotionTest -or $Controller -ne 'mppi')) { throw 'MotionGoalOnly requires an MPPI MotionTest.' }
 if ($MPPIInvertLinear -and (-not $MotionTest -or $Controller -ne 'mppi')) { throw 'MPPIInvertLinear requires an MPPI MotionTest.' }
 if ($MPPISource -and $Controller -ne 'mppi') { throw 'MPPISource requires Controller mppi.' }
@@ -40,6 +42,7 @@ if (-not $InCurrentWindow) {
         '-File', "`"$PSCommandPath`"", '-InCurrentWindow', '-Duration', $Duration, '-Distro', "`"$Distro`"", '-Arena', $Arena, '-DomainId', $DomainId)
     $consoleArgs += @('-Controller', $Controller, '-Backend', $Backend)
     if ($TurnTest) { $consoleArgs += '-TurnTest' }
+    if ($Scan360) { $consoleArgs += '-Scan360' }
     if ($MotionTest) { $consoleArgs += @('-MotionTest', $MotionTest) }
     $consoleArgs += @('-MotionFrame', $MotionFrame)
     if ($MotionGoalOnly) { $consoleArgs += '-MotionGoalOnly' }
@@ -74,6 +77,7 @@ Write-Host "Session logs: $sessionDirectory" -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot 'Open-ROS-Monitor.ps1') -Distro $Distro -DomainId $DomainId -SessionDirectory $sessionDirectory
 $observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', "`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"", '-SessionDirectory', "`"$sessionDirectory`"")
+$scanMode = if ($Scan360) { 'true' } else { 'false' }
 $turnMode = if ($TurnTest) { 'true' } else { 'false' }
 $recoveryMode = if ($RecoveryTest) { 'true' } else { 'false' }
 $motionAblation = if ($MotionGoalOnly) { 'goal_only' } else { '' }
@@ -82,7 +86,7 @@ $mppiSourceFlag = if ($MPPISource) { 'true' } else { 'false' }
 # Use the same managed Linux entry as a direct WSL invocation. PowerShell owns
 # only Windows windows/capture; Linux owns test execution and history retention.
 Write-Host 'Starting the managed WSL test entry...' -ForegroundColor Cyan
-& $wslExe -d $Distro -- env "EDGEAI_ROS_BACKEND=$Backend" EDGEAI_MANAGED_SESSION=true "EDGEAI_MPPI_USE_SOURCE=$mppiSourceFlag" "EDGEAI_MPPI_INVERT_LINEAR=$invertLinear" "EDGEAI_MOTION_FRAME=$MotionFrame" "EDGEAI_MOTION_ABLATION=$motionAblation" "EDGEAI_MOTION_TEST=$MotionTest" "EDGEAI_CONTROLLER=$Controller" "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_TURN_TEST=$turnMode" "EDGEAI_RECOVERY_TEST=$recoveryMode" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/start-autonomous-exploration.sh $Duration $mapPath $Arena $DomainId
+& $wslExe -d $Distro -- env "EDGEAI_ROS_BACKEND=$Backend" EDGEAI_MANAGED_SESSION=true "EDGEAI_MPPI_USE_SOURCE=$mppiSourceFlag" "EDGEAI_MPPI_INVERT_LINEAR=$invertLinear" "EDGEAI_MOTION_FRAME=$MotionFrame" "EDGEAI_MOTION_ABLATION=$motionAblation" "EDGEAI_MOTION_TEST=$MotionTest" "EDGEAI_CONTROLLER=$Controller" "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SCAN360=$scanMode" "EDGEAI_TURN_TEST=$turnMode" "EDGEAI_RECOVERY_TEST=$recoveryMode" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/start-autonomous-exploration.sh $Duration $mapPath $Arena $DomainId
 $result = $LASTEXITCODE
 if (-not $observer.WaitForExit(15000)) { $observer.Kill() }
 Write-Host "Exploration process ended with code $result. The window stays open for inspection."

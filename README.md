@@ -8,12 +8,16 @@ The canonical development workspace is this repository, on branch
 | `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
 | `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
 | `src/edgeai_navigation/` | Nav2 configuration, control authority and generators |
+| `src/edgeai_perception/` | ArUco detection and target localization during mapping |
 | `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
 | `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
 | `tests/` | Simulation and exploration checks, observation documentation |
 | `scripts/` | Build, environment, simulation, display and capture tools |
 | `docs/competition/` | Competition source documents |
 | `runtime/`, `tests/results/` | Local state, retired-script archives and per-run evidence; excluded from Git |
+
+本次建图＋目标寻找版本的结果、截图和限制见
+[2026-10-30 开发基线](docs/mapping-target-search-baseline-2026-10-30.md)。
 
 当前可运行基线、常调参数位置、最近测试与已知限制见
 [AUTONOMOUS_EXPLORATION.md](AUTONOMOUS_EXPLORATION.md)。
@@ -222,3 +226,6 @@ remains the simulation entry point. The former root `algorithms/` and
 # 原生 Jazzy 环境
 
 原生 apt 环境的准备、测试结果和回退方法见 [迁移记录](docs/native-ros-migration.md)。
+
+建图时默认同步识别 ArUco 并记录目标地图坐标，配置和当前限制见
+[src/edgeai_perception/README.md](src/edgeai_perception/README.md)。

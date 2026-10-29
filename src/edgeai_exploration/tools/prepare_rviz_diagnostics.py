@@ -68,6 +68,9 @@ def configure(path):
     displays.append({'Class':'rviz_default_plugins/MarkerArray', 'Enabled':True,
                      'Name':'Aligned footprints and timing legend', 'Value':True,
                      'Topic':topic('/diagnostics/navigation')})
+    displays.append({'Class':'rviz_default_plugins/MarkerArray', 'Enabled':True,
+                     'Name':'ArUco targets (ID + position)', 'Value':True,
+                     'Topic':topic('/targets/markers')})
     displays.append({'Class':'rviz_default_plugins/TF', 'Enabled':False, 'Name':'Navigation TF',
                      'Show Names':True, 'Marker Scale':.2,
                      'Frames':{'All Enabled':False, 'map':{'Value':True},

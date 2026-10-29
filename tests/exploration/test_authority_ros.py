@@ -13,7 +13,7 @@ from rclpy.node import Node
 from rclpy.task import Future
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 from frontier_exploration_ros2.srv import ControlExploration
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
@@ -21,6 +21,30 @@ from navigation_authority import NavigationAuthority
 
 
 class ActionHandshakeTest(unittest.TestCase):
+    def test_observation_hold_defers_busy_navigation_and_tracks_stop_requests(self):
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as directory:
+            authority = NavigationAuthority(directory)
+            try:
+                token = authority.policy.reserve('AUTO')
+                authority.policy.accepted(token)
+                result = authority.observation_hold(Trigger.Request(), Trigger.Response())
+                self.assertFalse(result.success)
+                self.assertEqual(authority.policy.mode, 'AUTO')
+                self.assertEqual(authority.policy.phase, 'ACTIVE')
+                authority.policy.terminal(token)
+                result = authority.observation_hold(Trigger.Request(), Trigger.Response())
+                self.assertTrue(result.success)
+                sequence = int(result.message)
+                self.assertEqual(authority.policy.mode, 'STOPPED')
+                self.assertIsNone(authority.policy.reserve('AUTO'))
+                authority.stop(Trigger.Request(), Trigger.Response())
+                self.assertGreater(authority.command_sequence, sequence)
+            finally:
+                authority.audit.close()
+                authority.destroy_node()
+                rclpy.shutdown()
+
     def test_same_owner_replacement_waits_for_backend_terminal(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as directory:

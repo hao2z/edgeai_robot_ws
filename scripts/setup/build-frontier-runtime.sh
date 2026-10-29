@@ -21,4 +21,4 @@ bash "$PROJECT_ROOT/scripts/ros/with-ros-env.sh" env ROS_DISTRO=jazzy CMAKE_BUIL
     colcon --log-base "$cache/frontier-log" build --base-paths "$cache/frontier-coordinated-src" \
     --build-base "$cache/frontier-coordinated-build" --install-base "$cache/frontier-install" \
     --cmake-args -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
-printf '%s\n' "$revision watchdog-zero-preemption-v2" > "$cache/frontier-install/edgeai-recovery-owner"
+printf '%s\n' "$revision repeat-gain-v3" > "$cache/frontier-install/edgeai-recovery-owner"

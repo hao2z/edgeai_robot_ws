@@ -6,12 +6,14 @@ import yaml
 source, target = map(Path, sys.argv[1:3])
 config = yaml.safe_load(source.read_text())
 p = config['frontier_explorer']['ros__parameters']
-p.update(use_sim_time=True, control_service_enabled=True,
+p.update(repeat_guard_enabled=True, repeat_guard_match_distance_m=.35,
+         repeat_guard_min_gain_m2=.03, repeat_guard_base_cooldown_s=30.0,
+         repeat_guard_max_cooldown_s=240.0, use_sim_time=True, control_service_enabled=True,
          min_frontier_size_cells=5, dilation_kernel_radius_cells=1,
          post_goal_settle_enabled=True, post_goal_min_settle=1.5,
          navigate_to_pose_action_name='/exploration/navigate_to_pose',
          frontier_suppression_enabled=True, all_frontiers_suppressed_behavior='stay',
-         max_linear_speed_vmax=.20, max_angular_speed_wmax=.65,
+         max_linear_speed_vmax=.60, max_angular_speed_wmax=.90,
          frontier_selection_min_distance=.60, frontier_candidate_min_goal_distance_m=.50,
          goal_preemption_complete_if_within_m=0.0,
          goal_preemption_enabled=True,

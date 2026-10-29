@@ -11,6 +11,7 @@ Usage: bash scripts/simulation/start-autonomous-exploration.sh [options]
   --backend native|pixi                      (default: native)
   --domain ID                                (default: 86)
   --map PATH               Output map basename; normally generated per run
+  --scan360                Scan one full turn before exploration
   --check                  Check runtime/packages without starting/stopping tests
   --help                   Show this help
 Legacy positional form remains: [duration] [map basename] [arena] [domain]
@@ -31,6 +32,7 @@ else
     while (( $# )); do
         case "$1" in
             --help) usage; exit 0 ;;
+            --scan360) export EDGEAI_SCAN360=true; shift ;;
             --check) check_only=true; shift ;;
             --duration|--map|--arena|--domain|--controller|--backend)
                 [[ $# -ge 2 && $2 != --* ]] || { echo "Missing value: $1" >&2; exit 2; }
@@ -46,6 +48,9 @@ else
             *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
         esac
     done
+fi
+if [[ ${EDGEAI_SCAN360:-false} == true && ( ${EDGEAI_TURN_TEST:-false} == true || ${EDGEAI_RECOVERY_TEST:-false} == true ) ]]; then
+    echo 'Scan360 cannot be combined with motion/recovery tests.' >&2; exit 2
 fi
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
 cache=$EDGEAI_RUNTIME_CACHE
@@ -64,7 +69,7 @@ controller=${EDGEAI_CONTROLLER:-dwb}
 [[ $arena == competition || $arena == simple ]] || { echo 'Arena must be competition or simple.' >&2; exit 2; }
 echo "ROS backend=$EDGEAI_ROS_BACKEND controller=$controller arena=$arena domain=$domain duration=${duration}s"
 if $check_only; then
-    for package in edgeai_simulation edgeai_navigation edgeai_exploration; do
+    for package in edgeai_simulation edgeai_navigation edgeai_exploration edgeai_perception; do
         bash "$PROJECT_ROOT/scripts/ros/ros-command.sh" ros2 pkg prefix "$package"
     done
     echo 'Runtime check passed; no test was started or stopped.'

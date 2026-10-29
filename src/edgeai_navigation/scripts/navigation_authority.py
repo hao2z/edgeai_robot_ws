@@ -48,6 +48,8 @@ class NavigationAuthority(Node):
         self.recoveries = {}
         self.seen = {}
         self.distance = None
+        self.command_sequence = 0
+        self.completed_goals = 0
         self.last_clock = self.get_clock().now().nanoseconds
         self.clock_advanced = time.monotonic()
         # Frontier explorer is launched with autostart=true. AUTO therefore
@@ -70,6 +72,8 @@ class NavigationAuthority(Node):
             cancel_callback=self.cancel) for endpoint, owner in
             [('/exploration/navigate_to_pose', 'AUTO'), ('/navigate_to_pose', 'MANUAL')]]
         self.create_service(SetBool, '/navigation_authority/set_manual', self.set_manual,
+                            callback_group=self.group)
+        self.create_service(Trigger, '/navigation_authority/observation_hold', self.observation_hold,
                             callback_group=self.group)
         self.create_service(Trigger, '/navigation_authority/stop', self.stop,
                             callback_group=self.group)
@@ -179,6 +183,7 @@ class NavigationAuthority(Node):
                 self.distance, self.following, self.fresh_pose(), status == GoalStatus.STATUS_SUCCEEDED):
             self.event('NAVIGATION_RESTORED', '恢复动作后原任务已完成', evidence=asdict(self.recovery))
         if status == GoalStatus.STATUS_SUCCEEDED:
+            self.completed_goals += 1
             handle.succeed()
         elif status == GoalStatus.STATUS_CANCELED and handle.is_cancel_requested:
             handle.canceled()
@@ -258,6 +263,7 @@ class NavigationAuthority(Node):
             self.policy.uncertain(context['token'], str(error))
 
     def change_mode(self, mode):
+        self.command_sequence += 1
         changed = self.policy.set_mode(mode)
         if not changed:
             self.event('MODE_ALREADY_REQUESTED', '重复控制请求已合并，无需再次调用 ROS 服务', requested=mode)
@@ -274,6 +280,17 @@ class NavigationAuthority(Node):
         self.event('MODE_REQUESTED', '控制权切换已登记；旧任务终止前不接收新目标', requested=mode)
         self.sync_explorer()
         self.send_cancel()
+
+    def observation_hold(self, request, response):
+        # Atomic admission check: never cancel a navigation task to obtain a view.
+        if (self.policy.mode != 'AUTO' or self.policy.phase != 'IDLE'
+                or self.current is not None or self.pending is not None or self.following):
+            response.success, response.message = False, 'Navigation busy; observation deferred'
+            return response
+        self.change_mode('STOPPED')
+        response.success, response.message = True, str(self.command_sequence)
+        self.event('OBSERVATION_HELD', '导航空闲，暂留观察任务控制权')
+        return response
 
     def set_manual(self, request, response):
         self.change_mode('MANUAL' if request.data else 'AUTO')
@@ -436,7 +453,8 @@ class NavigationAuthority(Node):
             self.send_cancel()
         self.sync_explorer()
         state = asdict(self.policy)
-        state.update(goal_uuid=bytes(c['backend'].goal_id.uuid).hex() if c and c['backend'] else '',
+        state.update(command_sequence=self.command_sequence, completed_goals=self.completed_goals,
+                     explorer_paused=self.explorer_sync is False, goal_uuid=bytes(c['backend'].goal_id.uuid).hex() if c and c['backend'] else '',
                      distance_remaining=self.distance, clock_paused=now-self.clock_advanced >= 2.0,
                      following_path=self.following, explorer_error=self.explorer_error,
                      recovery=asdict(self.recovery) if self.recovery else None)
@@ -446,7 +464,7 @@ class NavigationAuthority(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', required=True)
-    parser.add_argument('--mode', choices=('AUTO', 'MANUAL'), default='AUTO')
+    parser.add_argument('--mode', choices=('AUTO', 'MANUAL', 'STOPPED'), default='AUTO')
     parser.add_argument('--tree', required=True)
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)

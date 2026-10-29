@@ -2,7 +2,8 @@
 
 The default integration uses SLAM Toolbox, Nav2 DWB and upstream
 `frontier_exploration_ros2` 1.6.1, pinned to
-`11864e4ac6789dc81fd71bad51e43339c01deca2`. Its 141 upstream tests passed.
+`11864e4ac6789dc81fd71bad51e43339c01deca2`. Historical upstream validation is described below; current adapter tests and
+known expectation conflicts are recorded in the latest baseline report.
 Explore Lite is retained only for comparisons, selected with
 `EDGEAI_EXPLORER=lite`; its pinned revision is
 `326cf8a0b487c34246bb8f3326afbcd69576dc60`.
@@ -11,7 +12,10 @@ The default environment is native apt ROS Jazzy. Project builds are under
 The old Pixi environment under `~/.cache/edgeai-open-source` is an explicit
 comparison backend. No preloaded arena map is given to exploration.
 
-## 当前开发基线（2026-10-29）
+最新目标探测、途中扫描测试与截图见
+[2026-10-30 基线报告](docs/mapping-target-search-baseline-2026-10-30.md)。
+
+## 导航参数基线（2026-10-29）
 
 推荐使用 native ROS Jazzy + NavFn Dijkstra + DWB/Rotation Shim + SLAM Toolbox。
 DWB 与速度平滑器已统一：前进 0.6 m/s、倒车 0.3 m/s、角速度 ±0.9 rad/s，
@@ -193,3 +197,42 @@ radius in both costmaps and `CostCritic.consider_footprint=false`. Inflation is
 0.40 m to cover that radius. The historical `nav2_exploration_rectangle_mppi.yaml`
 filename is retained for launcher compatibility. DWB retains the rectangle.
 Collision Monitor consumes the costmap's published circular outline.
+
+## 重复低收益目标约束
+
+`frontier_exploration.yaml` 的 `repeat_guard_*` 控制独立的跨任务历史记录。
+默认启用：0.35 m 内的前沿中心视为同一区域；在目标周围 3×3 m 的世界坐标采样网格上，
+新增已知面积不足 0.03 m²时视为低收益。导航成功、失败和取消后的当前任务都会登记，
+等待 `post_goal_min_settle` 后评估；不取消正在执行的任务，也不处理已被替换的迟到结果。
+连续低收益冷却为 30、60、120、240 秒仿真时间，240 秒封顶；新信息达到门槛则重置。
+历史在普通失败冷却过期后保留，新探索任务初始化时清空，容量复用
+`frontier_suppression_max_attempt_records`（默认256），超限淘汰最旧记录。
+普通失败区域抑制仍独立生效；新增约束可以用 `repeat_guard_enabled: false` 禁用。
+日志 `REPEAT_GUARD_COOLDOWN` 包含目标、收益面积、连续次数和冷却时长，
+`REPEAT_GUARD_GAIN` 表示收益恢复后重置。面积是10 cm采样近似，仍会受SLAM位姿修正影响。
+
+本机运行时由 `scripts/setup/build-frontier-runtime.sh` 生成并构建固定上游适配源码，
+启动器检查 `repeat-gain-v3` 标记，避免误用旧运行时。源码策略位于
+`src/edgeai_exploration/tools/prepare_repeat_guard.py` 和相邻 `.cpp.inc` 文件。
+
+验证：新增 RepeatGuardTests 两项通过（无收益成功/取消递增冷却、地图稳定期间新增信息不抑制）；
+完整 CTest 的7个测试目标中6个通过，test_preemption_flow 内3项仍要求旧版低收益立即取消，
+与此前的抢占适配策略冲突（这些测试默认禁用 repeat guard）。未宣称完整测试全部通过，
+本次未重新执行完整图形仿真。
+
+## 建图同步寻找目标
+
+默认启用独立 `edgeai_perception` 节点：检测ArUco、按图像时刻TF定位、三帧确认，
+RViz显示目标球与ID文字。首版只输出标记中心位置，不派发导航或救援动作。
+配置位于 `src/edgeai_perception/config/aruco_targets.yaml`；标准探索入口无需新增参数。
+Linux设置 `EDGEAI_TARGET_SEARCH=false` 可关闭，启用时不得禁用RGB-D相机。
+每轮输出 `perception.log`、`target-observations.jsonl` 和 `targets.json`，遵守既有测试目录清理。
+完整说明、接口和真实Gazebo验证记录见 `src/edgeai_perception/README.md`。
+
+启动时可选加 `-Scan360`（Linux `--scan360`），在探索前通过 Nav2 Spin 转一周观察，
+目标探测保持运行；结果见每轮 `scan360-result.json`。这是启动扫描，不是途中周期补扫。
+
+途中开阔位置扫描默认启用：导航自然结束后，在半径至少0.50m且满足实际旋转扫掠范围的
+已知无致命障碍区域转一周；扫描位置间距1.2m、间隔30秒仿真时间，默认最多8次。
+详见 `src/edgeai_perception/config/observation_scan.yaml`；每轮实际车身半径写入
+`observation-scan-runtime.yaml`，可用 `EDGEAI_OBSERVATION_SCAN=false` 关闭途中扫描。

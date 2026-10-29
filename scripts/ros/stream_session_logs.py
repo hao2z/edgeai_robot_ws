@@ -22,7 +22,7 @@ RULES = [
     (r'Start occupied', '规划失败：起点被代价地图判为占用；这不等于已发生物理碰撞'),
     (r'Failed to make progress', '导航长时间没有取得进展'),
     (r'Aborting|Goal failed|Failed to create plan', '导航或规划失败，检查后续恢复动作'),
-    (r'Attempting.*spin|Running.*spin|Spin behavior', '正在执行旋转恢复动作'),
+    (r'Attempting.*spin|Running.*spin|Spin behavior', '正在执行旋转动作（观察扫描或导航恢复，结合任务日志判断）'),
     (r'[Aa]ll .*suppressed|[Nn]o .*unsuppressed', '前沿候选均被抑制，探索可能暂时停滞'),
     (r'[Ee]xploration (?:is )?(?:complete|finished)|[Nn]o frontiers found', '探索器报告完成；仍需结合覆盖率检查遗漏区域'),
     (r'[Cc]ollision.*(stop|halt)|[Ss]top.*collision', '碰撞监测器触发停车；需要检查实际间距'),
@@ -62,6 +62,17 @@ class EventReducer:
                 group[0], group[1] = self.clock(), 0
 
     def consume(self, source, line, stopping=False):
+        if source == 'observation' and 'OBSERVATION_' in line:
+            self.emit(source, 'ERROR' if 'ERROR' in line or 'UNKNOWN' in line else 'INFO',
+                      line.split(']: ', 1)[-1], line)
+            return
+        if source == 'scan360' and 'SCAN360_' in line:
+            self.emit(source, 'WARN' if 'INCOMPLETE' in line or 'ERROR' in line else 'INFO',
+                      line.split(']: ', 1)[-1], line)
+            return
+        if source == 'perception' and ('TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line):
+            self.emit(source, 'INFO', line.split(']: ', 1)[-1], line)
+            return
         if source == 'authority':
             event = re.search(r'\[navigation_authority\]: ([A-Z_]+): (.*?); task=', line)
             if event:
@@ -139,7 +150,7 @@ def follow(directory):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     directory = Path(directory)
-    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority')
+    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'scan360', 'observation')
     for name in names:
         (directory / f'{name}.log').touch(exist_ok=True)
     handles = {name: (directory / f'{name}.log').open(encoding='utf-8', errors='replace')

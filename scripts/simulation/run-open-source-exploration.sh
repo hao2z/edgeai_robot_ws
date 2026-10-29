@@ -18,7 +18,7 @@ backend=${EDGEAI_EXPLORER:-frontier}
 cache=$EDGEAI_RUNTIME_CACHE
 if [[ $backend == frontier ]]; then
     if [[ ! -f "$cache/frontier-install/edgeai-recovery-owner" ]] ||
-       ! grep -qx '11864e4ac6789dc81fd71bad51e43339c01deca2 watchdog-zero-preemption-v2' "$cache/frontier-install/edgeai-recovery-owner"; then
+       ! grep -qx '11864e4ac6789dc81fd71bad51e43339c01deca2 repeat-gain-v3' "$cache/frontier-install/edgeai-recovery-owner"; then
         echo 'Build the coordinated explorer first: bash scripts/setup/build-frontier-runtime.sh' >&2
         exit 1
     fi
@@ -108,7 +108,7 @@ bt['default_nav_to_pose_bt_xml'] = str((source.parent/'behavior_trees/explore_re
 output.write_text(yaml.safe_dump(config, sort_keys=False))
 PY
 nav_config="$temp_dir/nav2-runtime.yaml"
-for name in sim nav explore rviz rosout watch alignment authority; do touch "$temp_dir/$name.log"; done
+for name in sim nav explore rviz rosout watch alignment authority perception observation; do touch "$temp_dir/$name.log"; done
 event() { printf '%s [session] %s\n' "$(date --iso-8601=seconds)" "$*" | tee -a "$temp_dir/events.log"; }
 registration="$PROJECT_ROOT/runtime/exploration-$ROS_DOMAIN_ID.json"
 python3 - "$registration" "$temp_dir" "$$" "$GZ_PARTITION" "$arena" "$profile" "$duration" <<'PY'
@@ -127,7 +127,7 @@ printf '%s\n' "$temp_dir" > "$PROJECT_ROOT/runtime/latest-session.txt"
 [[ $backend != frontier ]] || touch "$temp_dir/frontier-backend"
 python3 -u "$PROJECT_ROOT/scripts/ros/stream_session_logs.py" "$temp_dir" 2>"$temp_dir/stream-errors.log" 9>&- &
 tail_pid=$!
-sim_pid='' nav_pid='' explore_pid='' watch_pid='' rviz_pid='' monitor_pid='' diagnostic_pid='' authority_pid='' command_probe_pid=''
+sim_pid='' nav_pid='' explore_pid='' watch_pid='' rviz_pid='' monitor_pid='' diagnostic_pid='' authority_pid='' command_probe_pid='' perception_pid='' scan_pid='' observation_pid=''
 cleanup() {
     result=$?
     trap - EXIT INT TERM
@@ -143,6 +143,12 @@ cleanup() {
     [[ -z $monitor_pid ]] || kill -INT "$monitor_pid" 2>/dev/null || true
     [[ -z $diagnostic_pid ]] || kill -TERM "$diagnostic_pid" 2>/dev/null || true
     [[ -z $command_probe_pid ]] || kill -TERM "$command_probe_pid" 2>/dev/null || true
+    [[ -z $observation_pid ]] || kill -TERM "$observation_pid" 2>/dev/null || true
+    [[ -z $observation_pid ]] || wait "$observation_pid" 2>/dev/null || true
+    [[ -z $scan_pid ]] || kill -TERM "$scan_pid" 2>/dev/null || true
+    [[ -z $scan_pid ]] || wait "$scan_pid" 2>/dev/null || true
+    [[ -z $perception_pid ]] || kill -TERM "$perception_pid" 2>/dev/null || true
+    [[ -z $perception_pid ]] || wait "$perception_pid" 2>/dev/null || true
     [[ -z $authority_pid ]] || kill -INT "$authority_pid" 2>/dev/null || true
     [[ -z $watch_pid ]] || kill -INT "$watch_pid" 2>/dev/null || true
     [[ -z $watch_pid ]] || wait "$watch_pid" 2>/dev/null || true
@@ -211,12 +217,24 @@ if [[ ${EDGEAI_MPPI_INVERT_LINEAR:-false} == true ]]; then
     event '实验：仅 MPPI 线速度取反，恢复动作不变；碰撞监控保留'
 fi
 authority_mode=AUTO
+[[ ${EDGEAI_SCAN360:-false} != true ]] || authority_mode=STOPPED
 [[ ${EDGEAI_TURN_TEST:-false} != true ]] || authority_mode=MANUAL
 [[ ${EDGEAI_RECOVERY_TEST:-false} != true ]] || authority_mode=MANUAL
 python3 -u "$PROJECT_ROOT/src/edgeai_navigation/scripts/navigation_authority.py" --directory "$temp_dir" \
     --mode "$authority_mode" --tree "$config_dir/behavior_trees/explore_recovery.xml" \
     --ros-args -p use_sim_time:=true >"$temp_dir/authority.log" 2>&1 9>&- &
 authority_pid=$!
+if [[ ${EDGEAI_TARGET_SEARCH:-true} == true ]]; then
+    if [[ ${EDGEAI_DISABLE_RGBD_CAMERA:-false} == true ]]; then
+        echo 'Target search requires RGB-D camera; unset EDGEAI_DISABLE_RGBD_CAMERA or disable EDGEAI_TARGET_SEARCH.' >&2
+        exit 2
+    fi
+    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/aruco_targets.py" --ros-args \
+        --params-file "$PROJECT_ROOT/src/edgeai_perception/config/aruco_targets.yaml" \
+        -p "output_directory:=$temp_dir" >"$temp_dir/perception.log" 2>&1 9>&- &
+    perception_pid=$!
+    event '目标寻找已启动：ArUco图像检测、多帧确认和地图定位；详见 perception.log、targets.json'
+fi
 if [[ $rviz == true ]]; then
     setsid ros2 run rviz2 rviz2 -d "$exploration_dir/rviz/exploration.rviz" \
         --ros-args -p use_sim_time:=true >"$temp_dir/rviz.log" 2>&1 9>&- &
@@ -231,6 +249,10 @@ for _ in {1..60}; do
     fi
     sleep 1
 done
+if [[ -n $perception_pid ]] && ! kill -0 "$perception_pid" 2>/dev/null; then
+    echo 'Target perception process exited; inspect perception.log.' >&2
+    exit 1
+fi
 if ! $ready; then
     echo 'Nav2 did not become active. Recent simulator and navigation output:' >&2
     event '启动失败：Nav2 未进入 active 状态，请查看 sim.log 和 nav.log'
@@ -242,10 +264,21 @@ if [[ ${EDGEAI_RECOVERY_TEST:-false} == true ]]; then
     event 'Nav2 已就绪，开始原生恢复故障注入检查；本轮不启动探索器'
 elif [[ ${EDGEAI_TURN_TEST:-false} == true ]]; then
     event "Nav2 已就绪，开始基础运动检查：${EDGEAI_MOTION_TEST:-turn}；本轮不启动探索器"
+elif [[ ${EDGEAI_SCAN360:-false} == true ]]; then
+    event 'Nav2 已就绪，等待启动360度观察任务'
 else
     event 'Nav2 已就绪，开始自主探索'
 fi
 touch "$temp_dir/ready"
+if [[ ${EDGEAI_SCAN360:-false} == true ]]; then
+    event '执行启动360度观察任务；目标检测继续运行，扫描结束后开始探索'
+    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/scan360.py" \
+        --ros-args -p use_sim_time:=true -p "output_file:=$temp_dir/scan360-result.json" \
+        >"$temp_dir/scan360.log" 2>&1 9>&- &
+    scan_pid=$!
+    wait "$scan_pid"
+    scan_pid=''
+fi
 if [[ ${EDGEAI_RECOVERY_TEST:-false} == true ]]; then
     setsid python3 -u "$PROJECT_ROOT/tests/exploration/navigation_recovery_check.py" \
         --output "$temp_dir/recovery-result.json" --ros-args -p use_sim_time:=true >"$temp_dir/explore.log" 2>&1 9>&- &
@@ -264,6 +297,29 @@ else
         -r navigate_to_pose:=/exploration/navigate_to_pose >"$temp_dir/explore.log" 2>&1 9>&- &
 fi
 explore_pid=$!
+if [[ ${EDGEAI_OBSERVATION_SCAN:-true} == true && ${EDGEAI_TARGET_SEARCH:-true} == true && ${EDGEAI_TURN_TEST:-false} != true && ${EDGEAI_RECOVERY_TEST:-false} != true ]]; then
+    python3 - "$nav_config" "$PROJECT_ROOT/src/edgeai_perception/config/observation_scan.yaml" "$temp_dir/observation-scan-runtime.yaml" "$temp_dir" <<'SCAN_CONFIG'
+import json, math, sys, yaml
+from pathlib import Path
+nav, template, output, directory = sys.argv[1:]
+c = yaml.safe_load(Path(nav).read_text())
+radii = []
+for name in ('local_costmap', 'global_costmap'):
+    geometry = c[name][name]['ros__parameters']
+    pad = geometry.get('footprint_padding', 0.0)
+    if 'footprint' in geometry:
+        radii.append(max(math.hypot(x+math.copysign(pad,x), y+math.copysign(pad,y))
+                         for x,y in json.loads(geometry['footprint'])))
+    else:
+        radii.append(geometry['robot_radius']+pad)
+p = yaml.safe_load(Path(template).read_text())
+p['observation_scan']['ros__parameters'].update(rotation_radius_m=max(radii), output_directory=directory)
+Path(output).write_text(yaml.safe_dump(p, sort_keys=False))
+SCAN_CONFIG
+    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/observation_scan.py" --ros-args \
+        --params-file "$temp_dir/observation-scan-runtime.yaml" >"$temp_dir/observation.log" 2>&1 9>&- &
+    observation_pid=$!
+fi
 start=$SECONDS
 reason=time_limit
 while (( SECONDS-start < duration )); do
