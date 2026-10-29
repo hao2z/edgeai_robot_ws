@@ -2,6 +2,48 @@
 
 A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
 
+## Quickstart: Perception & Autonomous Patrol (Workstream 2)
+
+This section provides quick instructions for running the simulation, spawning ArUco targets, and executing the perception pipeline and autonomous square patrol.
+
+### Terminal 1: Launch Gazebo & RViz Simulation
+```bash
+./start_sim.sh
+```
+
+### Terminal 2: Spawn ArUco Targets & Run ArUco Detector
+```bash
+pixi shell
+source install/setup.bash
+python src/edgeai_perception/edgeai_perception/spawn_markers.py
+ros2 run edgeai_perception aruco_detector
+```
+- Subscribes to `/camera/image` and `/camera/camera_info`.
+- Uses OpenCV PnP to compute 3D marker distance $(x, y, z)$ and orientation (`yaw`).
+- Uses `tf2_ros` to transform marker coordinates into the global `odom`/`map` frame.
+- Publishes:
+  - `/detected_targets` (`std_msgs/msg/String`): JSON list of all discovered targets with `id`, `type`, `x`, `y`, `yaw`.
+  - `/target_markers` (`visualization_msgs/msg/MarkerArray`): 3D visual markers for RViz.
+
+### Terminal 3: Run Closed-Loop Autonomous Square Patrol (2 Circles)
+```bash
+pixi shell
+source install/setup.bash
+ros2 run edgeai_perception square_patrol
+```
+- Moves the robot forward 1.0 m and turns left 90° using closed-loop `/odom` feedback.
+- Completes 2 full loops (8 sides) and automatically halts.
+
+### Terminal 4: Inspect Live Detected Target List
+```bash
+pixi shell
+source install/setup.bash
+ros2 topic echo /detected_targets
+```
+To view 3D persistent pins in RViz: click **Add** -> **MarkerArray** -> set topic to `/target_markers`.
+
+---
+
 ## Environment
 
 - Ubuntu 24.04 (x86-64).
