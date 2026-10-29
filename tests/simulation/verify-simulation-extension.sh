@@ -16,7 +16,9 @@ fi
 timeout 5s xdpyinfo >/dev/null
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
 cd "$PROJECT_ROOT"
-eval "$(pixi shell-hook --manifest-path "$EDGEAI_ENV_MANIFEST")"
+if [[ ${EDGEAI_ROS_ENV_ACTIVE:-false} != true ]]; then
+    exec bash "$PROJECT_ROOT/scripts/ros/with-ros-env.sh" env EDGEAI_ROS_ENV_ACTIVE=true bash "$0" "$@"
+fi
 source "$EDGEAI_BUILD_ROOT/install/local_setup.bash"
 mkdir -p "$HOME/.cache" "$PROJECT_ROOT/tests/results/simulation-extension"
 exec 9>"$HOME/.cache/edgeai-simulation.lock"
@@ -27,7 +29,7 @@ multi=true
 extras=(--count "$count" --maps)
 if [[ $mode == single ]]; then multi=false; extras+=(--single); fi
 if [[ $mode == motion ]]; then extras+=(--motion); fi
-setsid ros2 launch edgeai_robot_description simulation_real.launch.py \
+setsid ros2 launch edgeai_simulation simulation_real.launch.py \
   multi_robot:="$multi" robot_count:="$count" gui:=false rviz:=false slam:=true \
   >"$PROJECT_ROOT/tests/results/simulation-extension/launch-$mode-$count.log" 2>&1 &
 sim_pid=$!
@@ -42,5 +44,5 @@ cleanup() {
     wait "$sim_pid" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
-timeout --signal=INT --kill-after=5s 120s python "$CHECK_DIR/verify_simulation_extension.py" "${extras[@]}" \
+timeout --signal=INT --kill-after=5s 120s python3 "$CHECK_DIR/verify_simulation_extension.py" "${extras[@]}" \
   --output "$PROJECT_ROOT/tests/results/simulation-extension/result-$mode-$count.json"

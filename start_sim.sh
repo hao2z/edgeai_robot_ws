@@ -7,9 +7,9 @@ cd "$WS_DIR"
 
 # Activate Pixi environment
 source "$WS_DIR/scripts/ros/workspace-env.sh"
-PIXI_HOOK="$(pixi shell-hook --manifest-path "$EDGEAI_ENV_MANIFEST")"
-eval "$PIXI_HOOK"
-unset PIXI_HOOK
+if [[ ${EDGEAI_ROS_ENV_ACTIVE:-false} != true ]]; then
+    exec bash "$WS_DIR/scripts/ros/with-ros-env.sh" env EDGEAI_ROS_ENV_ACTIVE=true bash "$0" "$@"
+fi
 
 # Source ROS 2 workspace
 if [[ ! -f "$EDGEAI_BUILD_ROOT/install/local_setup.bash" ]]; then
@@ -35,7 +35,7 @@ trap 'exit 143' TERM
 
 echo "Starting EdgeAI realistic robot simulation..."
 
-ros2 launch edgeai_robot_description simulation_real.launch.py rviz:=true "$@" &
+ros2 launch edgeai_simulation simulation_real.launch.py rviz:=true "$@" &
 SIM_PID=$!
 CHILD_PIDS+=("$SIM_PID")
 

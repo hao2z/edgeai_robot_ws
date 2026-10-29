@@ -17,6 +17,6 @@ fi
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
 cd "$PROJECT_ROOT"
 if [[ -n ${2:-} ]]; then
-    exec pixi run --manifest-path "$EDGEAI_ENV_MANIFEST" env "ROS_DOMAIN_ID=$2" bash --rcfile "$PROJECT_ROOT/scripts/ros/ros-shell.rc" -i
+    exec bash "$PROJECT_ROOT/scripts/ros/with-ros-env.sh" env "ROS_DOMAIN_ID=$2" bash --rcfile "$PROJECT_ROOT/scripts/ros/ros-shell.rc" -i
 fi
-exec pixi run --manifest-path "$EDGEAI_ENV_MANIFEST" bash --rcfile "$PROJECT_ROOT/scripts/ros/ros-shell.rc" -i
+exec bash "$PROJECT_ROOT/scripts/ros/with-ros-env.sh" bash --rcfile "$PROJECT_ROOT/scripts/ros/ros-shell.rc" -i

@@ -32,6 +32,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--duration', type=float, default=20)
+    parser.add_argument('--with-evaluation', action='store_true',
+                        help='Capture optional DWB debug trajectories; disabled for long monitoring runs')
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
     node = rclpy.create_node('edgeai_navigation_state_capture', enable_rosout=False)
@@ -45,11 +47,15 @@ def main():
               'local_footprint':('/local_costmap/published_footprint',PolygonStamped),
               'odom':('/odom',Odometry), 'scan':('/scan',LaserScan),
               'global_plan':('/plan',NavPath), 'local_plan':('/local_plan',NavPath),
-              'evaluation':('/evaluation',LocalPlanEvaluation),
+              'controller_plan':('/transformed_global_plan',NavPath),
               'cmd_nav':('/cmd_vel_nav',Twist), 'cmd_smoothed':('/cmd_vel_smoothed',Twist),
               'cmd_final':('/cmd_vel',Twist)}
+    if args.with_evaluation:
+        topics['evaluation']=('/evaluation',LocalPlanEvaluation)
     for key,(topic,kind) in topics.items():
-        qos = QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL) if key in ('map','global_raw','local_raw') else qos_profile_sensor_data
+        # Raw costmaps may be volatile; transient-local readers cannot match
+        # those publishers. A volatile reader also accepts transient publishers.
+        qos = QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL) if key == 'map' else qos_profile_sensor_data
         subscriptions.append(node.create_subscription(kind,topic,lambda msg,k=key:messages.__setitem__(k,msg),qos))
     args.output.mkdir(parents=True,exist_ok=True)
     started,last,index = time.monotonic(),0,0
@@ -81,6 +87,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if not index:
+            print(f'No snapshots; missing required topics: {[k for k in ("global_raw", "local_raw", "odom") if k not in messages]}; '
+                  f'received: {list(messages)}', flush=True)
         node.destroy_node()
         if rclpy.ok(): rclpy.shutdown()
 

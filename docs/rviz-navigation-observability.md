@@ -1,5 +1,8 @@
 # RViz中的轮廓、地图与时间对齐
 
+默认视图与日志已精简，当前入口行为见 [日常观察与诊断输出](observation-output.md)。
+下表包含可选诊断显示；全局代价地图、全局轮廓和深度图不再默认显示。
+
 `Start-Autonomous-Exploration.ps1` 自动加载这些显示，并启动只读诊断节点。
 所有活动节点使用Gazebo `/clock`。诊断节点不发布速度、位姿估计或TF，不参与控制。
 
@@ -66,6 +69,6 @@ RViz目标帧率60 FPS，雷达20 Hz，相机30 Hz，里程计50 Hz，IMU100 Hz�
 `bash scripts/setup/build-workspace.sh` 构建，正常启动入口会加载它。
 
 相关实现：`scripts/ros/navigation_diagnostics.py`、
-`algorithms/exploration/prepare_rviz_diagnostics.py`。运行前只需正常构建/准备流程；
+`src/edgeai_exploration/tools/prepare_rviz_diagnostics.py`。运行前只需正常构建/准备流程；
 这些诊断脚本直接来自当前仓库。旧MarkerArray显示的`Marker Topic`字段已修正为
 当前RViz使用的`Topic`字段，使诊断图例和原有前沿标记能真正订阅到数据。

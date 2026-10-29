@@ -12,7 +12,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
 from geometry_msgs.msg import Point, PolygonStamped
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -39,11 +39,16 @@ class NavigationDiagnostics(Node):
     def __init__(self):
         super().__init__('edgeai_navigation_diagnostics')
         self.declare_parameter('comparison_delay', 0.10)
+        self.declare_parameter('show_global_outline', False)
         self.declare_parameter('log_directory', '')
         self.buffer = Buffer(cache_time=Duration(seconds=15))
         self.listener = TransformListener(self.buffer, self)
         self.publisher = self.create_publisher(MarkerArray, '/diagnostics/navigation', 5)
         self.status_publisher = self.create_publisher(String, '/diagnostics/navigation_status', 1)
+        self.authority = None
+        self.authority_received = None
+        self.authority_subscription = self.create_subscription(String, '/navigation_authority/state',
+            self.authority_state, QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.messages = {}
         self.arrivals = {}
         self.previous_tick = None
@@ -54,7 +59,8 @@ class NavigationDiagnostics(Node):
                   'local_costmap': ('/local_costmap/costmap', OccupancyGrid),
                   'global_footprint': ('/global_costmap/published_footprint', PolygonStamped),
                   'local_footprint': ('/local_costmap/published_footprint', PolygonStamped),
-                  'scan': ('/scan', LaserScan), 'odom': ('/odom', Odometry)}
+                  'scan': ('/scan', LaserScan), 'odom': ('/odom', Odometry),
+                  'global_plan': ('/plan', NavPath), 'local_plan': ('/local_plan', NavPath)}
         for name, (topic, kind) in topics.items():
             qos = (QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
                    if name == 'map' else qos_profile_sensor_data)
@@ -68,6 +74,13 @@ class NavigationDiagnostics(Node):
                       if directory else None)
         self.stopping_file = Path(directory)/'stopping' if directory else None
         self.create_timer(.1, self.update)
+
+    def authority_state(self, message):
+        try:
+            self.authority = json.loads(message.data)
+            self.authority_received = time.monotonic()
+        except (ValueError, TypeError):
+            pass
 
     def record(self, key, message):
         self.messages[key] = message
@@ -155,6 +168,8 @@ class NavigationDiagnostics(Node):
             for key, ident, color, dashed in (
                     ('global_footprint', 1, (0.0,1.0,1.0), True),
                     ('local_footprint', 2, (1.0,.85,0.0), False)):
+                if key == 'global_footprint' and not self.get_parameter('show_global_outline').value:
+                    continue
                 try:
                     markers.append(self.outline(key, stamp, base, ident, color, dashed))
                 except (ValueError, TransformException) as error:
@@ -178,7 +193,8 @@ class NavigationDiagnostics(Node):
         rows = ''.join(f'<tr><td>{name}</td><td>{age(key)} s</td><td>{self.rate(key, now.nanoseconds/1e9):.1f}</td></tr>'
                        for key, name in (('map','SLAM地图'),('global_costmap','全局代价地图'),
                                          ('local_costmap','局部代价地图'),('scan','雷达'),('odom','里程计'),
-                                         ('global_footprint','全局轮廓'),('local_footprint','局部轮廓')))
+                                         ('global_footprint','全局轮廓'),('local_footprint','局部轮廓'),
+                                         ('global_plan','全局路径'),('local_plan','局部轨迹')))
         factor = '?' if self.rtf is None else f'{self.rtf:.2f}x'
         legend = ''.join(f'<tr><td style="color:{color}"><b>{symbol} {name}</b></td></tr><tr><td>{meaning}</td></tr>'
             for color, symbol, name, meaning in (
@@ -190,15 +206,39 @@ class NavigationDiagnostics(Node):
                 ('#bb3030','·','雷达回波','红色点：当前扫描命中点；灰色车模显示实体外观'),
                 ('#b020b0','→','SLAM修正','品红箭头：相对初始里程计锚点的修正，不是真值'),
                 ('#535d70','■','代价地图','红/紫渐变含障碍及膨胀；可在左侧分别开关两张地图')))
-        body = (f'<h3>{label}</h3><p><b>轮廓颜色不代表无碰撞。</b><br>青黄重合表示同一时刻的几何一致。</p>'
-                f'<table width="100%" cellspacing="3">{legend}</table><hr>'
+        odometry = self.messages.get('odom')
+        speed = ('等待里程计' if odometry is None else
+                 f'{odometry.twist.twist.linear.x:.2f} m/s · {odometry.twist.twist.angular.z:.2f} rad/s')
+        body = (f'<h3>{label}</h3><p>速度估计：{speed}</p>'
                 f'<p>仿真倍率：{factor}<br>对比延迟：{self.get_parameter("comparison_delay").value:.2f} s'
                 f'<br>SLAM相对锚点修正：{correction_text}</p>'
                 f'<table width="100%" cellspacing="3"><tr><th align="left">数据</th><th>年龄</th><th>实收Hz</th></tr>{rows}</table>'
-                '<p>频率按模拟时间统计。时间检查通过不等于通行安全。</p>')
+                '<p>频率按模拟时间统计；时间正常不代表导航成功或无碰撞。</p>')
+        old_paths = [name for key, name in (('global_plan','全局路径'),('local_plan','局部轨迹'))
+                     if ages.get(key) is not None and ages[key] > 2.0]
+        if old_paths:
+            body += ('<p style="color:#a45a00"><b>'+ '、'.join(old_paths)+
+                     '超过2秒未更新</b>：屏幕可能保留旧路线；停止或恢复期间也会出现，不能据此认定当前路线有效。</p>')
         if stale or problems:
             body += '<p>'+html.escape(', '.join(stale)+('; '+ '; '.join(problems) if problems else ''))+'</p>'
-        self.status_publisher.publish(String(data=body))
+        if self.authority:
+            a = self.authority
+            age = time.monotonic()-self.authority_received
+            modes = {'AUTO':'自动探索', 'MANUAL':'手动控制', 'STOPPED':'停止'}
+            phases = {'IDLE':'空闲', 'SENDING':'等待接单', 'ACTIVE':'任务活动',
+                      'CANCELING':'等待取消终态', 'UNKNOWN':'状态未知，禁止交接'}
+            recovery = a.get('recovery') or {}
+            outcomes = {'RUNNING':'恢复动作执行中', 'ACTION_FAILED':'恢复动作失败',
+                        'UNVERIFIED_NO_ODOMETRY':'缺少位移证据', 'UNVERIFIED_NO_MOTION':'未检测到足够位移',
+                        'AWAITING_NAVIGATION':'动作有位移，等待导航恢复', 'NAVIGATION_RESTORED':'原任务已恢复导航'}
+            ownership = (f'<p><b>控制权：{html.escape(modes.get(a["mode"], a["mode"]))}</b> · '
+                         f'{html.escape(phases.get(a["phase"], a["phase"]))}<br>'
+                         f'任务 {a["generation"]} · 执行者 {html.escape(a.get("owner") or "无")}<br>'
+                         f'{html.escape(outcomes.get(recovery.get("outcome"), "尚无运动恢复证据"))}</p>')
+            if a.get('fault') or age > 2:
+                ownership += '<p style="color:#a45a00">'+html.escape(a.get('fault') or '仲裁状态已过期')+'</p>'
+            body = ownership+body
+        self.status_publisher.publish(String(data=body+'<!--LEGEND-->'+f'<table width="100%" cellspacing="3">{legend}</table>'))
         self.publisher.publish(MarkerArray(markers=markers))
         state = (status, tuple(stale), bool(problems))
         if state != self.last_status:

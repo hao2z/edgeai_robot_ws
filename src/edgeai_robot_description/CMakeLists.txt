@@ -13,13 +13,8 @@ find_package(ament_cmake REQUIRED)
 
 install(
   DIRECTORY
-    launch
     urdf
-    worlds
     rviz
-    config
-    maps
-    models
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -34,8 +29,5 @@ install(
 #  set(ament_cmake_cpplint_FOUND TRUE)
 #  ament_lint_auto_find_test_dependencies()
 #endif()
-
-install(PROGRAMS scripts/generate_targets.py
-  DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

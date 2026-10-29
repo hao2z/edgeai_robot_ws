@@ -2,13 +2,14 @@
 <package format="3">
   <name>edgeai_navigation_rviz</name>
   <version>0.1.0</version>
-  <description>Read-only navigation legend and timing panel for RViz.</description>
+  <description>Navigation ownership controls, recovery evidence and timing panel for RViz.</description>
   <maintainer email="13190143+liang-junnan@user.noreply.gitee.com">Junnan</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rviz_common</depend>
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>pluginlib</depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

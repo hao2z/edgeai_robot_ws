@@ -6,7 +6,8 @@
     [switch]$InCurrentWindow
 )
 $ErrorActionPreference = 'Stop'
-$linuxRoot = (wsl -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
+. (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
+$linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 if (-not $InCurrentWindow) {
     & (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro
@@ -14,11 +15,11 @@ if (-not $InCurrentWindow) {
         '-File', "`"$PSCommandPath`"", '-InCurrentWindow',
         '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Distro', "`"$Distro`"")
     if ($SLAM) { $consoleArgs += '-SLAM' }
-    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
-        Start-Process wt.exe -ArgumentList (@('-w', 'new', 'new-tab', '--title', '"EdgeAI Simulation"',
-            '--suppressApplicationTitle', 'powershell') + $consoleArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Normal
+    if ($windowsTerminal) {
+        Start-Process $windowsTerminal -ArgumentList (@('-w', 'new', 'new-tab', '--title', '"EdgeAI Simulation"',
+            '--suppressApplicationTitle', '-d', "`"$PSScriptRoot`"", "`"$windowsPowerShell`"") + $consoleArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Normal
     } else {
-        Start-Process powershell -ArgumentList $consoleArgs -WorkingDirectory $PSScriptRoot -WindowStyle Normal
+        Start-Process $windowsPowerShell -ArgumentList $consoleArgs -WorkingDirectory $PSScriptRoot -WindowStyle Normal
     }
     Write-Host 'Simulation output window opened.'
     return
@@ -44,11 +45,11 @@ if ($DisplayServer -eq 'VcXsrv') {
             throw 'Display :1 is already occupied by another X server.'
         }
     } else {
-        wsl -d $Distro -- python3 $linuxRoot/scripts/display/configure-vcxsrv-auth.py
+        & $wslExe -d $Distro -- python3 $linuxRoot/scripts/display/configure-vcxsrv-auth.py
         if ($LASTEXITCODE -ne 0) { throw 'Xauthority creation failed.' }
         $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
         # icacls changes the DACL without requesting SACL privileges.
-        & icacls $authPath '/inheritance:r' '/grant:r' "*$($sid.Value):(F)" | Out-Null
+        & (Join-Path $nativeSystem 'icacls.exe') $authPath '/inheritance:r' '/grant:r' "*$($sid.Value):(F)" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Xauthority access restriction failed.' }
         $serverArgs = ":1 -multiwindow -clipboard -wgl -listen tcp -auth `"$authPath`" -logfile `"$logPath`""
         $server = Start-Process -FilePath $serverPath -ArgumentList $serverArgs -WindowStyle Hidden -PassThru
@@ -60,15 +61,15 @@ $backend = $DisplayServer.ToLowerInvariant()
 if ($DisplayServer -eq 'WSLg') {
     # Check before opening any of this session's windows. Repair only the known
     # gfxredir=0 failure; leave healthy sessions and the Ubuntu VM running.
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Repair-WSLg.ps1') -Distro $Distro
+    & $windowsPowerShell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Repair-WSLg.ps1') -Distro $Distro
     if ($LASTEXITCODE -ne 0) { throw 'WSLg readiness/graphics redirection check failed.' }
 }
 $multi = if ($Robots -gt 1) { 'true' } else { 'false' }
 $mapping = if ($SLAM) { 'true' } else { 'false' }
 & (Join-Path $PSScriptRoot 'Open-ROS-Terminal.ps1') -Distro $Distro -DisplayServer $DisplayServer
-$observer = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',
+$observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',
     '-File', "`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"", '-SessionDirectory', "`"$sessionDirectory`"", '-SimulationOnly')
-wsl -d $Distro -- env "EDGEAI_SESSION_DIR=$linuxSession" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
+& $wslExe -d $Distro -- env "EDGEAI_SESSION_DIR=$linuxSession" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
 $simulationExitCode = $LASTEXITCODE
 if (-not $observer.WaitForExit(15000)) { $observer.Kill() }
 Write-Host "Simulation ended (exit code $simulationExitCode). This window stays open for inspection." -ForegroundColor Cyan

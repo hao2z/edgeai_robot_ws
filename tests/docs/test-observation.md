@@ -43,7 +43,7 @@ Get-Content (Join-Path $run.FullName 'events.log') -Encoding UTF8 -Wait
 Gazebo 出现后自动最大化。每次运行生成 observation.sdf，复用已安装的
 Gazebo 原生 GUI 插件；相机位置为 (3.8, -4.35, 6) 米，RPY 为
 (0, 0.80, 2.288) 弧度，倾斜观察 5×5 米场地。
-调整位置可编辑 `simulation/tools/prepare_observation_world.py`。
+调整位置可编辑 `src/edgeai_simulation/tools/prepare_observation_world.py`。
 
 截图流程：
 

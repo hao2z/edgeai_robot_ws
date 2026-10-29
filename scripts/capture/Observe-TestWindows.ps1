@@ -1,5 +1,6 @@
 ﻿param([Parameter(Mandatory=$true)][string]$SessionDirectory, [switch]$SimulationOnly)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../ros/windows-host-tools.ps1')
 $screenshots = Join-Path $SessionDirectory 'screenshots'
 [void][IO.Directory]::CreateDirectory($screenshots)
 $capture = Join-Path $PSScriptRoot 'Capture-SimulationWindow.ps1'
@@ -16,13 +17,19 @@ function Capture-Pair([string]$Phase) {
     foreach ($target in @('Gazebo','RViz')) {
         $path = Join-Path $screenshots "$Phase-$($target.ToLower()).png"
         $arguments = @('-NoProfile', '-ExecutionPolicy','Bypass','-File',$capture,'-Target',$target,'-OutputPath',$path)
-        if ($target -eq 'Gazebo') { $arguments += '-Maximize' }
+        if ($Phase -eq 'startup' -and $target -eq 'RViz') {
+            $arguments += '-Maximize'
+        } else {
+            $arguments += '-Background'
+        }
         $ErrorActionPreference = 'Continue'
-        $output = & powershell @arguments 2>&1
+        $output = & $windowsPowerShell @arguments 2>&1
         $code = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         $output | Out-File -LiteralPath $log -Encoding utf8 -Append
-        if ($code -eq 0) {
+        if ($code -eq 0 -and (($output | Out-String) -match '"Skipped":true')) {
+            Write-Event "截图已跳过：$Phase / $target（窗口不可用或未提供有效后台画面，保留用户窗口状态）"
+        } elseif ($code -eq 0) {
             Write-Event "截图已保存：$Phase / $target（图像有效性检查通过，画面内容仍需人工核对）"
         } else {
             Write-Event "截图失败：$Phase / $target，详见 screenshots/capture.log"
@@ -36,7 +43,7 @@ try {
         if (Test-Path (Join-Path $SessionDirectory 'exit-code.txt')) { return }
         if (-not $gazeboReady) {
             $ErrorActionPreference = 'Continue'
-            $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $capture -Target Gazebo -Maximize -OutputPath (Join-Path $screenshots 'gui-startup-gazebo.png') 2>&1
+            $output = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $capture -Target Gazebo -Maximize -OutputPath (Join-Path $screenshots 'gui-startup-gazebo.png') 2>&1
             $code = $LASTEXITCODE
             $ErrorActionPreference = 'Stop'
             if ($code -eq 0) { $gazeboReady = $true; $output | Out-File $log -Encoding utf8 -Append }

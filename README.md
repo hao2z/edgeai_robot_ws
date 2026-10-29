@@ -5,22 +5,47 @@ The canonical development workspace is this repository, on branch
 
 | Directory | Purpose |
 |---|---|
-| `src/` | ROS package, models, worlds, launch files and runtime configuration |
-| `simulation/` | Competition arena generation and visualization tools |
-| `algorithms/exploration/` | Pinned open-source explorer/Nav2 integration |
+| `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
+| `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
+| `src/edgeai_navigation/` | Nav2 configuration, control authority and generators |
+| `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
+| `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
 | `tests/` | Simulation and exploration checks, observation documentation |
 | `scripts/` | Build, environment, simulation, display and capture tools |
 | `docs/competition/` | Competition source documents |
-| `runtime/`, `tests/results/` | Local state and per-run logs/screenshots; excluded from Git |
+| `runtime/`, `tests/results/` | Local state, retired-script archives and per-run evidence; excluded from Git |
+
+当前可运行基线、常调参数位置、最近测试与已知限制见
+[AUTONOMOUS_EXPLORATION.md](AUTONOMOUS_EXPLORATION.md)。
 
 Windows/WSL entry points, run from this directory:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1 -SLAM
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Arena competition -Duration 300
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Controller dwb -Arena competition -Duration 300
 ```
 
-Test restart closes previous project processes and terminal tabs. Gazebo opens
+Alternatively, run directly in the Ubuntu-24.04 WSL terminal:
+
+```bash
+cd /mnt/d/KTH/Competition/edgeai_robot_ws
+bash scripts/simulation/start-autonomous-exploration.sh --controller dwb --arena competition --duration 300
+```
+
+Both entries default to the native apt Jazzy environment. No manual `source`
+or Pixi activation is required. Use Linux `--backend native` / Windows
+`-Backend native` to override a saved backend. Linux `--check` / Windows
+`-CheckOnly` validates the environment and installed project packages without
+starting or stopping a session. Duration is a wall-clock budget in seconds.
+
+This opens Gazebo/RViz, stops registered previous project sessions and streams
+events in the current terminal. Per-run logs and the final map are saved under
+`tests/results/runs/`; completed history is pruned after the test, with a visible
+cleanup message. Windows monitor windows, automatic maximization and screenshot
+automation are supplied by the PowerShell launcher. With the direct WSL entry,
+close any old project terminal tabs yourself; Ctrl+C stops the active test.
+
+With the PowerShell launcher, restart closes previous project processes and terminal tabs. Gazebo opens
 maximized with an inclined arena overview. Raw logs, readable key events and
 startup/progress/final screenshots are retained per run. See the
 [observation workflow](tests/docs/test-observation.md) and
@@ -46,27 +71,42 @@ separate integration stages.
 
 - Ubuntu 24.04 (x86-64).
 - Gazebo Harmonic.
-- ROS 2 Jazzy managed by **Pixi**, using the RoboStack Jazzy and conda-forge channels in `pixi.toml`.
-- Pixi installed and available on `PATH`; a graphical desktop for Gazebo and RViz.
+- ROS 2 Jazzy from the official Ubuntu apt repository for the native backend.
+- A graphical desktop for Gazebo and RViz; Windows launchers use WSLg by default.
 
-The manifest and lockfile define the workspace dependencies. Use the Pixi environment for ROS commands and builds; the instructions below do not require sourcing `/opt/ros/jazzy/setup.bash`.
+Environment activation is centralized in `scripts/ros/with-ros-env.sh`.
+Select native ROS with `EDGEAI_ROS_BACKEND=native`, or save `native` in the
+machine-local `runtime/ros-backend` file after migration validation. Native ROS
+uses `/opt/ros/jazzy/setup.bash`. The retained Pixi backend and its lockfiles
+remain available for regression comparisons; start native ROS outside a
+Pixi/Conda shell.
 
 ## Install and build
 
 ```bash
 git clone --branch codex/Junnan-dev https://github.com/hao2z/edgeai_robot_ws.git
 cd edgeai_robot_ws
-bash scripts/setup/install-workspace.sh
+sudo bash scripts/setup/install-native-ros.sh
+EDGEAI_ROS_BACKEND=native bash scripts/setup/build-workspace.sh
 ```
 
-Run these commands from the repository root. Build output is placed in
-`~/.cache/edgeai-robot-build`, overridable with `EDGEAI_BUILD_ROOT`. The build
+Run these commands from the repository root. Native build output is placed in
+`~/.cache/edgeai-native-build`, overridable with `EDGEAI_BUILD_ROOT`. The build
 uses this checkout's `src`; no separate editable WSL copy is required.
 Rebuild with `bash scripts/setup/build-workspace.sh` after package changes.
-For autonomous navigation, prepare the pinned environment and explorer first:
+During migration, the native frontier overlay is built separately from the
+pinned source cache with:
 
 ```bash
-bash scripts/setup/prepare-open-source.sh
+EDGEAI_ROS_BACKEND=native bash scripts/setup/build-frontier-runtime.sh
+```
+
+The legacy Pixi installation entry is `scripts/setup/install-workspace.sh`;
+its dependency manifests remain in the repository. For the Pixi navigation
+backend, prepare its pinned environment and explorer with:
+
+```bash
+EDGEAI_ROS_BACKEND=pixi bash scripts/setup/prepare-open-source.sh
 ```
 
 ## Start the simulation
@@ -77,7 +117,7 @@ From the repository root:
 bash start_sim.sh
 ```
 
-The script resolves the workspace relative to its own location, activates Pixi,
+The script resolves the workspace relative to its own location, activates the selected ROS backend,
 sources the build cache's `install/local_setup.bash`, launches
 `simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`.
 Press **Ctrl+C** in its terminal to stop the launched session.
@@ -92,8 +132,7 @@ In each additional terminal, enter the cloned repository and activate its enviro
 
 ```bash
 cd /path/to/edgeai_robot_ws
-pixi shell
-source "${EDGEAI_BUILD_ROOT:-$HOME/.cache/edgeai-robot-build}/install/local_setup.bash"
+EDGEAI_ROS_BACKEND=native bash scripts/ros/open-ros-terminal.sh
 ```
 
 Replace `/path/to/edgeai_robot_ws` with your clone location. The following commands assume this setup and a running simulation.
@@ -146,7 +185,7 @@ Keep the simulation running. In another prepared terminal at the repository root
 
 ```bash
 ros2 launch slam_toolbox online_async_launch.py \
-  slam_params_file:="$PWD/src/edgeai_robot_description/config/slam_toolbox.yaml" \
+  slam_params_file:="$PWD/src/edgeai_simulation/config/slam_toolbox.yaml" \
   use_sim_time:=true
 ```
 
@@ -166,7 +205,7 @@ ros2 run nav2_map_server map_saver_cli -f "$PWD/maps/my_map" \
 
 This writes `maps/my_map.yaml` and its associated map image. Choose a new basename for each map you want to preserve. These files are occupancy-map exports, not a serialized SLAM toolbox pose graph for resuming a mapping session.
 
-The package also contains `src/edgeai_robot_description/maps/edgeai_arena.yaml` and its map image. Saving `maps/my_map` does not overwrite the packaged map.
+The package also contains `src/edgeai_simulation/maps/edgeai_arena.yaml` and its map image. Saving `maps/my_map` does not overwrite the packaged map.
 
 ## Known limitation: odometry drift during collisions
 
@@ -176,14 +215,10 @@ The current `/odom` source is the Gazebo DiffDrive plugin. Treat this odometry a
 
 ## Repository layout
 
-```text
-pixi.toml / pixi.lock                 Pixi environment and dependency lock
-start_sim.sh                         Simulation + RViz entry point
-src/edgeai_robot_description/
-  launch/simulation_real.launch.py   Realistic simulation and bridges
-  urdf/edgeai_robot_real.urdf.xacro   Current robot model
-  worlds/empty.sdf                   Simulation world
-  rviz/realistic_robot.rviz           RViz configuration
-  config/slam_toolbox.yaml           Mapping parameters
-  maps/                             Packaged map resources
-```
+See [workspace layout](docs/workspace-layout.md) for package boundaries,
+build locations and the archive of retired scripts. The root `start_sim.sh`
+remains the simulation entry point. The former root `algorithms/` and
+`simulation/` directories have been consolidated into the packages under `src/`.
+# 原生 Jazzy 环境
+
+原生 apt 环境的准备、测试结果和回退方法见 [迁移记录](docs/native-ros-migration.md)。

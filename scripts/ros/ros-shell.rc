@@ -1,4 +1,11 @@
 source "$HOME/.bashrc"
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
+if [[ $EDGEAI_ROS_BACKEND == native ]]; then
+    if [[ -n ${CONDA_PREFIX:-} || -n ${PIXI_PROJECT_ROOT:-} ]]; then
+        echo 'Native ROS shell cannot use an activated Pixi/Conda environment.' >&2
+        exit 1
+    fi
+    source /opt/ros/jazzy/setup.bash
+fi
 source "$EDGEAI_BUILD_ROOT/install/local_setup.bash"
 cd "$PROJECT_ROOT"

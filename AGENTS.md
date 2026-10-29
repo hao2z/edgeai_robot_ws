@@ -7,7 +7,8 @@
   branch. `origin` is `https://github.com/hao2z/edgeai_robot_ws.git`; the original
   repository is retained as `upstream`.
 - Build with `bash scripts/setup/build-workspace.sh`. Generated files live in
-  `EDGEAI_BUILD_ROOT` (default `~/.cache/edgeai-robot-build`); environment
+  `EDGEAI_BUILD_ROOT` (native: `~/.cache/edgeai-native-build`, Pixi:
+  `~/.cache/edgeai-robot-build`); environment
   activation is centralized in `scripts/ros/workspace-env.sh`.
 - Keep shell scripts in LF. Resolve repository resources relative to the
   script, and convert Windows paths with `wslpath`; avoid machine-specific paths.

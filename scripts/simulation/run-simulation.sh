@@ -59,9 +59,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-python3 "$PROJECT_ROOT/simulation/tools/prepare_observation_world.py" \
-    "$PROJECT_ROOT/src/edgeai_robot_description/worlds/empty.sdf" "$session/observation.sdf" \
-    "$(dirname "$EDGEAI_ENV_MANIFEST")/.pixi/envs/default/share/gz/gz-sim8/gui/gui.config"
+python3 "$PROJECT_ROOT/src/edgeai_simulation/tools/prepare_observation_world.py" \
+    "$PROJECT_ROOT/src/edgeai_simulation/worlds/empty.sdf" "$session/observation.sdf" \
+    "$EDGEAI_GZ_GUI_CONFIG"
 setsid bash ./start_sim.sh "${@:2}" "world_file:=$session/observation.sdf" >"$session/sim.log" 2>&1 &
 SIM_GROUP=$!
 wait "$SIM_GROUP"

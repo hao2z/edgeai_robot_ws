@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.8)
+project(edgeai_simulation)
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY config launch worlds models maps tools scripts DESTINATION share/${PROJECT_NAME})
+ament_package()

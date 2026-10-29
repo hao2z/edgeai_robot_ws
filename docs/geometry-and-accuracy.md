@@ -20,7 +20,7 @@
 | 每侧 padding | 0.010 m，为开发余量，未证明覆盖实机误差 |
 | 含 padding 的包络 | 0.445 × 0.350 m |
 | 保守矩形原地旋转扫掠直径 | 约 0.734 m，围绕轮轴计算 |
-| SLAM、代价地图、Lattice 网格 | 统一 0.05 m |
+| SLAM、代价地图、Lattice 网格 | 默认统一 0.025 m；保留 0.05 m 对照配置 |
 
 原来忽略 8.75 cm 偏置时，理想无打滑的 90°/180°转向，车体中心相对
 错误的“保持原地”预测可偏离约 12.4/17.5 cm。修正坐标关系消除了这项
@@ -30,12 +30,34 @@
 2.5 cm，转斜后可能无法通过。它不是比赛门宽，也不能证明实机可靠通行。
 场地约 5×5 m 来自规则草案，最终尺寸、门宽等仍以官方技术参数为准。
 
+2026-10-29 仿真极限通行实验：默认矩形配置的全局/局部膨胀半径均为
+按含 padding 的矩形外接半径向上取整至一个栅格，当前为 0.375 m。
+cost_scaling_factor 为 5.0，软代价衰减更快；DWB 最小线速度
+设为 -0.08 m/s，与全局倒车扩展及速度平滑器一致。保留真实矩形、1 cm
+padding 和碰撞检查。这是仿真实验配置，未作为实机安全参数验证。
+
+按 competition_rooms.sdf 的碰撞盒边界计算，左上、右上、右下门洞净宽
+分别为 0.85、0.75、0.75 m。0.375 m 两侧膨胀在这些门洞中间分别留出
+0.10、0、0 m 不受该两侧墙体膨胀影响的条带；这不是车身可用宽度。
+宽 0.35 m 的含 padding 矩形正对门洞时，总几何余宽分别为 0.50、0.40、
+0.40 m。右侧两条横墙间通道只有 0.50 m，矩形正向总余宽 0.15 m，
+膨胀梯度会重叠；软代价重叠本身不代表碰撞。上述局部截面检查不证明
+完整转弯路线可执行，仍须观察门口朝向、车尾扫掠和实际导航结果。
+
+此前 0.30 m 小于轮轴参考点的矩形外接半径约 0.367 m，Smac 会记录
+computeCircumscribedCost / optimized non-circular collision checking 提示。
+上游 Jazzy 的 GridCollisionChecker 在预筛选阈值无效时仍执行矩形轮廓
+碰撞检查，主要代价是失去快速预筛选。日志中的此类 ERROR 应与无路径、
+控制器无有效轨迹、未取得进展和进程崩溃分别统计。当前改为 0.375 m
+满足该预筛选的半径要求；是否解决实际停滞仍须新测试验证。
+
 ## 缩小曲线原语，不缩小真实碰撞包络
 
 旧控制集使用上游 0.5 m 曲线半径示例，包含原地转向；这个数不是差速底盘
 不能原地转弯的限制。本次用未修改的 Nav2 原语生成器和固定上游提交，
-重新生成 0.20 m 曲线半径、5 cm 网格、16 朝向的差速控制集，保留原地转向。
-生成参数与脚本分别是 `algorithms/exploration/lattice-r020.json` 和
+默认探索重新生成 0.20 m 曲线半径、2.5 cm 网格、16 朝向的差速控制集，保留原地转向；
+5 cm lattice 与配置保留为性能对照和回退选项。
+生成参数与脚本分别是 `src/edgeai_navigation/config/lattice-generator.json` 和
 `scripts/setup/generate-lattice.sh`，默认 rectangle profile 使用新文件。
 
 运动学上 R=v/|ω|。角速度上限 0.65 rad/s 时，R=0.20 m 的弧线速度须
@@ -52,7 +74,7 @@
 
 | 层次 | 当前设置与限制 |
 |---|---|
-| 地图离散精度 | 5 cm 单元。理想栅格中心量化每轴最多半格、二维约3.54 cm；这不是SLAM总误差界 |
+| 地图离散精度 | 默认2.5 cm单元。理想栅格中心量化每轴最多半格、二维约1.77 cm；这不是SLAM总误差界 |
 | 机器人定位精度 | 需要独立真值统计位置和朝向误差；当前没有已验证的厘米级承诺 |
 | 探索到点 | xy 容差由25 cm改为15 cm，朝向0.25 rad；这是成功判据，不是测量精度 |
 | 救援到点候选 | 独立配置5 cm容差，StoppedGoalChecker要求低速停车；尚未接入Task 2执行链 |
@@ -96,3 +118,26 @@
 [Gazebo DiffDrive实现](https://github.com/gazebosim/gz-sim/blob/gz-sim8/src/systems/diff_drive/DiffDrive.cc)、
 [Nav2原语生成器](https://github.com/ros-navigation/navigation2/tree/d5d768b7b38a05e7cfd2b6c693b786b402161bed/nav2_smac_planner/lattice_primitives)、
 [Nav2目标容差说明](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/controller_server/controller_server_plugins/simple_goal_checker/)。
+
+2026-10-29 更新：NavFn 矩形测试配置的全局与局部膨胀半径设为 0.30 m，
+衰减系数设为 3.0；上文 0.375 m 为旧 Lattice 配置。最窄直通走廊为 0.50 m，
+0.75 m 为最小门洞。膨胀代价重叠不等于不可通行，需结合实际代价和矩形碰撞检查验证。
+
+2026-10-29：默认 SLAM 输出和矩形 DWB/MPPI 全局、局部代价地图统一恢复 0.05 m。
+前沿最小长度阈值恢复 5 格，预处理膨胀核半径恢复 1 格，保持各自物理尺度。
+SLAM 扫描匹配的搜索分辨率、机器人尺寸、障碍物膨胀半径均未改变。
+
+2026-10-29 MPPI 圆形对照：默认 MPPI 入口仍使用历史文件名
+nav2_exploration_rectangle_mppi.yaml，但全局/局部 costmap 已移除 footprint，
+改为 robot_radius=0.37 m、footprint_padding=0。此半径包络轮轴参考点下
+含 padding 的原矩形。CostCritic.consider_footprint=false；Collision Monitor
+继续订阅 costmap 发布的轮廓，现在接收到的是圆的多边形近似。
+为覆盖圆半径，膨胀半径提升至 0.40 m，衰减系数 3.0、5 cm 栅格不变。
+DWB 仍使用矩形与 0.30 m 膨胀。0.74 m 圆直径无法通过 0.50 m 走廊，
+0.75 m 门洞的连续几何余量仅 0.01 m，栅格化后不保证通行。
+本次用于模型一致性的对照，不代表窄通道能力提升。
+
+
+## 2026-10-29 过时配置清理
+
+当前全局规划器为 NavFn。历史 Smac Lattice 基元、生成环境、生成脚本及 rectangle_5cm 比较配置已删除；上文相关描述仅为历史记录。主探索配置已经使用 5 cm 栅格。baseline、safe 和 conservative 启动入口仍有引用，保留对应配置；救援配置保留用于 Task 2 接入。

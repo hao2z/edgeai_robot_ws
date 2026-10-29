@@ -16,8 +16,8 @@ bash start_sim.sh multi_robot:=true robot_count:=2 slam:=true
 Do not run both simultaneously. Direct ROS launch (without RViz by default):
 
 ```bash
-ros2 launch edgeai_robot_description multi_robot.launch.py robot_count:=4
-ros2 launch edgeai_robot_description multi_robot.launch.py slam:=true rviz:=true
+ros2 launch edgeai_simulation multi_robot.launch.py robot_count:=4
+ros2 launch edgeai_simulation multi_robot.launch.py slam:=true rviz:=true
 ```
 
 `gui:=false` runs only the Gazebo server. `robots_file:=/absolute/path.yaml`,
@@ -119,7 +119,7 @@ Changing only poses takes effect at the next launch. After changing marker IDs,
 dictionary or sizes, regenerate source assets and rebuild:
 
 ```bash
-pixi run python src/edgeai_robot_description/scripts/generate_targets.py \
+pixi run python src/edgeai_simulation/scripts/generate_targets.py \
   --package-dir src/edgeai_robot_description
 pixi run colcon build --symlink-install
 ```

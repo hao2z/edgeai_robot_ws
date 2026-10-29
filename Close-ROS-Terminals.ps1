@@ -1,11 +1,12 @@
 ﻿param([int]$KeepProcessId = $PID, [string]$Distro = 'Ubuntu-24.04', [switch]$ProcessesOnly)
 $ErrorActionPreference = 'Stop'
-$linuxRoot = (wsl -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
+. (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
+$linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 # Finish scoped Linux cleanup before terminating the WSL client windows.
-wsl -d $Distro -- python3 $linuxRoot/scripts/simulation/stop-test-sessions.py
+& $wslExe -d $Distro -- python3 $linuxRoot/scripts/simulation/stop-test-sessions.py
 if ($LASTEXITCODE -ne 0) { throw 'Previous exploration session could not be stopped safely.' }
-wsl -d $Distro -- bash $linuxRoot/scripts/simulation/stop-simulation.sh
+& $wslExe -d $Distro -- bash $linuxRoot/scripts/simulation/stop-simulation.sh
 if ($LASTEXITCODE -ne 0) { throw 'Previous simulation could not be stopped.' }
 $processes = @(Get-CimInstance Win32_Process)
 $scriptNames = @('Open-ROS-Terminal.ps1', 'Open-ROS-Monitor.ps1',
