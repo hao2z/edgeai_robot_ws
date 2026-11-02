@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import os
+import sys
 import subprocess
 
 
-def spawn_marker(name: str, model_path: str, x: float, y: float, z: float, yaw: float):
+def spawn_marker(name: str, model_path: str, x: float, y: float, z: float, yaw: float, world_name: str = 'midterm_arena'):
     cmd = [
         'ros2', 'run', 'ros_gz_sim', 'create',
-        '-world', 'empty',
+        '-world', world_name,
         '-file', model_path,
         '-name', name,
         '-x', str(x),
@@ -14,26 +15,24 @@ def spawn_marker(name: str, model_path: str, x: float, y: float, z: float, yaw: 
         '-z', str(z),
         '-Y', str(yaw)
     ]
-    print(f"Spawning {name} at ({x}, {y}, {z}) yaw={yaw}...")
+    print(f"Spawning {name} at ({x}, {y}, {z}) yaw={yaw} in world '{world_name}'...")
     subprocess.run(cmd)
 
 
 def main():
+    world_name = sys.argv[1] if len(sys.argv) > 1 else 'midterm_arena'
     models_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'models'))
 
-    # Place 3 markers around the outside of the 1m x 1m square patrol loop
-    # Patrol corners: (-1.5, -1.5) -> (-0.5, -1.5) -> (-0.5, -0.5) -> (-1.5, -0.5)
+    # Official Midterm Specification (Section 3 & Figure 1):
+    # S1 (Single Rescue Target): Center (1.0, 4.1), ID 1, facing South (-Y, yaw = -pi/2)
+    # C1 (Cooperative Rescue Target): Center (4.1, 1.0), ID 2, facing North (+Y, yaw = +pi/2)
     markers = [
-        # Side 1 (+X): Marker 0 ahead of (-0.5, -1.5), facing -X (yaw = pi)
-        ('target_0', os.path.join(models_dir, 'aruco_marker_0', 'model.sdf'), 0.1, -1.5, 0.25, 3.14159),
-        # Side 2 (+Y): Marker 1 ahead of (-0.5, -0.5), facing -Y (yaw = -pi/2)
-        ('target_1', os.path.join(models_dir, 'aruco_marker_1', 'model.sdf'), -0.5, 0.1, 0.25, -1.5708),
-        # Side 3 (-X): Marker 2 ahead of (-1.5, -0.5), facing +X (yaw = 0)
-        ('target_2', os.path.join(models_dir, 'aruco_marker_2', 'model.sdf'), -2.1, -0.5, 0.25, 0.0),
+        ('target_S1', os.path.join(models_dir, 'aruco_marker_1', 'model.sdf'), 1.0, 4.1, 0.0, -1.570796),
+        ('target_C1', os.path.join(models_dir, 'aruco_marker_2', 'model.sdf'), 4.1, 1.0, 0.0, 1.570796),
     ]
 
     for name, sdf_path, x, y, z, yaw in markers:
-        spawn_marker(name, sdf_path, x, y, z, yaw)
+        spawn_marker(name, sdf_path, x, y, z, yaw, world_name)
 
 
 if __name__ == '__main__':

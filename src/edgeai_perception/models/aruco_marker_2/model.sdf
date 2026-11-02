@@ -3,10 +3,60 @@
   <model name="aruco_marker_2">
     <static>true</static>
     <link name="link">
-      <visual name="visual">
+      <!-- Base on floor (radius 0.12m, thickness 0.02m) -->
+      <visual name="base_visual">
+        <pose>0 0 0.01 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.12</radius>
+            <length>0.02</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.2 0.2 0.2 1</ambient>
+          <diffuse>0.3 0.3 0.3 1</diffuse>
+        </material>
+      </visual>
+      <collision name="base_collision">
+        <pose>0 0 0.01 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.12</radius>
+            <length>0.02</length>
+          </cylinder>
+        </geometry>
+      </collision>
+
+      <!-- Vertical stand pole (center at z=0.18m, height 0.34m) -->
+      <visual name="pole_visual">
+        <pose>0 0 0.18 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.015</radius>
+            <length>0.34</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.5 0.5 0.5 1</ambient>
+          <diffuse>0.6 0.6 0.6 1</diffuse>
+        </material>
+      </visual>
+      <collision name="pole_collision">
+        <pose>0 0 0.18 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.015</radius>
+            <length>0.34</length>
+          </cylinder>
+        </geometry>
+      </collision>
+
+      <!-- Marker backing board centered at z=0.35m (0.01m thick, 0.20m x 0.20m) -->
+      <visual name="marker_visual">
+        <pose>0 0 0.35 0 0 0</pose>
         <geometry>
           <box>
-            <size>0.02 0.20 0.20</size>
+            <size>0.01 0.20 0.20</size>
           </box>
         </geometry>
         <material>
@@ -19,10 +69,11 @@
           </pbr>
         </material>
       </visual>
-      <collision name="collision">
+      <collision name="marker_collision">
+        <pose>0 0 0.35 0 0 0</pose>
         <geometry>
           <box>
-            <size>0.02 0.20 0.20</size>
+            <size>0.01 0.20 0.20</size>
           </box>
         </geometry>
       </collision>

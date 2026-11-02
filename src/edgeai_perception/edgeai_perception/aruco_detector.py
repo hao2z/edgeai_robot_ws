@@ -58,8 +58,8 @@ class ArucoDetectorNode(Node):
 
         self.bridge = CvBridge()
 
-        # Marker physical size in meters (0.20 m = 20 cm)
-        self.marker_size = 0.20
+        # Marker physical size in meters (0.16 m per official Midterm specification)
+        self.marker_size = 0.16
         s = self.marker_size / 2.0
         self.obj_points = np.array([
             [-s,  s, 0.0],
@@ -80,8 +80,9 @@ class ArucoDetectorNode(Node):
         # Persistent Target Map: {marker_id: {'id': int, 'type': str, 'x': float, 'y': float, 'yaw': float, 'count': int}}
         self.targets = {}
 
-        # Target classification rules (configurable)
-        # ID 0, 1 -> Normal Target; ID 2 -> Cooperative Target
+        # Target classification rules per Midterm specification:
+        # ID 1 -> Single Rescue Target S1 ('normal')
+        # ID 2 -> Cooperative Rescue Target C1 ('coop')
         self.coop_target_ids = {2}
 
         # TF2 Buffer and Listener
