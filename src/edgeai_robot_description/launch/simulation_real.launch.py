@@ -1,7 +1,8 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
@@ -19,6 +20,7 @@ def generate_launch_description():
 
     pkg_share = get_package_share_directory(package_name)
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
+    pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
 
     # Launch arguments
     world_arg = DeclareLaunchArgument(
@@ -43,8 +45,13 @@ def generate_launch_description():
     )
     spawn_yaw_arg = DeclareLaunchArgument(
         'spawn_yaw',
-        default_value='1.570796',
-        description='Initial robot Yaw orientation (facing North into arena)'
+        default_value='0.0',
+        description='Initial robot Yaw orientation (0.0 aligns odom/map axes with Gazebo world)'
+    )
+    use_slam_arg = DeclareLaunchArgument(
+        'use_slam',
+        default_value='true',
+        description='Automatically launch SLAM Toolbox online_async_launch.py'
     )
 
     # New realistic robot model
@@ -90,7 +97,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
-        parameters=[robot_description]
+        parameters=[robot_description, {'use_sim_time': True}]
     )
 
     # Spawn the new robot
@@ -141,6 +148,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='camera_sensor_tf',
         output='screen',
+        parameters=[{'use_sim_time': True}],
         arguments=[
             '--x', '0',
             '--y', '0',
@@ -154,15 +162,39 @@ def generate_launch_description():
         ]
     )
 
+    # SLAM Toolbox (delayed by 3.0s so /clock and /tf are active before activation)
+    slam_params_file = os.path.join(pkg_share, 'config', 'slam_toolbox.yaml')
+    slam_toolbox_launch = TimerAction(
+        period=3.0,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(
+                        pkg_slam_toolbox,
+                        'launch',
+                        'online_async_launch.py'
+                    )
+                ),
+                launch_arguments={
+                    'slam_params_file': slam_params_file,
+                    'use_sim_time': 'true',
+                }.items(),
+                condition=IfCondition(LaunchConfiguration('use_slam'))
+            )
+        ]
+    )
+
     return LaunchDescription([
         world_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,
         spawn_yaw_arg,
+        use_slam_arg,
         gazebo,
         robot_state_publisher,
         spawn_robot,
         bridge,
         camera_sensor_tf,
+        slam_toolbox_launch,
     ])
