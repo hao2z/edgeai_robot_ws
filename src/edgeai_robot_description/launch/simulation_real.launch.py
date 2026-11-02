@@ -1,8 +1,9 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
 
@@ -19,6 +20,33 @@ def generate_launch_description():
     pkg_share = get_package_share_directory(package_name)
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
+    # Launch arguments
+    world_arg = DeclareLaunchArgument(
+        'world',
+        default_value='midterm_arena.sdf',
+        description='World file name under worlds/'
+    )
+    spawn_x_arg = DeclareLaunchArgument(
+        'spawn_x',
+        default_value='0.7',
+        description='Initial robot X position'
+    )
+    spawn_y_arg = DeclareLaunchArgument(
+        'spawn_y',
+        default_value='0.5',
+        description='Initial robot Y position'
+    )
+    spawn_z_arg = DeclareLaunchArgument(
+        'spawn_z',
+        default_value='0.01',
+        description='Initial robot Z position'
+    )
+    spawn_yaw_arg = DeclareLaunchArgument(
+        'spawn_yaw',
+        default_value='1.570796',
+        description='Initial robot Yaw orientation (facing North into arena)'
+    )
+
     # New realistic robot model
     xacro_file = os.path.join(
         pkg_share,
@@ -26,12 +54,11 @@ def generate_launch_description():
         'edgeai_robot_real.urdf.xacro'
     )
 
-    # Reuse the existing Gazebo world
-    world_file = os.path.join(
+    world_path = PathJoinSubstitution([
         pkg_share,
         'worlds',
-        'empty.sdf'
-    )
+        LaunchConfiguration('world')
+    ])
 
     # Convert Xacro to robot_description
     robot_description_config = xacro.process_file(xacro_file)
@@ -50,7 +77,10 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'gz_args': f'-r {world_file}'
+            'gz_args': [
+                '-r ',
+                world_path
+            ]
         }.items()
     )
 
@@ -70,9 +100,10 @@ def generate_launch_description():
         arguments=[
             '-name', 'edgeai_robot_real',
             '-topic', 'robot_description',
-            '-x', '-1.5',
-            '-y', '-1.5',
-            '-z', '0.01'
+            '-x', LaunchConfiguration('spawn_x'),
+            '-y', LaunchConfiguration('spawn_y'),
+            '-z', LaunchConfiguration('spawn_z'),
+            '-Y', LaunchConfiguration('spawn_yaw')
         ],
         output='screen'
     )
@@ -124,6 +155,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        world_arg,
+        spawn_x_arg,
+        spawn_y_arg,
+        spawn_z_arg,
+        spawn_yaw_arg,
         gazebo,
         robot_state_publisher,
         spawn_robot,
