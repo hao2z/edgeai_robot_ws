@@ -1,0 +1,88 @@
+KTH EdgeAI Robotics Challenge
+Midterm Check — Task Description
+Proposed date: November 12, 2026 (morning)
+1. Purpose and Schedule
+The Midterm Check assesses the fundamental functions implemented by each team in simulation, focusing on (1) autonomous exploration, SLAM mapping and ArUco target detection, and (2) autonomous navigation, single-robot rescue and two-robot cooperative rescue using a map prepared in advance by the team. The two parts are conducted independently: Part 2 does not require the map created in Part 1. This is a development progress assessment, not the final competition.
+Activity
+Suggested Duration
+Assessment Focus
+Part 1: Autonomous Exploration, SLAM Mapping & Target Detection
+~6 min
+Explore autonomously, map in real time, detect S1 and C1
+Part 2: Autonomous Rescue
+~7 min
+Complete both rescue types autonomously using a team-prepared map and the specified target coordinates
+Result Verification
+2 min
+Review the map, detection evidence, rescue status, and timing records
+Total
+15 min/team
+13 min combined task time + 2 min verification; software startup excluded
+2. Simulation Arena and Reference Map
+The arena is approximately 5 m × 5 m. All teams shall construct their own Gazebo arena consistent with the main features shown below, including the perimeter walls, internal walls, obstacles, lower-left starting area, and two targets. Coordinates in the schematic are references for arena construction and inspection. Robots shall begin near the start positions illustrated in Figure 1, within the designated starting area; exact starting coordinates and headings are not prescribed. Start poses must be collision-free. Teams shall use robot models and sensors appropriate for the required demonstrations.
+Figure 1. Midterm Check arena schematic (top view; coordinates in meters)
+3. Key Arena Parameters
+Element
+Reference Position / Specification
+Arena boundary
+5.0 m × 5.0 m; wall thickness approx. 0.1 m
+Starting area
+x ∈ [0, 1.4], y ∈ [0, 1.0] (lower-left corner)
+S1 — Single Rescue Target
+Center (1.0, 4.1); rescue radius 0.5 m
+C1 — Cooperative Rescue Target
+Center (4.1, 1.0); rescue radius 0.7 m
+W1 / W1b
+(0, 3.1)–(2.2, 3.1) / (2.2, 3.1)–(2.2, 3.6)
+W2
+(3.4, 0)–(3.4, 2.8); connected to the bottom boundary wall
+O2
+Center (2.2, 2.0); rectangular footprint 0.6 m × 1.0 m
+O3
+Center (4.4, 3.6); rectangular footprint 0.8 m × 0.6 m
+Each target shall be represented by a vertically mounted ArUco marker on a stationary freestanding stand. Use the OpenCV ArUco dictionary DICT_4X4_50 with marker ID 1 for S1 and ID 2 for C1. The recommended printed marker side length is 0.16 m (excluding any additional white margin), with its center approximately 0.35 m above the floor. The printed pattern should be planar, clearly visible, and surrounded by a white margin. The marker face shall point toward an accessible approach direction (S1 toward the lower/open arena; C1 toward the upper/open approach from the north). Teams may adjust the stand design to match their robot camera field of view, while preserving these nominal marker parameters, target centers, and safe rescue access. The target reference position is the ground-plane point beneath the marker stand.
+4. Part 1: Autonomous Exploration, SLAM Mapping and Target Detection (around 6 minutes)
+4.1 Task Requirements
+At least one robot shall start from the designated starting area and autonomously explore the environment while performing SLAM mapping.
+Teams shall not load a previously generated occupancy grid map or retain accumulated mapping data, exploration state, or target detection results from before the run. Necessary software may be launched in advance, but mapping and exploration data must be cleared before the demonstration begins.
+Using onboard sensors, the robot shall explore autonomously and construct a 2D occupancy grid map showing recognizable perimeter walls, internal walls, and obstacles. Automatically generated exploration goals and implemented autonomous exploration algorithms are allowed; prerecorded motion trajectories and manually selecting the next exploration goal in real time are not allowed.
+During autonomous exploration and mapping, the onboard camera shall detect both ArUco markers, S1 and C1. Record each successful detection, including the marker ID, target type, estimated relative position, and detection time.
+Demonstrate the IDs and target types of both markers, together with relative positions estimated from visual measurements (expressed in the camera or robot reference frame).
+Display the resulting map in RViz2 and save it. Provide visual detection evidence for S1 and C1 through images showing detection overlays, ROS 2 topics, or logs.
+4.2 Timing Rules
+The suggested duration for Part 1 is approximately 6 minutes, but no separate Part 1 time limit applies. The shared 13-minute task timer starts when autonomous exploration begins and continues through the switch to Part 2. Before the timer starts, the robot must be within the designated starting area, and no mapping or exploration data from an earlier run may remain. Map and detection evidence shall be saved or displayed for verification. Startup of Gazebo, RViz2 and required ROS 2 nodes may be completed before the timer starts.
+5. Part 2: Autonomous Rescue (around 7 minutes)
+This part involves two robots. Teams may use a pre-built occupancy grid map prepared in advance, rather than the map generated during the SLAM demonstration. The predefined coordinates of S1 and C1 may be used directly, and both robots shall start near their illustrated start positions within the lower-left starting area (Figure 1). Remapping and repeated visual target detection are not required. The emphasis is on autonomous navigation, task-dependent execution logic and multi-robot cooperation. Manual teleoperation is prohibited.
+Item
+Single Rescue (S1)
+Cooperative Rescue (C1)
+Robots required
+At least 1
+2
+Distance condition
+Robot center within 0.5 m of target
+Both robot centers within 0.7 m of target
+Holding duration
+10 consecutive seconds
+Both robots satisfy the distance condition simultaneously for 10 consecutive seconds
+Completion
+Distance and duration conditions satisfied
+Both robots satisfy the simultaneous distance and duration conditions
+Distances are measured in the horizontal plane from each robot’s base_footprint reference position to the predefined target center. If any required robot leaves the specified radius during the holding period, the corresponding continuous timer resets. The 10-second duration is measured in simulation time. For C1, the robots need not arrive together, but both must satisfy the distance condition simultaneously for 10 continuous seconds. Collisions with other robots, walls, obstacles, and marker stands must be avoided.
+The supplied target coordinates may be used in task planning, but manual teleoperation or playback of prerecorded motion trajectories may not replace autonomous execution. The system shall assign one or two robots to a rescue according to the target type.
+6. Result Verification (2 minutes)
+6.1 Verification Items
+Present the map generated and saved in Part 1, showing recognizable main arena features.
+Present ArUco detection evidence for both S1 and C1, including marker IDs and estimated positions.
+Present the S1 rescue completion status and a record verifying 10 continuous seconds within the prescribed radius.
+Present a record verifying that both robots simultaneously remained within the prescribed C1 radius for 10 continuous seconds.
+Gazebo, RViz2, ROS 2 topics, terminal logs, or simple visualizations may be used. A dedicated scoring interface is not required.
+7. Additional Rules and Implementation Notes
+For teams that cannot complete all tasks, completed components will still be recorded; tasks not completed within the time limit will not count as completed.
+The shared task timer continues during the transition to Part 2 and includes mission initialization, navigation and both holding periods. Simulation time is used to assess each 10-second hold. Verification should show robot-to-target distance histories, task completion flags and collision status.
+The suggested durations for Part 1 (6 minutes) and Part 2 (7 minutes) are provided as guidelines rather than strict individual time limits. Teams may flexibly allocate their time between the two tasks, provided that both demonstrations are completed within a combined time limit of 13 minutes. An additional 2 minutes are reserved for result verification; the total scheduled time is 15 minutes per team. Time spent switching between tasks is included in the 13 minutes; software startup before the demonstration is excluded.
+Both robots in Part 2 shall start within the lower-left starting area, near the two positions depicted in Figure 1; exact coordinates and headings are not required, but initial poses must not collide with one another or the walls. Teams may directly use their pre-built map and the specified S1/C1 coordinates without repeating visual recognition, but robot motion, task assignment and execution-state transitions must be autonomous.
+In Part 1, the robot system must autonomously choose its next motion or exploration goal; methods such as frontier-based exploration are permitted. Real-time operator control and prerecorded motion-command playback are prohibited.
+LLM inference and full end-to-end mission integration are not mandatory at the Midterm Check. Part 1 assesses autonomous exploration, mapping, and visual recognition; Part 2 independently assesses autonomous navigation and two-robot cooperation. The final competition may require a fully integrated explore–detect–plan–rescue pipeline.
+Each team’s arena shall follow Figure 1 and the specifications in Section 3. ArUco configuration and mounting recommendations are defined in Section 3. Teams are responsible for creating their own Gazebo world and, for Part 2, preparing their own occupancy grid map in advance. The organizers will not provide a ready-to-use Gazebo world or occupancy grid map.
+Teams should check before the demonstration that two robots can safely occupy the C1 rescue area simultaneously and that both vertically mounted ArUco markers can be observed from accessible robot positions. Any modifications to the main arena geometry or target coordinates must be agreed with the organizers in advance.
