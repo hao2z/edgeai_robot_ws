@@ -28,14 +28,18 @@ ros2 run edgeai_perception aruco_detector
   - `/target_markers` (`visualization_msgs/msg/MarkerArray`): 3D pins, labels, and rescue radius rings (`0.5 m` / `0.7 m`) in RViz.
 - Automatically saves Part 1 verification snapshots and JSON logs to `evidence/`.
 
-### Terminal 3: Run Autonomous Full-Arena Explorer (or 2-Circle Square Patrol)
+### Terminal 3: Run Autonomous Full-Arena Explorer or Single Target Rescue
 ```bash
 pixi shell
 source install/setup.bash
+# 1) Full-arena SLAM exploration & target mapping:
 ros2 run edgeai_perception arena_explorer
+
+# 2) Single-target (S1) rescue (Start Area -> S1 hold 10s -> Start Area):
+ros2 run edgeai_perception single_rescue
 ```
-- Autonomously navigates through all 5 zones of the `5.0 m × 5.0 m` Midterm Arena using SLAM-corrected TF (`map -> base_footprint`), `/odom`, and 360° LiDAR (`/scan`) obstacle avoidance.
-- Renders the complete 2D SLAM map in RViz, visually inspects both `S1` and `C1`, and automatically saves the completed map to `maps/midterm_slam_map.yaml` and `maps/midterm_slam_map.pgm`.
+- `arena_explorer`: Autonomously navigates through all 5 zones of the `5.0 m × 5.0 m` Midterm Arena using SLAM-corrected TF (`map -> base_footprint`), `/odom`, and 360° LiDAR (`/scan`) obstacle avoidance; renders the complete 2D SLAM map in RViz, visually inspects both `S1` and `C1`, and saves `maps/midterm_slam_map.yaml` and `maps/midterm_slam_map.pgm`.
+- `single_rescue`: Navigates from the robot's current pose to the Start Area `(0.70, 0.50)`, drives to Single Target `S1` `(1.0, 4.1)`, holds inside the `0.5 m` rescue radius for **10 consecutive seconds** of simulation time (saving `evidence/S1_rescue_verification.json`), and returns to the Start Area.
 - *(Optional simple patrol)*: `ros2 run edgeai_perception square_patrol`
 
 ### Terminal 4: Inspect Live Detected Target List

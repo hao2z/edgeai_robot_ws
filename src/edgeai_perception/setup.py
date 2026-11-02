@@ -27,6 +27,7 @@ setup(
             'aruco_detector = edgeai_perception.aruco_detector:main',
             'square_patrol = edgeai_perception.square_patrol:main',
             'arena_explorer = edgeai_perception.arena_explorer:main',
+            'single_rescue = edgeai_perception.single_rescue:main',
         ],
     },
 )

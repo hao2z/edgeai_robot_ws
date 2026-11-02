@@ -9,7 +9,10 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Point, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import LaserScan
+from slam_toolbox.srv import Pause
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
@@ -98,9 +101,9 @@ class ArenaExplorerNode(Node):
             (2.92, 4.18, 0.0, 0.6, 'Zone 4 Exit: Back to North Hub'),
             # Zone 5: North-East & South-East Room (around O3 to Cooperative Target C1 at (4.1, 1.0))
             (3.45, 4.35, -45.0, 1.2, 'Zone 5: North-East Wall & O3 Top'),
-            (2.92, 3.35, -22.0, 0.6, 'Zone 5: Align for W2/O3 Gap'),
-            (3.72, 3.02, -52.0, 0.6, 'Zone 5: Passing W2/O3 Corridor'),
-            (4.12, 2.50, -90.0, 1.2, 'Zone 5: C1 Outer Viewpoint'),
+            (3.35, 3.46, -48.0, 0.5, 'Zone 5: Align for W2/O3 Centerline'),
+            (3.725, 3.05, -48.0, 0.5, 'Zone 5: Passing W2/O3 Centerline'),
+            (4.08, 2.62, -90.0, 1.0, 'Zone 5: C1 Outer Viewpoint'),
             (4.10, 2.00, -90.0, 2.5, 'Zone 5: C1 Close Visual Inspection'),
         ]
 
@@ -149,6 +152,12 @@ class ArenaExplorerNode(Node):
         # Publishers & Subscribers
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/exploration_markers', 10)
+        self.slam_get_param_client = self.create_client(
+            GetParameters, '/slam_toolbox/get_parameters'
+        )
+        self.slam_pause_client = self.create_client(
+            Pause, '/slam_toolbox/pause_new_measurements'
+        )
 
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self.odom_callback, 10
@@ -166,9 +175,34 @@ class ArenaExplorerNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)
         self.viz_timer = self.create_timer(0.5, self.publish_markers)
 
+        # Ensure SLAM Toolbox is unpaused when exploration starts
+        self.set_slam_paused(False)
+
         self.get_logger().info(
             'Autonomous Arena Explorer initialized! Waiting for /odom and /scan to begin SLAM exploration...'
         )
+
+    def set_slam_paused(self, target_paused: bool):
+        """Ensure SLAM Toolbox paused_new_measurements matches target_paused."""
+        if not self.slam_get_param_client.service_is_ready():
+            return
+        req = GetParameters.Request()
+        req.names = ['paused_new_measurements']
+        future = self.slam_get_param_client.call_async(req)
+
+        def _on_param(fut):
+            try:
+                res = fut.result()
+                if res.values and res.values[0].type == ParameterType.PARAMETER_BOOL:
+                    curr_paused = res.values[0].bool_value
+                    if curr_paused != target_paused and self.slam_pause_client.service_is_ready():
+                        self.slam_pause_client.call_async(Pause.Request())
+                        state_str = 'PAUSED (map locked)' if target_paused else 'ACTIVE (mapping)'
+                        self.get_logger().info(f'SLAM Toolbox new measurements set to: {state_str}')
+            except Exception:
+                pass
+
+        future.add_done_callback(_on_param)
 
     def odom_callback(self, msg: Odometry):
         # Always keep /odom as fallback if TF map->base_footprint is not yet ready
@@ -215,6 +249,9 @@ class ArenaExplorerNode(Node):
         self.front_right_min = float(np.min(ranges[right_mask])) if np.any(right_mask) else 10.0
 
     def map_callback(self, msg: OccupancyGrid):
+        # Once exploration is completed, do not overwrite the saved map
+        if self.state == 'COMPLETED':
+            return
         self.latest_map = msg
         data = np.array(msg.data, dtype=np.int16)
         known_cells = int(np.sum(data != -1))
@@ -394,11 +431,13 @@ class ArenaExplorerNode(Node):
                     self.state = 'COMPLETED'
                     if self.latest_map is not None:
                         self.save_occupancy_grid(self.latest_map)
+                    # Lock SLAM Toolbox map so subsequent rescue runs do not overwrite the map
+                    self.set_slam_paused(True)
                     self.get_logger().info(
                         f'=== AUTONOMOUS EXPLORATION & MAPPING COMPLETED! ===\n'
                         f'  Total Mapped Area : {self.mapped_area_m2:.2f} m^2\n'
                         f'  Discovered Targets: {json.dumps(list(self.discovered_targets.values()))}\n'
-                        f'  Saved SLAM Map    : {self.map_save_dir}/midterm_slam_map.yaml'
+                        f'  Saved SLAM Map    : {self.map_save_dir}/midterm_slam_map.yaml (Locked for Rescue)'
                     )
                 else:
                     next_wp = self.waypoints[self.wp_index]
