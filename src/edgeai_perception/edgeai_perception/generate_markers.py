@@ -72,13 +72,13 @@ def generate_marker_model(marker_id: int, base_dir: str, side_pixels: int = 400,
         </geometry>
       </collision>
 
-      <!-- Vertical stand pole (center at z=0.18m, height 0.34m) -->
+      <!-- Vertical stand pole (bottom z=0.02m to bottom of marker board z=0.18m) -->
       <visual name="pole_visual">
-        <pose>0 0 0.18 0 0 0</pose>
+        <pose>0 0 0.10 0 0 0</pose>
         <geometry>
           <cylinder>
             <radius>0.015</radius>
-            <length>0.34</length>
+            <length>0.16</length>
           </cylinder>
         </geometry>
         <material>
@@ -87,18 +87,18 @@ def generate_marker_model(marker_id: int, base_dir: str, side_pixels: int = 400,
         </material>
       </visual>
       <collision name="pole_collision">
-        <pose>0 0 0.18 0 0 0</pose>
+        <pose>0 0 0.10 0 0 0</pose>
         <geometry>
           <cylinder>
             <radius>0.015</radius>
-            <length>0.34</length>
+            <length>0.16</length>
           </cylinder>
         </geometry>
       </collision>
 
-      <!-- Marker backing board centered at z=0.35m (0.01m thick, 0.20m x 0.20m) -->
+      <!-- Marker backing board centered at z=0.28m (0.01m thick, 0.20m x 0.20m) -->
       <visual name="marker_visual">
-        <pose>0 0 0.35 0 0 0</pose>
+        <pose>0 0 0.28 0 0 0</pose>
         <geometry>
           <box>
             <size>0.01 0.20 0.20</size>
@@ -115,7 +115,7 @@ def generate_marker_model(marker_id: int, base_dir: str, side_pixels: int = 400,
         </material>
       </visual>
       <collision name="marker_collision">
-        <pose>0 0 0.35 0 0 0</pose>
+        <pose>0 0 0.28 0 0 0</pose>
         <geometry>
           <box>
             <size>0.01 0.20 0.20</size>

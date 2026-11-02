@@ -26,6 +26,7 @@ setup(
         'console_scripts': [         
             'aruco_detector = edgeai_perception.aruco_detector:main',
             'square_patrol = edgeai_perception.square_patrol:main',
+            'arena_explorer = edgeai_perception.arena_explorer:main',
         ],
     },
 )

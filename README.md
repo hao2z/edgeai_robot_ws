@@ -2,37 +2,41 @@
 
 A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
 
-## Quickstart: Perception & Autonomous Patrol (Workstream 2)
+## Quickstart: Midterm Check Part 1 — Autonomous Arena Exploration, SLAM & ArUco Detection
 
-This section provides quick instructions for running the simulation, spawning ArUco targets, and executing the perception pipeline and autonomous square patrol.
+This section provides quick instructions for running the `5.0 m × 5.0 m` Midterm Arena simulation (`midterm_arena.sdf`), live SLAM Toolbox mapping, ArUco target detection (`S1` ID 1 & `C1` ID 2), and autonomous full-arena exploration.
 
-### Terminal 1: Launch Gazebo & RViz Simulation
+### Terminal 1: Launch Gazebo, SLAM Toolbox & RViz Simulation
 ```bash
 ./start_sim.sh
 ```
+- Starts `midterm_arena.sdf` with walls (`W1`, `W1b`, `W2`), obstacles (`O2`, `O3`), and freestanding ArUco target stands (`S1` at `(1.0, 4.1)` and `C1` at `(4.1, 1.0)`).
+- Automatically launches `slam_toolbox` (`online_async_launch.py`) to render the live 2D occupancy grid map (`/map`) in RViz.
+- Opens RViz with `/map`, `/target_markers`, `/exploration_markers`, and `/camera/aruco_debug` pre-enabled.
 
-### Terminal 2: Spawn ArUco Targets & Run ArUco Detector
+### Terminal 2: Run ArUco Detector & Evidence Logger
 ```bash
 pixi shell
 source install/setup.bash
-python src/edgeai_perception/edgeai_perception/spawn_markers.py
 ros2 run edgeai_perception aruco_detector
 ```
 - Subscribes to `/camera/image` and `/camera/camera_info`.
-- Uses OpenCV PnP to compute 3D marker distance $(x, y, z)$ and orientation (`yaw`).
-- Uses `tf2_ros` to transform marker coordinates into the global `odom`/`map` frame.
+- Uses OpenCV PnP (`0.16 m` marker size) + `tf2_ros` to compute relative (`base_footprint`) and global (`map`/`odom` and Arena) target poses.
 - Publishes:
-  - `/detected_targets` (`std_msgs/msg/String`): JSON list of all discovered targets with `id`, `type`, `x`, `y`, `yaw`.
-  - `/target_markers` (`visualization_msgs/msg/MarkerArray`): 3D visual markers for RViz.
+  - `/camera/aruco_debug` (`sensor_msgs/msg/Image`): Live annotated camera HUD with bounding boxes, 3D axes, and distance.
+  - `/detected_targets` (`std_msgs/msg/String`): JSON list of discovered targets (`S1` normal, `C1` coop).
+  - `/target_markers` (`visualization_msgs/msg/MarkerArray`): 3D pins, labels, and rescue radius rings (`0.5 m` / `0.7 m`) in RViz.
+- Automatically saves Part 1 verification snapshots and JSON logs to `evidence/`.
 
-### Terminal 3: Run Closed-Loop Autonomous Square Patrol (2 Circles)
+### Terminal 3: Run Autonomous Full-Arena Explorer (or 2-Circle Square Patrol)
 ```bash
 pixi shell
 source install/setup.bash
-ros2 run edgeai_perception square_patrol
+ros2 run edgeai_perception arena_explorer
 ```
-- Moves the robot forward 1.0 m and turns left 90° using closed-loop `/odom` feedback.
-- Completes 2 full loops (8 sides) and automatically halts.
+- Autonomously navigates through all 5 zones of the `5.0 m × 5.0 m` Midterm Arena using SLAM-corrected TF (`map -> base_footprint`), `/odom`, and 360° LiDAR (`/scan`) obstacle avoidance.
+- Renders the complete 2D SLAM map in RViz, visually inspects both `S1` and `C1`, and automatically saves the completed map to `maps/midterm_slam_map.yaml` and `maps/midterm_slam_map.pgm`.
+- *(Optional simple patrol)*: `ros2 run edgeai_perception square_patrol`
 
 ### Terminal 4: Inspect Live Detected Target List
 ```bash
@@ -40,7 +44,6 @@ pixi shell
 source install/setup.bash
 ros2 topic echo /detected_targets
 ```
-To view 3D persistent pins in RViz: click **Add** -> **MarkerArray** -> set topic to `/target_markers`.
 
 ---
 

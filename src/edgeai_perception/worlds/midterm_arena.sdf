@@ -317,12 +317,12 @@
       S1: Single Rescue Target
       Center: (1.0, 4.1), radius 0.5m
       Marker ID: 1 (DICT_4X4_50)
-      Facing: South (-Y direction, yaw = -1.570796)
-      Marker pattern: 0.16m x 0.16m, center at z = 0.35m
+      Facing: South-East toward accessible room entrance (yaw = -0.60)
+      Marker pattern: 0.16m x 0.16m, center at z = 0.28m
     -->
     <model name="target_S1">
       <static>true</static>
-      <pose>1.0 4.1 0 0 0 -1.570796</pose>
+      <pose>1.0 4.1 0 0 0 -0.35</pose>
       <link name="link">
         <!-- Circular base foot on floor (radius 0.12m, thickness 0.02m) -->
         <visual name="base_visual">
@@ -348,13 +348,13 @@
           </geometry>
         </collision>
 
-        <!-- Vertical stand pole (height 0.34m, center z = 0.18m) -->
+        <!-- Vertical stand pole (bottom z=0.02m to bottom of marker plate z=0.18m) -->
         <visual name="pole_visual">
-          <pose>0 0 0.18 0 0 0</pose>
+          <pose>0 0 0.10 0 0 0</pose>
           <geometry>
             <cylinder>
               <radius>0.015</radius>
-              <length>0.34</length>
+              <length>0.16</length>
             </cylinder>
           </geometry>
           <material>
@@ -363,18 +363,18 @@
           </material>
         </visual>
         <collision name="pole_collision">
-          <pose>0 0 0.18 0 0 0</pose>
+          <pose>0 0 0.10 0 0 0</pose>
           <geometry>
             <cylinder>
               <radius>0.015</radius>
-              <length>0.34</length>
+              <length>0.16</length>
             </cylinder>
           </geometry>
         </collision>
 
-        <!-- Marker backing plate at z = 0.35m (0.01m x 0.20m x 0.20m) -->
+        <!-- Marker backing plate at z = 0.28m (0.01m x 0.20m x 0.20m) -->
         <visual name="marker_visual">
-          <pose>0 0 0.35 0 0 0</pose>
+          <pose>0 0 0.28 0 0 0</pose>
           <geometry>
             <box>
               <size>0.01 0.20 0.20</size>
@@ -391,7 +391,7 @@
           </material>
         </visual>
         <collision name="marker_collision">
-          <pose>0 0 0.35 0 0 0</pose>
+          <pose>0 0 0.28 0 0 0</pose>
           <geometry>
             <box>
               <size>0.01 0.20 0.20</size>
@@ -406,7 +406,7 @@
       Center: (4.1, 1.0), radius 0.7m
       Marker ID: 2 (DICT_4X4_50)
       Facing: North (+Y direction, yaw = 1.570796)
-      Marker pattern: 0.16m x 0.16m, center at z = 0.35m
+      Marker pattern: 0.16m x 0.16m, center at z = 0.28m
     -->
     <model name="target_C1">
       <static>true</static>
@@ -436,13 +436,13 @@
           </geometry>
         </collision>
 
-        <!-- Vertical stand pole (height 0.34m, center z = 0.18m) -->
+        <!-- Vertical stand pole (bottom z=0.02m to bottom of marker plate z=0.18m) -->
         <visual name="pole_visual">
-          <pose>0 0 0.18 0 0 0</pose>
+          <pose>0 0 0.10 0 0 0</pose>
           <geometry>
             <cylinder>
               <radius>0.015</radius>
-              <length>0.34</length>
+              <length>0.16</length>
             </cylinder>
           </geometry>
           <material>
@@ -451,18 +451,18 @@
           </material>
         </visual>
         <collision name="pole_collision">
-          <pose>0 0 0.18 0 0 0</pose>
+          <pose>0 0 0.10 0 0 0</pose>
           <geometry>
             <cylinder>
               <radius>0.015</radius>
-              <length>0.34</length>
+              <length>0.16</length>
             </cylinder>
           </geometry>
         </collision>
 
-        <!-- Marker backing plate at z = 0.35m (0.01m x 0.20m x 0.20m) -->
+        <!-- Marker backing plate at z = 0.28m (0.01m x 0.20m x 0.20m) -->
         <visual name="marker_visual">
-          <pose>0 0 0.35 0 0 0</pose>
+          <pose>0 0 0.28 0 0 0</pose>
           <geometry>
             <box>
               <size>0.01 0.20 0.20</size>
@@ -479,7 +479,7 @@
           </material>
         </visual>
         <collision name="marker_collision">
-          <pose>0 0 0.35 0 0 0</pose>
+          <pose>0 0 0.28 0 0 0</pose>
           <geometry>
             <box>
               <size>0.01 0.20 0.20</size>
