@@ -1,0 +1,18 @@
+observation_scan:
+  ros__parameters:
+    use_sim_time: true
+    enabled: true
+    check_hz: 2.0
+    # Runner derives actual full-body circumscribed radius from this run's Nav2 footprint.
+    rotation_radius_m: 0.38
+    rotation_margin_m: 0.08
+    min_open_radius_m: 0.50  # no lethal obstacles or unknown cells in this disk
+    min_scan_distance_m: 1.2  # do not repeatedly scan the same place
+    min_scan_interval_s: 30.0  # simulation time
+    max_scans: 8
+    minimum_completed_goals: 1  # scan at natural navigation task boundaries
+    stationary_time_s: 0.4
+    max_linear_speed_mps: 0.03
+    max_angular_speed_rps: 0.05
+    max_data_age_s: 0.5
+    output_directory: ''

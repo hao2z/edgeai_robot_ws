@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.8)
+project(edgeai_perception)
+find_package(ament_cmake REQUIRED)
+install(PROGRAMS scripts/aruco_targets.py scripts/scan360.py scripts/observation_scan.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/aruco_geometry.py scripts/scan_policy.py DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+ament_package()

@@ -1,8 +1,10 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
 
@@ -14,23 +16,33 @@ import xacro
 def generate_launch_description():
 
     # Package paths
-    package_name = 'edgeai_robot_description'
+    # package_name = 'edgeai_robot_description'
+    # pkg_share = get_package_share_directory(package_name)
+    description_share = get_package_share_directory('edgeai_robot_description')
+    simulation_share = get_package_share_directory('edgeai_simulation')
 
-    pkg_share = get_package_share_directory(package_name)
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
+    pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
+
+    # Launch arguments
+    use_slam_arg = DeclareLaunchArgument(
+        'use_slam',
+        default_value='true',
+        description='Automatically launch SLAM Toolbox online_async_launch.py'
+    )
 
     # New realistic robot model
     xacro_file = os.path.join(
-        pkg_share,
+        description_share,
         'urdf',
         'edgeai_robot_real.urdf.xacro'
     )
 
     # Reuse the existing Gazebo world
     world_file = os.path.join(
-        pkg_share,
+        simulation_share,
         'worlds',
-        'empty.sdf'
+        'competition_rooms.sdf'
     )
 
     # Convert Xacro to robot_description
@@ -123,10 +135,34 @@ def generate_launch_description():
         ]
     )
 
+    # SLAM Toolbox (delayed by 3.0s so /clock and /tf are active before activation)
+    slam_params_file = os.path.join(simulation_share, 'config', 'slam_toolbox.yaml')
+    slam_toolbox_launch = TimerAction(
+        period=3.0,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(
+                        pkg_slam_toolbox,
+                        'launch',
+                        'online_async_launch.py'
+                    )
+                ),
+                launch_arguments={
+                    'slam_params_file': slam_params_file,
+                    'use_sim_time': 'true',
+                }.items(),
+                condition=IfCondition(LaunchConfiguration('use_slam'))
+            )
+        ]
+    )
+    
     return LaunchDescription([
+        use_slam_arg,
         gazebo,
         robot_state_publisher,
         spawn_robot,
         bridge,
         camera_sensor_tf,
+        slam_toolbox_launch,
     ])

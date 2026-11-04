@@ -1,0 +1,11 @@
+# Gazebo world poses, NOT map poses and NOT localization measurements.
+# Multi-robot launch selects the first robot_count entries (1..4).
+robots:
+  - name: robot1
+    pose: [-1.5, -1.5, 0.01, 0.0, 0.0, 3.141592653589793]
+  - name: robot2
+    pose: [-1.5, -0.6, 0.01, 0.0, 0.0, 3.141592653589793]
+  - name: robot3
+    pose: [-0.3, 1.5, 0.01, 0.0, 0.0, 1.5707963267948966]
+  - name: robot4
+    pose: [1.5, 1.6, 0.01, 0.0, 0.0, 0.0]

@@ -1,0 +1,53 @@
+
+<!--
+  Replan at 1 Hz. Controller failures immediately enter motion recovery:
+  clear maps and back up, spin if blocked, then retry the same navigation task.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <!-- 恢复重试次数；用尽后当前导航失败，由探索器决定后续目标。 -->
+    <RecoveryNode number_of_retries="2" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <!-- 全局路径重规划频率，Hz；修改 hz，勿修改 PlannerSelector 的属性名。 -->
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <Sequence>
+              <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+          </RecoveryNode>
+        </RateController>
+        <!-- Escalate controller failures directly to motion recovery. -->
+        <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+      </PipelineSequence>
+      <Sequence>
+        <Fallback>
+          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+        </Fallback>
+        <ReactiveFallback name="RecoveryFallback">
+          <GoalUpdated/>
+          <RoundRobin name="RecoveryActions">
+            <Sequence name="ClearingActions">
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+              <Fallback name="DoorwayMotionRecovery">
+                <!-- 后退距离：米；速度：m/s；超时：秒。实际速度还受速度平滑器限制。 -->
+                <BackUp backup_dist="0.20" backup_speed="0.20" time_allowance="5.0" error_code_id="{backup_code_id}"/>
+                <!-- 旋转角度：弧度，正负表示方向；超时：秒。速度在 behavior_server 中设置。 -->
+                <Spin spin_dist="1.0" time_allowance="8.0" error_code_id="{spin_error_code}"/>
+              </Fallback>
+            </Sequence>
+            <!-- 旋转角度：弧度，正负表示方向；超时：秒。速度在 behavior_server 中设置。 -->
+            <Spin spin_dist="-1.0" time_allowance="8.0" error_code_id="{spin_error_code}"/>
+            <!-- 等待环境更新的时间，秒；等待结束不代表已经脱困。 -->
+            <Wait wait_duration="1.0"/>
+          </RoundRobin>
+        </ReactiveFallback>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

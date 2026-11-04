@@ -13,12 +13,8 @@ find_package(ament_cmake REQUIRED)
 
 install(
   DIRECTORY
-    launch
     urdf
-    worlds
     rviz
-    config
-    maps
   DESTINATION share/${PROJECT_NAME}
 )
 

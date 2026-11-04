@@ -1,0 +1,21 @@
+aruco_targets:
+  ros__parameters:
+    use_sim_time: true
+    image_topic: /camera/image
+    camera_info_topic: /camera/camera_info
+    optical_frame: camera_optical_frame
+    # Development fixtures only; no target truth coordinates are loaded.
+    dictionary: DICT_4X4_50
+    marker_size_m: 0.20  # black marker edge, NOT the 0.24 m white panel
+    processing_hz: 5.0  # latest frame only; no unbounded image backlog
+    max_image_age_s: 0.5
+    min_marker_side_px: 12.0
+    max_reprojection_error_px: 2.5
+    min_distance_m: 0.15
+    max_distance_m: 5.0
+    confirmation_observations: 3
+    fusion_window_s: 20.0
+    max_observations_per_id: 20
+    outlier_distance_m: 0.30
+    stale_after_s: 10.0
+    output_directory: ''  # runner sets the current session directory
