@@ -49,7 +49,5 @@ bash "$PROJECT_ROOT/scripts/setup/build-frontier-runtime.sh"
     "$cache/frontier-upstream/config/params.yaml" \
     "$PROJECT_ROOT/src/edgeai_exploration/config/frontier_exploration.yaml"
 echo "Prepared frontier_exploration_ros2 at $frontier_rev"
-"$pixi" run --manifest-path "$cache/env/pixi.toml" python3 "$PROJECT_ROOT/src/edgeai_navigation/tools/prepare_nav2_config.py" \
-    "$cache/env/.pixi/envs/default/share/nav2_bringup/params/nav2_params.yaml" \
-    "$PROJECT_ROOT/src/edgeai_navigation/config/nav2_exploration.yaml"
+# Navigation parameters are maintained in config/; setup must not overwrite tuning.
 EDGEAI_ENV_MANIFEST="$cache/env/pixi.toml" bash "$PROJECT_ROOT/scripts/setup/build-workspace.sh"

@@ -19,15 +19,14 @@ if (-not $InCurrentWindow) {
 $Host.UI.RawUI.WindowTitle = "EdgeAI ROS Live Monitor | $Distro"
 if ($SessionDirectory) {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
-    Write-Host "Live key events: $SessionDirectory\events.log" -ForegroundColor Cyan
+    Write-Host "Live key events: $SessionDirectory\events.log"
     Write-Host 'Raw simulator/planner/navigation logs are saved in the same session directory.'
     Get-Content -LiteralPath (Join-Path $SessionDirectory 'events.log') -Encoding UTF8 -Wait | ForEach-Object {
         $eventColor = if ($_ -match '\[ERROR\]|启动失败|必要进程提前退出') { 'Red' }
             elseif ($_ -match '\[WARN\]|超时') { 'Yellow' }
-            elseif ($_ -match '\[OK\]|已就绪') { 'Green' }
-            elseif ($_ -match '\[summary\]|\[session\]') { 'Cyan' }
-            else { 'Gray' }
-        if ($env:NO_COLOR) { Write-Output $_ } else { Write-Host $_ -ForegroundColor $eventColor }
+            else { $null }
+        if ($env:NO_COLOR -or -not $eventColor) { Write-Host $_ }
+        else { Write-Host $_ -ForegroundColor $eventColor }
     }
     return
 }

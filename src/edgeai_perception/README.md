@@ -12,7 +12,7 @@ fixture YAML is loaded by the detector.
 Inputs: `/camera/image`, `/camera/camera_info`, and image-time TF from
 `camera_optical_frame` to `odom`. OpenCV 4.6 legacy and newer detector APIs are
 supported. Square PnP candidates must have positive depth and pass size, range
-and reprojection checks. Only the latest image is processed, at 5 Hz.
+and reprojection checks. Only the latest image is processed, at 15 Hz (camera 30 Hz).
 
 Outputs:
 - `/targets/observations`: `std_msgs/String` JSON containing ID, timestamp,
@@ -23,9 +23,9 @@ Outputs:
 - Per-run `perception.log`, `target-observations.jsonl`, and atomic `targets.json`.
   FOUND/CONFIRMED events also appear in events.log and the live event monitor.
 
-The first release localizes marker centres. It does not publish fused marker
-orientation, infer rescue zones, actively sweep viewpoints, or guarantee that
-all markers will be seen. Three accepted frames confirm an ID. Confirmation is
+Marker centres and fused orientations are now published; the post-mapping normal
+rescue pipeline is documented in `docs/normal-rescue.md`. Automatic observations
+remain opportunistic and do not guarantee that all markers will be seen. Three accepted frames confirm an ID. Confirmation is
 not an accuracy guarantee: spread is sample consistency, not total uncertainty.
 The odom-frame sliding window is reprojected using map→odom at publication time;
 this follows rigid SLAM corrections but cannot fully undo historical nonrigid

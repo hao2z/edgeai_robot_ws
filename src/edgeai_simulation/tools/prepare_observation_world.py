@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-source, output, gui_config = map(Path, sys.argv[1:])
+source, output, gui_config = map(Path, sys.argv[1:4])
+camera_pose = sys.argv[4] if len(sys.argv) > 4 else '3.8 -4.35 6 0 0.80 2.288'
 tree = ET.parse(source)
 world = tree.getroot().find('world')
 old_gui = world.find('gui')
@@ -17,7 +18,7 @@ for plugin in defaults.findall('plugin'):
     if plugin.get('filename') in ('ComponentInspector', 'EntityTree'):
         continue
     if plugin.get('filename') == 'MinimalScene':
-        plugin.find('camera_pose').text = '3.8 -4.35 6 0 0.80 2.288'
+        plugin.find('camera_pose').text = camera_pose
     gui.append(plugin)
 ET.indent(tree, space='  ')
 tree.write(output, encoding='utf-8', xml_declaration=True)

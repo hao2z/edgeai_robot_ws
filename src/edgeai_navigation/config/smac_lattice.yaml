@@ -1,0 +1,42 @@
+# 调参顺序：先看【优先调整】，再看【按需调整】；其余通常保持默认。
+# 修改后重启；实际参数见会话 nav2-runtime.yaml。车身/膨胀在 nav2_exploration_rectangle.yaml。
+# 普通点使用本组；指定朝向/救援点派生GridBasedHeading，强制关闭倒车。
+GridBased:
+
+  # ── 优先调整：墙边净空、转向和倒车偏好 ──
+  # ① 增大更避开高代价区域；也要配合全局inflation_layer，不改变车身硬碰撞边界。
+  cost_penalty: 2.0
+  # ② 原地旋转惩罚：减小更愿意原地转，过小可能频繁停转。
+  rotation_penalty: 5.0
+  # ③ 普通点倒车搜索；控制器必须支持。false可恢复仅前进对照。
+  allow_reverse_expansion: true
+  # >=1；越大越偏好前进，不会强制车后目标一定倒车。
+  reverse_penalty: 2.0
+
+  non_straight_penalty: 1.05  # >=1；增大更偏好直行
+  change_penalty: 0.05  # 增大减少左右转弯方向切换
+
+  # ── 按需调整：复杂路线规划预算 ──
+  max_planning_time: 5.0  # s；单次搜索预算，增大更易找到复杂路线但更慢
+  # 普通点先选终点车身净空合适的朝向，每次只做一次原生搜索；重试交给行为树。
+
+  # ── 支撑配置：通常不动 ──
+  plugin: edgeai_navigation::XYLatticePlanner  # 普通位置目标自动选终点朝向；内部使用Smac Lattice
+  tolerance: 0.1  # m；增大允许路径结束在目标附近，独立于到点容差
+  allow_unknown: true  # 允许穿过未知栅格
+  lattice_filepath: nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json  # 5cm栅格差速原语；0.5m是曲线半径，仍含原地转向
+
+  max_iterations: 1000000  # 总迭代上限；仍受时间预算限制
+  max_on_approach_iterations: 1000  # 进入位置容差后，继续搜索精确终点的迭代数
+  terminal_checking_interval: 5000  # 每多少次迭代检查超时/取消；减小响应更快
+
+  # 搜索加速与后处理：通常保持
+  cache_obstacle_heuristic: false  # 同目标重复规划可提速；建图变化时慎用缓存
+  lookup_table_size: 20.0  # m；启发式查表窗口，增大占用更多内存
+  analytic_expansion_ratio: 3.5  # 尝试直接连接终点的频率系数；通常保持
+  analytic_expansion_max_length: 3.0  # m；直接连接最长距离，过小可能增加搜索耗时
+  analytic_expansion_max_cost: 200.0  # 直接连接的软代价上限；降低更避开高代价区域
+  analytic_expansion_max_cost_override: false  # Jazzy：true始终执行上限；false允许近终点例外
+  retrospective_penalty: 0.015  # 小幅偏好较晚机动，减少搜索展开；通常保持
+  debug_visualizations: false  # 调试搜索点和车身显示；启用增加负载
+  smooth_path: true  # 保留原语姿态和原地转向段，不作通用XY平滑

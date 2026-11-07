@@ -1,0 +1,5 @@
+<library path="fractional_window_layer">
+  <class type="edgeai_navigation::FractionalWindowLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Initialize a rolling window with fractional metre dimensions.</description>
+  </class>
+</library>

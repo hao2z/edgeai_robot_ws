@@ -1,19 +1,30 @@
 
 <!--
-  Replan at 1 Hz. Controller failures immediately enter motion recovery:
-  clear maps and back up, spin if blocked, then retry the same navigation task.
+  Check path at 2 Hz; reuse valid paths until goal change, deviation or expiry.
+  Recover through short motions selected against the live swept footprint.
+  NavigationAuthority derives per-request trees with fixed planner/checker IDs;
+  their selector topics cannot override the arrival policy of a managed goal.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <!-- 恢复重试次数；用尽后当前导航失败，由探索器决定后续目标。 -->
-    <RecoveryNode number_of_retries="2" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="5" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
+        <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="general_goal_checker" topic_name="goal_checker_selector"/>
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
         <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
-        <!-- 全局路径重规划频率，Hz；修改 hz，勿修改 PlannerSelector 的属性名。 -->
-        <RateController hz="1.0">
+        <!-- 检查频率2Hz；不是重规划频率。有效旧路径最长保留10秒。 -->
+        <RateController hz="2.0">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
-            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <Fallback name="ReuseOrReplan">
+              <ReactiveSequence name="ExistingPathUsable">
+                <Inverter><PathExpiringTimer seconds="10.0" path="{path}"/></Inverter>
+                <Inverter><GlobalUpdatedGoal/></Inverter>
+                <PathNearRobot path="{path}" max_distance="0.25"/>
+                <IsPathValid path="{path}" server_timeout="200"/>
+              </ReactiveSequence>
+              <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            </Fallback>
             <Sequence>
               <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
@@ -21,31 +32,37 @@
           </RecoveryNode>
         </RateController>
         <!-- Escalate controller failures directly to motion recovery. -->
-        <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+        <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="{selected_goal_checker}" error_code_id="{follow_path_error_code}"/>
       </PipelineSequence>
       <Sequence>
         <Fallback>
           <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
           <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+          <!-- 全局安全边距下起点占用时，仅允许通过局部实时检查的退出动作。 -->
+          <PlannerStartOccupied error_code="{compute_path_error_code}"/>
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
-          <RoundRobin name="RecoveryActions">
-            <Sequence name="ClearingActions">
-              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
-              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
-              <Fallback name="DoorwayMotionRecovery">
-                <!-- 后退距离：米；速度：m/s；超时：秒。实际速度还受速度平滑器限制。 -->
-                <BackUp backup_dist="0.20" backup_speed="0.20" time_allowance="5.0" error_code_id="{backup_code_id}"/>
-                <!-- 旋转角度：弧度，正负表示方向；超时：秒。速度在 behavior_server 中设置。 -->
-                <Spin spin_dist="1.0" time_allowance="8.0" error_code_id="{spin_error_code}"/>
-              </Fallback>
-            </Sequence>
-            <!-- 旋转角度：弧度，正负表示方向；超时：秒。速度在 behavior_server 中设置。 -->
-            <Spin spin_dist="-1.0" time_allowance="8.0" error_code_id="{spin_error_code}"/>
-            <!-- 等待环境更新的时间，秒；等待结束不代表已经脱困。 -->
-            <Wait wait_duration="1.0"/>
-          </RoundRobin>
+          <Sequence name="RecoverAndReplan">
+            <!-- 恢复改变位姿后不得直接复用旧路径。也不先清空局部障碍以制造净空。 -->
+            <InvalidatePath path="{path}"/>
+            <!-- 动作被服务器拒绝后继续选未尝试候选；不以Wait兜底。 -->
+            <RetryUntilSuccessful num_attempts="8" name="TryRemainingRecoveryMotions">
+              <Sequence>
+                <!-- 候选平移距离(m)、正负转角(rad)；按实时车身扫掠和净空筛选。 -->
+                <SelectRecovery goal="{goal}" distances="0.05;0.10" angles="0.20;0.35" max_age="0.35"
+                                kind="{recovery_kind}" distance="{recovery_distance}" angle="{recovery_angle}"/>
+                <Switch4 variable="{recovery_kind}" case_1="backup" case_2="forward" case_3="spin" case_4="occupied">
+                  <BackUp backup_dist="{recovery_distance}" backup_speed="0.06" time_allowance="4.0" error_code_id="{backup_code_id}"/>
+                  <DriveOnHeading dist_to_travel="{recovery_distance}" speed="0.06" time_allowance="4.0" error_code_id="{drive_on_heading_error_code}"/>
+                  <Spin spin_dist="{recovery_angle}" time_allowance="6.0" error_code_id="{spin_error_code}"/>
+                  <!-- 已知占据时，实际车身与边距重叠均不加深的低速退出。 -->
+                  <DriveOnHeading name="EscapeKnownOverlap" server_name="escape_occupied" dist_to_travel="{recovery_distance}" speed="0.03" time_allowance="8.0" error_code_id="{escape_error_code}"/>
+                  <AlwaysFailure/>
+                </Switch4>
+              </Sequence>
+            </RetryUntilSuccessful>
+          </Sequence>
         </ReactiveFallback>
       </Sequence>
     </RecoveryNode>

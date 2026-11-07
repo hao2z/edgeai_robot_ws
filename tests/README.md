@@ -1,5 +1,11 @@
 # Tests and evidence
 
+Current full-mission success evidence and remaining validation boundaries are
+summarized in [project status](../docs/project-status.md). No raw run artifacts
+are committed. `Diagnose-Controller.ps1` / `scripts/ros/controller_probe.py` and
+`exploration/capture_navigation_state.py` provide controller diagnostics; the
+unused saved-pose and fixed-duration observation probes have been removed.
+
 - `simulation/`: bounded sensor, motion and simulation-extension checks.
 - `exploration/`: map coverage evaluation, controller regression checks and navigation diagnostics.
 - `results/exploration/`: saved maps and exploration comparison evidence.

@@ -1,0 +1,18 @@
+# Midterm task description Section 3. World XY equals the document coordinates.
+dictionary: DICT_4X4_50
+marker_size_m: 0.16
+panel_size_m: 0.20
+assets_directory: models/midterm
+targets:
+  - id: 1
+    name: S1
+    type: normal
+    pose: [1.0, 4.1, 0.15, 0.0, 0.0, -1.5707963267948966]
+    rescue_radius_m: 0.5
+    dwell_s: 10.0
+  - id: 2
+    name: C1
+    type: cooperative
+    pose: [4.1, 1.0, 0.15, 0.0, 0.0, 1.5707963267948966]
+    rescue_radius_m: 0.7
+    dwell_s: 10.0

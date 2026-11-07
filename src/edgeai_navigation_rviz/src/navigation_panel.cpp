@@ -55,22 +55,42 @@ public:
       }
     });
     layout->addLayout(controls);
+    heading_toggle_ = new QCheckBox(QString::fromUtf8("手动目标要求朝向"), this);
+    heading_toggle_->setEnabled(false);
+    connect(heading_toggle_, &QCheckBox::toggled, this, [this](bool checked) {
+      if (!heading_client_ || !heading_client_->service_is_ready()) {return;}
+      auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
+      request->data = checked;
+      heading_client_->async_send_request(request);
+    });
+    layout->addWidget(heading_toggle_);
     status_ = new QLabel(QString::fromUtf8("等待导航诊断消息"), this);
+    status_->setWordWrap(true);
     view_ = new QTextBrowser(this);
     view_->setOpenExternalLinks(false);
     view_->setStyleSheet("QTextBrowser {background:#f5f7fa;color:#172536;}");
     view_->setMinimumWidth(300);
+    auto *detailsToggle = new QCheckBox(QString::fromUtf8("数据时序与TF细节"), this);
+    details_ = new QTextBrowser(this);
+    details_->setOpenExternalLinks(false);
+    details_->hide();
+    details_->setMaximumHeight(240);
+    connect(detailsToggle, &QCheckBox::toggled, details_, &QWidget::setVisible);
     auto *legendToggle = new QCheckBox(QString::fromUtf8("显示图例与说明"), this);
     legend_ = new QTextBrowser(this);
     legend_->setOpenExternalLinks(false);
-    legend_->hide();
+    legend_->setMaximumHeight(220);
+    legendToggle->setChecked(true);
     connect(legendToggle, &QCheckBox::toggled, legend_, &QWidget::setVisible);
     layout->addWidget(status_);
-    layout->addWidget(view_);
+    layout->addWidget(view_, 3);
+    layout->addWidget(detailsToggle);
+    layout->addWidget(details_);
     layout->addWidget(legendToggle);
     layout->addWidget(legend_);
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, [this]() {
+      heading_toggle_->setEnabled(heading_client_ && heading_client_->service_is_ready());
       // Keep Qt/OGRE producing damage while stationary under WSLg/Xwayland.
       // This never raises, moves or restores a hidden/minimized window.
       auto *context = getDisplayContext();
@@ -81,16 +101,22 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       if (received_) {
         const double age = std::chrono::duration<double>(std::chrono::steady_clock::now()-received_at_).count();
-        status_->setText((age < 1.5 ? QString::fromUtf8("诊断更新中") :
+        status_->setText((age < 1.5 ? QString::fromUtf8("诊断刷新正常 · 消息延迟 %1 秒").arg(age, 0, 'f', 1) :
           QString::fromUtf8("诊断消息已停止更新 · %1 秒").arg(age, 0, 'f', 1)) +
-          QString::fromUtf8(" · 帧 %1 · %2").arg(context ? context->getFrameCount() : 0)
-            .arg(QTime::currentTime().toString("HH:mm:ss")));
+          QString::fromUtf8(" · %1").arg(QTime::currentTime().toString("HH:mm:ss")));
+        status_->setStyleSheet(age < 1.5 ? "color:#17713c;" : "color:#b3261e;");
       }
       if (pending_) {
         const int scroll = view_->verticalScrollBar()->value();
         const auto parts = QString::fromUtf8(html_.c_str()).split("<!--LEGEND-->");
-        view_->setHtml(parts.first());
+        const auto mainParts = parts.first().split("<!--DETAILS-->");
+        view_->setHtml(mainParts.first());
+        const int detailScroll = details_->verticalScrollBar()->value();
+        if (mainParts.size() > 1) {details_->setHtml(mainParts.at(1));}
+        details_->verticalScrollBar()->setValue(detailScroll);
+        const int legendScroll = legend_->verticalScrollBar()->value();
         if (parts.size() > 1) {legend_->setHtml(parts.at(1));}
+        legend_->verticalScrollBar()->setValue(legendScroll);
         view_->verticalScrollBar()->setValue(scroll);
         pending_ = false;
       }
@@ -119,6 +145,8 @@ public:
       "/navigation_authority/set_manual");
     stop_client_ = abstraction->get_raw_node()->create_client<std_srvs::srv::Trigger>(
       "/navigation_authority/stop");
+    heading_client_ = abstraction->get_raw_node()->create_client<std_srvs::srv::SetBool>(
+      "/navigation_authority/set_goal_heading");
     subscription_ = abstraction->get_raw_node()->create_subscription<std_msgs::msg::String>(
       "/diagnostics/navigation_status", rclcpp::QoS(1),
       [this](std_msgs::msg::String::ConstSharedPtr message) {
@@ -132,8 +160,10 @@ public:
 private:
   QLabel *status_;
   QTextBrowser *view_;
+  QTextBrowser *details_;
   QTextBrowser *legend_;
   QTimer *timer_;
+  QCheckBox *heading_toggle_;
   std::mutex mutex_;
   std::string html_;
   bool pending_{false}, received_{false};
@@ -141,6 +171,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
   rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr mode_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_client_;
+  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr heading_client_;
 };
 }  // namespace edgeai_navigation_rviz
 PLUGINLIB_EXPORT_CLASS(edgeai_navigation_rviz::NavigationPanel, rviz_common::Panel)

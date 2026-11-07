@@ -1,0 +1,49 @@
+# 深度相机局部障碍；修改后重启。只补充激光，不加入全局地图。
+enabled: false             # 总开关；也可用启动参数覆盖
+filter:
+  input_mode: depth_image     # 深度图先采样再投影，避免订阅每帧7.4MB原始点云
+  depth_topic: camera/depth_image
+  camera_info_topic: camera/camera_info
+  input_topic: camera/points
+  output_topic: camera/obstacle_points
+  processing_hz: 8.0           # 仿真时间Hz；无需跟随相机30Hz
+  pixel_stride: 4              # 每4行/列取一点，640×480降为160×120
+  max_age_s: 0.4               # 丢弃积压点云，保留原始时间戳和坐标系
+layer:
+  plugin: nav2_costmap_2d::VoxelLayer
+  enabled: true
+  publish_voxel_map: false     # 三维调试显示开销较大，平时关闭
+  footprint_clearing_enabled: true
+  combination_method: 1       # 与激光取最大代价，不允许清掉激光障碍
+  origin_z: 0.0
+  z_resolution: 0.05
+  z_voxels: 16                 # 0~0.8m；Nav2最多16层
+  min_obstacle_height: 0.04    # 忽略地面噪声；低于4cm的障碍不能靠本层发现
+  max_obstacle_height: 0.45    # 当前车体碰撞高度范围，换机器人时复核
+  unknown_threshold: 15
+  mark_threshold: 0           # 任一高度层有点即标障碍，保留矮障碍
+  observation_sources: depth depth_clear
+  depth:
+    topic: /camera/obstacle_points
+    data_type: PointCloud2
+    clearing: false            # 标记只接收车身高度范围；清障使用下面更完整的射线
+    marking: true
+    min_obstacle_height: 0.04
+    max_obstacle_height: 0.45
+    obstacle_min_range: 0.15
+    obstacle_max_range: 2.0    # 覆盖3m局部窗口；远处由全局地图/激光处理
+    raytrace_min_range: 0.0
+    raytrace_max_range: 2.5
+    observation_persistence: 0.0 # 只缓存最新帧，不代表障碍自动过期
+    expected_update_rate: 0.0  # 无深度输入仍允许原有激光导航
+  depth_clear:
+    topic: /camera/obstacle_points
+    data_type: PointCloud2
+    clearing: true
+    marking: false
+    min_obstacle_height: -0.10 # 保留地面回波用于清射线，但不把地面标成障碍
+    max_obstacle_height: 2.5
+    raytrace_min_range: 0.0
+    raytrace_max_range: 2.5
+    observation_persistence: 0.0
+    expected_update_rate: 0.0

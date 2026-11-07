@@ -1,0 +1,6 @@
+# Only SLAM consumes scan_slam. Navigation and AMCL retain the raw scan.
+# Relative pose is injected from cooperative_rescue.initial_relative_pose by the launch file.
+root_odom_frame: odom
+bounds: [-0.3125, 0.1125, -0.165, 0.165]  # follower base_footprint: xmin,xmax,ymin,ymax
+margin_m: 0.15  # Covers coarse initial position uncertainty; avoid unnecessary large masks.
+max_age_s: 0.5

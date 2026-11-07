@@ -7,7 +7,7 @@ The canonical development workspace is this repository, on branch
 |---|---|
 | `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
 | `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
-| `src/edgeai_navigation/` | Nav2 configuration, control authority and generators |
+| `src/edgeai_navigation/` | Shared Nav2 configuration, independent controller tuning and control authority |
 | `src/edgeai_perception/` | ArUco detection and target localization during mapping |
 | `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
 | `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
@@ -16,7 +16,11 @@ The canonical development workspace is this repository, on branch
 | `docs/competition/` | Competition source documents |
 | `runtime/`, `tests/results/` | Local state, retired-script archives and per-run evidence; excluded from Git |
 
-本次建图＋目标寻找版本的结果、截图和限制见
+当前已跑通单机建图、目标定位、S1 单救援与 C1 双机器人协作救援。
+默认 Windows 入口使用 native Jazzy + RPP + Smac Lattice；当前进度、成功轮次证据、限制和启动方式见
+[项目状态（2026-11-07）](docs/project-status.md)及[双机协作救援](docs/cooperative-rescue.md)。
+
+历史建图＋目标寻找版本的结果、截图和限制见
 [2026-10-30 开发基线](docs/mapping-target-search-baseline-2026-10-30.md)。
 
 当前可运行基线、常调参数位置、最近测试与已知限制见
@@ -24,16 +28,21 @@ The canonical development workspace is this repository, on branch
 
 Windows/WSL entry points, run from this directory:
 
+中期检查新场地、S1/C1 标记和双机起点使用
+默认运行 `Start-Simulation.ps1`：robot1 探索并完成 S1，随后共享地图定位并执行 C1 双机救援。
+仅查看双机环境用 `Start-Simulation.ps1 -SimulationOnly -Robots 2`，见
+[中期仿真环境](docs/competition/midterm-environment.md)。
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1 -SLAM
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Controller dwb -Arena competition -Duration 300
+powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Controller rpp -Arena midterm -Duration 3600
 ```
 
 Alternatively, run directly in the Ubuntu-24.04 WSL terminal:
 
 ```bash
 cd /mnt/d/KTH/Competition/edgeai_robot_ws
-bash scripts/simulation/start-autonomous-exploration.sh --controller dwb --arena competition --duration 300
+bash scripts/simulation/start-autonomous-exploration.sh --controller rpp --planner lattice --arena midterm --duration 3600
 ```
 
 Both entries default to the native apt Jazzy environment. No manual `source`
@@ -68,8 +77,9 @@ A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz 
 The simulator now includes a noisy raw IMU, four development ArUco targets,
 configurable rescue-zone visuals and optional 1–4 robot namespaces. See
 [SIMULATION.md](SIMULATION.md) for configuration, frame conventions and tests.
-Independent per-robot SLAM is supported; map fusion and rescue autonomy are
-separate integration stages.
+The midterm mission maps with robot1, completes S1, then hands the saved map to
+two AMCL instances for C1 cooperative rescue. Simultaneous multi-robot SLAM/map
+fusion and coordinated narrow-passage scheduling remain outside this baseline.
 
 ## Environment
 
@@ -126,7 +136,7 @@ sources the build cache's `install/local_setup.bash`, launches
 `simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`.
 Press **Ctrl+C** in its terminal to stop the launched session.
 
-The launch file loads `edgeai_robot_real.urdf.xacro`, starts the world in `worlds/empty.sdf`, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. The old simple model and its launch script have been removed; `start_sim.sh` is the current entry point.
+The low-level launch loads `edgeai_robot_real.urdf.xacro`, defaults to `worlds/midterm.sdf` and the midterm target/start configuration, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. `start_sim.sh` remains a simulation-only entry point; the Windows default mission entry delegates to autonomous exploration and one S1 rescue.
 
 The portable realistic startup has been tested successfully. AMCL localization remains a local experiment; its launch and parameter files are not included in this repository. Installed AMCL dependencies do **not** mean that localization or autonomous navigation is complete.
 
@@ -229,3 +239,5 @@ remains the simulation entry point. The former root `algorithms/` and
 
 建图时默认同步识别 ArUco 并记录目标地图坐标，配置和当前限制见
 [src/edgeai_perception/README.md](src/edgeai_perception/README.md)。
+
+单机器人建图后的一次普通救援、目标清单字段和常改参数见 [普通救援说明](docs/normal-rescue.md)。

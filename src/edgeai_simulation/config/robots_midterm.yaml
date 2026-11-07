@@ -1,0 +1,7 @@
+# World poses of the robot model root (base_footprint), not SLAM initial poses.
+# Both complete footprints fit inside x=[0,1.4], y=[0,1]. Facing north (+Y).
+robots:
+  - name: robot1
+    pose: [0.45, 0.55, 0.01, 0.0, 0.0, 1.5707963267948966]
+  - name: robot2
+    pose: [1.05, 0.55, 0.01, 0.0, 0.0, 1.5707963267948966]

@@ -1,0 +1,190 @@
+# 相对公共矩形配置的历史场景差异；通常调公共配置和独立控制器即可。
+# null表示删除该键；conservative复用safe。Lattice会再统一矩形车身与5cm分辨率。
+rectangle:
+  controller_navigation:
+    mppi:
+      behavior_server:
+        ros__parameters:
+          max_rotational_vel: 0.65
+          min_rotational_vel: 0.25
+      controller_server:
+        ros__parameters:
+          controller_server.verbose: false
+          failure_tolerance: 0.3
+          general_goal_checker:
+            xy_goal_tolerance: 0.15
+          progress_checker:
+            movement_time_allowance: 10.0
+      global_costmap:
+        global_costmap:
+          ros__parameters:
+            footprint: null
+            footprint_padding: 0.0
+            inflation_layer:
+              cost_scaling_factor: 3.0
+              inflation_radius: 0.55
+            publish_frequency: 10.0
+            robot_radius: 0.37
+            update_frequency: 20.0
+      local_costmap:
+        local_costmap:
+          ros__parameters:
+            footprint: null
+            footprint_padding: 0.0
+            fractional_window: null
+            height: 3
+            inflation_layer:
+              cost_scaling_factor: 3.0
+              inflation_radius: 0.55
+            plugins:
+            - obstacle_layer
+            - inflation_layer
+            publish_frequency: 10.0
+            robot_radius: 0.37
+            update_frequency: 20.0
+            width: 3
+      planner_server:
+        ros__parameters:
+          GridBased:
+            tolerance: 0.3
+          expected_planner_frequency: 20.0
+      velocity_smoother:
+        ros__parameters:
+          max_velocity:
+          - 0.2
+          - 0.0
+          - 0.65
+          min_velocity:
+          - -0.08
+          - 0.0
+          - -0.65
+baseline:
+  navigation:
+    behavior_server:
+      ros__parameters:
+        max_rotational_vel: 0.65
+        min_rotational_vel: 0.25
+    collision_monitor:
+      ros__parameters:
+        FootprintApproach:
+          min_points: 3
+    controller_server:
+      ros__parameters:
+        failure_tolerance: 0.3
+        general_goal_checker:
+          xy_goal_tolerance: 0.15
+        progress_checker:
+          movement_time_allowance: 5.0
+          required_movement_radius: 0.15
+    global_costmap:
+      global_costmap:
+        ros__parameters:
+          footprint: null
+          footprint_padding: null
+          inflation_layer:
+            cost_scaling_factor: 3.0
+            inflation_radius: 0.45
+          plugins:
+          - static_layer
+          - obstacle_layer
+          - inflation_layer
+          publish_frequency: 10.0
+          robot_radius: 0.36
+          update_frequency: 20.0
+    local_costmap:
+      local_costmap:
+        ros__parameters:
+          footprint: null
+          footprint_padding: null
+          fractional_window: null
+          height: 3
+          inflation_layer:
+            cost_scaling_factor: 3.0
+            inflation_radius: 0.45
+          plugins:
+          - obstacle_layer
+          - inflation_layer
+          publish_frequency: 10.0
+          robot_radius: 0.36
+          update_frequency: 20.0
+          width: 3
+    planner_server:
+      ros__parameters:
+        GridBased:
+          tolerance: 0.5
+        expected_planner_frequency: 20.0
+    velocity_smoother:
+      ros__parameters:
+        max_velocity:
+        - 0.2
+        - 0.0
+        - 0.65
+        min_velocity:
+        - -0.08
+        - 0.0
+        - -0.65
+  controller_navigation:
+    mppi:
+      controller_server:
+        ros__parameters:
+          controller_server.verbose: false
+safe:
+  navigation:
+    behavior_server:
+      ros__parameters:
+        max_rotational_vel: 0.65
+        min_rotational_vel: 0.25
+    controller_server:
+      ros__parameters:
+        failure_tolerance: 0.3
+        general_goal_checker:
+          xy_goal_tolerance: 0.15
+        progress_checker:
+          movement_time_allowance: 5.0
+          required_movement_radius: 0.15
+    global_costmap:
+      global_costmap:
+        ros__parameters:
+          footprint: null
+          footprint_padding: null
+          inflation_layer:
+            cost_scaling_factor: 3.0
+          plugins:
+          - static_layer
+          - obstacle_layer
+          - inflation_layer
+          publish_frequency: 10.0
+          robot_radius: 0.4
+          update_frequency: 20.0
+    local_costmap:
+      local_costmap:
+        ros__parameters:
+          footprint: null
+          footprint_padding: null
+          fractional_window: null
+          height: 3
+          inflation_layer:
+            cost_scaling_factor: 3.0
+            inflation_radius: 0.5
+          plugins:
+          - obstacle_layer
+          - inflation_layer
+          publish_frequency: 10.0
+          robot_radius: 0.4
+          update_frequency: 20.0
+          width: 3
+    planner_server:
+      ros__parameters:
+        GridBased:
+          tolerance: 0.5
+        expected_planner_frequency: 20.0
+    velocity_smoother:
+      ros__parameters:
+        max_velocity:
+        - 0.2
+        - 0.0
+        - 0.65
+        min_velocity:
+        - -0.08
+        - 0.0
+        - -0.65

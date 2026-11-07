@@ -1,0 +1,5 @@
+<library path="occupied_escape">
+  <class type="edgeai_navigation::OccupiedEscape" base_class_type="nav2_core::Behavior">
+    <description>Bounded low-speed escape that monotonically removes known body and padding overlap.</description>
+  </class>
+</library>

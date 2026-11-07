@@ -1,19 +1,30 @@
 ﻿param(
     [ValidateSet('VcXsrv', 'WSLg')][string]$DisplayServer = 'WSLg',
     [ValidateRange(1, 4)][int]$Robots = 1,
+    [ValidateSet('simple', 'midterm')][string]$Arena = 'midterm',
+    [switch]$SimulationOnly,
     [switch]$SLAM,
     [string]$Distro = 'Ubuntu-24.04',
     [switch]$InCurrentWindow
 )
 $ErrorActionPreference = 'Stop'
+if ($Arena -eq 'midterm' -and $Robots -gt 2) { throw 'Midterm supports one or two robots.' }
+if (-not $SimulationOnly) {
+    if ($Robots -ne 1) { throw 'Robots selects the simulation-only robot count. The default midterm mission already uses two robots; use Start-Autonomous-Exploration.ps1 -SingleRobot for a single-robot mission.' }
+    if ($DisplayServer -ne 'WSLg') { throw 'Autonomous startup uses WSLg. Use -SimulationOnly for VcXsrv.' }
+    $missionArgs = @{ Arena = $Arena; Distro = $Distro }
+    if ($InCurrentWindow) { $missionArgs.InCurrentWindow = $true }
+    & (Join-Path $PSScriptRoot 'Start-Autonomous-Exploration.ps1') @missionArgs
+    return
+}
 . (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
 $linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 if (-not $InCurrentWindow) {
     & (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro
     $consoleArgs = @('-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass',
-        '-File', "`"$PSCommandPath`"", '-InCurrentWindow',
-        '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Distro', "`"$Distro`"")
+        '-File', "`"$PSCommandPath`"", '-InCurrentWindow', '-SimulationOnly',
+        '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Arena', $Arena, '-Distro', "`"$Distro`"")
     if ($SLAM) { $consoleArgs += '-SLAM' }
     if ($windowsTerminal) {
         Start-Process $windowsTerminal -ArgumentList (@('-w', 'new', 'new-tab', '--title', '"EdgeAI Simulation"',
@@ -69,7 +80,7 @@ $mapping = if ($SLAM) { 'true' } else { 'false' }
 & (Join-Path $PSScriptRoot 'Open-ROS-Terminal.ps1') -Distro $Distro -DisplayServer $DisplayServer
 $observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',
     '-File', "`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"", '-SessionDirectory', "`"$sessionDirectory`"", '-SimulationOnly')
-& $wslExe -d $Distro -- env "EDGEAI_SESSION_DIR=$linuxSession" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
+& $wslExe -d $Distro -- env "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SIM_ARENA=$Arena" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
 $simulationExitCode = $LASTEXITCODE
 if (-not $observer.WaitForExit(15000)) { $observer.Kill() }
 Write-Host "Simulation ended (exit code $simulationExitCode). This window stays open for inspection." -ForegroundColor Cyan

@@ -5,6 +5,7 @@ import math
 import xml.etree.ElementTree as ET
 import yaml
 import xacro
+import sys
 
 root = Path(__file__).resolve().parents[2]
 share = root/'src/edgeai_robot_description'
@@ -13,7 +14,9 @@ props = {p.get('name'): float(p.get('value')) for p in urdf
          if p.tag.endswith('property') and p.get('name') in (
              'plate_length','plate_width','wheel_x','wheel_radius','wheel_separation',
              'wheel_width','caster_x','caster_y','caster_offset','caster_wheel_radius','caster_wheel_width')}
-config = yaml.safe_load((root/'src/edgeai_navigation/config/nav2_exploration_rectangle.yaml').read_text())
+sys.path.insert(0, str(root/'src/edgeai_navigation/scripts'))
+from navigation_config import load_navigation
+config = load_navigation(root/'src/edgeai_navigation/config')
 local = config['local_costmap']['local_costmap']['ros__parameters']
 global_map = config['global_costmap']['global_costmap']['ros__parameters']
 assert local['footprint'] == global_map['footprint']
@@ -63,10 +66,9 @@ assert frontier['goal_preemption_complete_if_within_m'] <= config['controller_se
 assert config['planner_server']['ros__parameters']['GridBased']['plugin'] == 'nav2_navfn_planner::NavfnPlanner'
 assert local['resolution'] == global_map['resolution'] == .05
 spin_radius = max(math.hypot(x+math.copysign(pad,x),y+math.copysign(pad,y)) for x,y in corners)
-assert local['inflation_layer']['inflation_radius'] == global_map['inflation_layer']['inflation_radius']
-assert local['inflation_layer']['inflation_radius'] > 0
-# Local avoidance and global routing may use different soft-cost decay.
+# Local avoidance and global routing may use different soft inflation settings.
 for costmap in (local, global_map):
+    assert costmap['inflation_layer']['inflation_radius'] > 0
     assert costmap['inflation_layer']['cost_scaling_factor'] > 0
 assert follow['min_vel_x'] == config['velocity_smoother']['ros__parameters']['min_velocity'][0]
 assert follow['min_vel_x'] <= 0

@@ -1,0 +1,173 @@
+# DWB独立调参；运行时按到点策略派生普通/朝向/救援控制器。
+FollowPath:
+  plugin: nav2_rotation_shim_controller::RotationShimController
+  # DWB 倒车速度下限，m/s；负数允许倒车，须与速度平滑器匹配。
+  min_vel_x: -0.3
+  min_vel_y: 0.0
+  # DWB 前进速度上限，m/s；同时受 max_speed_xy 和平滑器限制。
+  max_vel_x: 0.6
+  max_vel_y: 0.0
+  # DWB 角速度幅值上限，rad/s；最终受平滑器正反向边界限制。
+  max_vel_theta: 0.9
+  min_speed_xy: 0.0
+  max_speed_xy: 0.6
+  min_speed_theta: 0.0
+  # 线加速度上限，m/s²；速度平滑器还有独立限制。
+  acc_lim_x: 0.4
+  acc_lim_y: 0.0
+  # 角加速度上限，rad/s²。
+  acc_lim_theta: 0.8
+  # 前向减速度边界，m/s²；负值，幅值越大允许越强制动。
+  decel_lim_x: -0.4
+  decel_lim_y: 0.0
+  # 角减速度边界，rad/s²；负值，需与速度平滑器制动限制协调。
+  decel_lim_theta: -0.8
+  vx_samples: 20
+  vy_samples: 5
+  vtheta_samples: 20
+  # DWB 候选轨迹预测时长，秒；更长能看得更远，但增加计算和碰撞约束。
+  sim_time: 1.7
+  linear_granularity: 0.05
+  angular_granularity: 0.025
+  # TF变换查询/时效容忍量，s；不是对所有传感器数据统一放宽年龄限制。
+  transform_tolerance: 0.3
+  # DWB终点窗口模板，m；运行时与各自GoalChecker同步，普通点移除RotateToGoal。
+  xy_goal_tolerance: 0.06
+  # RotateToGoal 判定平移已停稳的速度阈值，m/s；救援停车检查另有阈值。
+  trans_stopped_velocity: 0.05
+  short_circuit_trajectory_evaluation: true
+  stateful: true
+  # 轨迹评分器列表；通常选择加权总代价较小的合法轨迹，碰撞轨迹直接淘汰。
+  critics:
+  - RotateToGoal
+  - Oscillation
+  - ObstacleFootprint
+  - PreferForward
+  - GoalAlign
+  - PathAlign
+  - PathDist
+  - GoalDist
+  # 倒车增加固定代价 5；仍允许必要倒车，不额外惩罚停稳或原地转向。
+  PreferForward.scale: 5.0
+  # 前进偏好评分中的固定惩罚值，再乘 scale；用于倒车等非偏好运动。
+  PreferForward.penalty: 1.0
+  # 角速度幅值的额外惩罚系数；0不因转速额外增加该项代价。
+  PreferForward.theta_scale: 0.0
+  PreferForward.strafe_x: 0.0
+  PreferForward.strafe_theta: 0.0
+  # 路径朝向/前视点对齐代价权重；增大更偏向沿全局路径行驶。
+  PathAlign.scale: 20.0
+  # 目标对齐代价权重；不是路径跟随权重。
+  GoalAlign.scale: 1.0
+  PathAlign.forward_point_distance: 0.1
+  GoalAlign.forward_point_distance: 0.1
+  # 偏离全局路径的距离代价权重；增大减少抄近路，也可能限制绕障。
+  PathDist.scale: 20.0
+  # 接近目标的距离代价权重；与路径和障碍代价共同竞争。
+  GoalDist.scale: 20.0
+  # 朝向/救援控制器的终点旋转代价权重；普通控制器运行时移除此评分器。
+  RotateToGoal.scale: 20.0
+  # 进入终点窗口后的平移速度惩罚倍率；增大更倾向先减速再调角度。
+  RotateToGoal.slowing_factor: 1.0
+  # 终点转角评分的前瞻时刻，s；负值使用预测轨迹终点。
+  RotateToGoal.lookahead_time: -1.0
+  # 合法轨迹的障碍代价权重；硬碰撞仍会直接淘汰，不能靠减小权重放行。
+  ObstacleFootprint.scale: 0.05
+  # Rotation Shim 完成路径航向对齐后交给该主控制器，当前为 DWB。
+  primary_controller: dwb_core::DWBLocalPlanner
+  # Rotation Shim 接管转向的路径航向误差阈值，弧度。
+  angular_dist_threshold: 0.5
+  # Rotation Shim 退出转向的误差阈值，弧度。
+  angular_disengage_threshold: 0.25
+  forward_sampling_distance: 0.35
+  # Rotation Shim 原地对齐路径的角速度，rad/s；不是 Spin 恢复速度。
+  rotate_to_heading_angular_vel: 0.7
+  max_angular_accel: 0.8
+  simulate_ahead_time: 1.5
+  # 仅在新目标首次接收路径时启动路径航向对齐，避免每次重规划都重复接管。
+  rotate_to_heading_once: true
+  # 是否由 Rotation Shim 接管终点朝向对齐；false仍可由DWB处理有朝向要求的点。
+  rotate_to_goal_heading: false
+  use_path_orientations: false
+  closed_loop: true
+
+# 历史baseline/safe的控制器差异；rectangle使用上面的参数。
+profiles:
+  baseline:
+    BaseObstacle.scale: 0.02
+    GoalAlign.scale: 24.0
+    GoalDist.scale: 24.0
+    ObstacleFootprint.scale: null
+    PathAlign.scale: 32.0
+    PathDist.scale: 32.0
+    PreferForward.penalty: null
+    PreferForward.scale: null
+    PreferForward.strafe_theta: null
+    PreferForward.strafe_x: null
+    PreferForward.theta_scale: null
+    RotateToGoal.scale: 32.0
+    RotateToGoal.slowing_factor: 5.0
+    angular_disengage_threshold: null
+    angular_dist_threshold: null
+    closed_loop: null
+    critics:
+    - RotateToGoal
+    - Oscillation
+    - BaseObstacle
+    - GoalAlign
+    - PathAlign
+    - PathDist
+    - GoalDist
+    forward_sampling_distance: null
+    max_angular_accel: null
+    max_speed_xy: 0.2
+    max_vel_theta: 0.65
+    max_vel_x: 0.2
+    min_vel_x: 0.0
+    plugin: dwb_core::DWBLocalPlanner
+    primary_controller: null
+    rotate_to_goal_heading: null
+    rotate_to_heading_angular_vel: null
+    rotate_to_heading_once: null
+    simulate_ahead_time: null
+    use_path_orientations: null
+    xy_goal_tolerance: 0.15
+  safe:
+    BaseObstacle.scale: 0.02
+    GoalAlign.scale: 24.0
+    GoalDist.scale: 24.0
+    ObstacleFootprint.scale: null
+    PathAlign.scale: 32.0
+    PathDist.scale: 32.0
+    PreferForward.penalty: null
+    PreferForward.scale: null
+    PreferForward.strafe_theta: null
+    PreferForward.strafe_x: null
+    PreferForward.theta_scale: null
+    RotateToGoal.scale: 32.0
+    RotateToGoal.slowing_factor: 5.0
+    angular_disengage_threshold: null
+    angular_dist_threshold: null
+    closed_loop: null
+    critics:
+    - RotateToGoal
+    - Oscillation
+    - BaseObstacle
+    - GoalAlign
+    - PathAlign
+    - PathDist
+    - GoalDist
+    forward_sampling_distance: null
+    max_angular_accel: null
+    max_speed_xy: 0.2
+    max_vel_theta: 0.65
+    max_vel_x: 0.2
+    min_vel_x: 0.0
+    plugin: dwb_core::DWBLocalPlanner
+    primary_controller: null
+    rotate_to_goal_heading: null
+    rotate_to_heading_angular_vel: null
+    rotate_to_heading_once: null
+    simulate_ahead_time: null
+    use_path_orientations: null
+    xy_goal_tolerance: 0.15

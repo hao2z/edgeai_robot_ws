@@ -1,4 +1,12 @@
+# 公共导航配置；控制器参数分别见dwb/rpp/mppi_controller.yaml。
 # Axle-centred rectangle: front .1125 m, rear .3125 m, width .33 m; padding .01 m.
+# 矩形差速车探索配置；x向前、y向左，速度/距离/角度分别使用m/s、m、rad。
+# 启动脚本据此生成 nav2-runtime.yaml，派生普通/朝向/救援控制器、检查器和规划器。
+# 修改本文件供下次启动使用；实际运行参数以该次 nav2-runtime.yaml 为准。
+# 调参入口：跟踪/前视→rpp_controller.yaml；路线/倒车→smac_lattice.yaml。
+# 本文件优先看：①local/global膨胀 ②实际局部窗口 ③进展与到点判定 ④速度平滑限幅。
+# 全局路径复用、刷新周期、短距恢复候选→behavior_trees/explore_recovery.xml。
+# AMCL静态地图定位参数；当前自主探索由SLAM提供定位，本块不调节SLAM。
 amcl:
   ros__parameters:
     alpha1: 0.2
@@ -38,6 +46,7 @@ amcl:
     z_rand: 0.5
     z_short: 0.05
     scan_topic: scan
+# 行为树导航器；运行时行为树和逐点到达规则由启动脚本/仲裁器设置。
 bt_navigator:
   ros__parameters:
     global_frame: map
@@ -57,16 +66,18 @@ bt_navigator:
     error_code_names:
     - compute_path_error_code
     - follow_path_error_code
+# 局部路径跟踪：控制器由启动选项加载；这里只调公共到点和进展判定。
 controller_server:
   ros__parameters:
     # 控制器计算频率，Hz；不是全局路径重规划频率。
     controller_frequency: 20.0
+    # 等待代价地图完成更新的超时，s；增大允许更长等待，并不会提高地图更新频率。
     costmap_update_timeout: 0.3
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
     # 控制计算连续失败的容忍时间，秒；超时可使 FollowPath 失败。
-    failure_tolerance: 0.6
+    failure_tolerance: 1.0
     progress_checker_plugins:
     - progress_checker
     goal_checker_plugins:
@@ -75,132 +86,52 @@ controller_server:
     - FollowPath
     use_realtime_priority: false
     progress_checker:
+      # ── 按需调整：停滞多久进入恢复；放宽只能延迟失败，不能改善跟踪 ──
       plugin: nav2_controller::SimpleProgressChecker
       # 进展判定所需平移距离，米；原地旋转不计为平移进展。
       required_movement_radius: 0.1
       # 无足够平移进展的等待时间，仿真秒；超时触发失败并进入恢复。
-      # ROS 参数类型为 double：整秒也需写成 7.0，不能写 7。
-      movement_time_allowance: 7.0
+      movement_time_allowance: 8.0
     general_goal_checker:
+      # ── 优先调整：普通点只检查位置；朝向/救援检查器由启动脚本单独派生 ──
       stateful: true
-      plugin: nav2_controller::SimpleGoalChecker
+      plugin: nav2_controller::PositionGoalChecker
       # 到达位置容差，米；过大会提前成功，前沿可能仍未被观测。
       xy_goal_tolerance: 0.1
-      # 到达朝向容差，弧度。
-      yaw_goal_tolerance: 0.25
-    FollowPath:
-      plugin: nav2_rotation_shim_controller::RotationShimController
-      # DWB 倒车速度下限，m/s；负数允许倒车，须与速度平滑器匹配。
-      min_vel_x: -0.3
-      min_vel_y: 0.0
-      # DWB 前进速度上限，m/s；同时受 max_speed_xy 和平滑器限制。
-      max_vel_x: 0.6
-      max_vel_y: 0.0
-      # DWB 角速度幅值上限，rad/s；最终受平滑器正反向边界限制。
-      max_vel_theta: 0.9
-      min_speed_xy: 0.0
-      max_speed_xy: 0.6
-      min_speed_theta: 0.0
-      # 线加速度上限，m/s²；速度平滑器还有独立限制。
-      acc_lim_x: 0.4
-      acc_lim_y: 0.0
-      # 角加速度上限，rad/s²。
-      acc_lim_theta: 0.8
-      decel_lim_x: -0.4
-      decel_lim_y: 0.0
-      decel_lim_theta: -0.8
-      vx_samples: 20
-      vy_samples: 5
-      vtheta_samples: 20
-      # DWB 候选轨迹预测时长，秒；更长能看得更远，但增加计算和碰撞约束。
-      sim_time: 1.7
-      linear_granularity: 0.05
-      angular_granularity: 0.025
-      transform_tolerance: 0.3
-      # 到达位置容差，米；过大会提前成功，前沿可能仍未被观测。
-      xy_goal_tolerance: 0.1
-      trans_stopped_velocity: 0.05
-      short_circuit_trajectory_evaluation: true
-      stateful: true
-      critics:
-      - RotateToGoal
-      - Oscillation
-      - ObstacleFootprint
-      - GoalAlign
-      - PathAlign
-      - PathDist
-      - GoalDist
-      # 路径朝向/前视点对齐代价权重；增大更偏向沿全局路径行驶。
-      PathAlign.scale: 20.0
-      # 目标对齐代价权重；不是路径跟随权重。
-      GoalAlign.scale: 20.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.forward_point_distance: 0.1
-      # 偏离全局路径的距离代价权重；增大减少抄近路，也可能限制绕障。
-      PathDist.scale: 20.0
-      # 接近目标的距离代价权重；与路径和障碍代价共同竞争。
-      GoalDist.scale: 20.0
-      # 接近终点后的旋转代价权重；不控制恢复旋转速度。
-      RotateToGoal.scale: 40.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
-      # 合法轨迹的障碍代价权重；硬碰撞仍会直接淘汰，不能靠减小权重放行。
-      ObstacleFootprint.scale: 0.05
-      primary_controller: dwb_core::DWBLocalPlanner
-      # Rotation Shim 接管转向的路径航向误差阈值，弧度。
-      angular_dist_threshold: 0.5
-      # Rotation Shim 退出转向的误差阈值，弧度。
-      angular_disengage_threshold: 0.25
-      forward_sampling_distance: 0.35
-      # Rotation Shim 原地对齐路径的角速度，rad/s；不是 Spin 恢复速度。
-      rotate_to_heading_angular_vel: 0.7
-      max_angular_accel: 0.8
-      simulate_ahead_time: 1.5
-      rotate_to_heading_once: true
-      rotate_to_goal_heading: false
-      use_path_orientations: false
-      closed_loop: true
     enable_stamped_cmd_vel: false
+# 局部避障地图；激光+膨胀；depth_obstacles.yaml开关控制额外深度层。
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 10.0
-      publish_frequency: 5.0
+      # 代价地图内部更新频率，Hz；提高会增加传感器融合/栅格更新开销。
+      update_frequency: 20.0
+      # 代价地图对外发布频率，Hz；主要影响可视化/订阅者，不等于内部更新频率。
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
+      # 原生初始尺寸必须为整数；实际窗口在下方width_m/height_m设置。
       width: 3
       height: 3
+      # 栅格边长，m；减半会使相同面积的格子数约增至4倍。
       resolution: 0.05
       plugins:
+      - fractional_window
       - obstacle_layer
       - inflation_layer
+      # 实际窗口由此层width_m/height_m覆盖；支持小数米，修改后需重启。
+      fractional_window:
+        # ── 优先调整：实际局部窗口，m；过小缩短感知/预测范围，不宜继续盲目减小 ──
+        plugin: edgeai_navigation::FractionalWindowLayer
+        width_m: 3.0
+        height_m: 3.0
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        # 膨胀代价的距离衰减系数；增大则衰减更快、高代价带更窄。
-        cost_scaling_factor: 5.0
-        # 障碍膨胀范围，米；普通高代价区可通行，致命/内切区仍不可通行。
-        inflation_radius: 0.38
-      voxel_layer:
-        plugin: nav2_costmap_2d::VoxelLayer
-        enabled: true
-        publish_voxel_map: true
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
-        max_obstacle_height: 2.0
-        mark_threshold: 0
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: LaserScan
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+        # ── 优先调整：局部障碍软代价；不会缩小矩形车身的硬碰撞边界 ──
+        # 衰减系数(1/m)：越大衰减越快；半径(m)：软代价向外扩展距离。
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.4
+      # 保留的静态层配置；局部 plugins 未包含它，当前不启用。
       static_layer:
         plugin: nav2_costmap_2d::StaticLayer
         map_subscribe_transient_local: true
@@ -223,23 +154,27 @@ local_costmap:
           obstacle_min_range: 0.0
       footprint: '[[0.1125, 0.165], [-0.3125, 0.165], [-0.3125, -0.165], [0.1125,
         -0.165]]'
-      # 车身轮廓外扩边距，米；局部与全局分别配置。
+      # 车身四边额外净空，m；减小会降低安全余量，勿用来掩盖跟踪问题。
       footprint_padding: 0.005
+# 全局地图：静态地图 + 原始激光动态障碍，最后统一膨胀。
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 10.0
-      publish_frequency: 5.0
+      update_frequency: 20.0
+      publish_frequency: 10.0
       global_frame: map
       robot_base_frame: base_footprint
       resolution: 0.05
       track_unknown_space: true
       plugins:
       - static_layer
+      - obstacle_layer
       - inflation_layer
+      # 最大代价合并：激光清除只影响本层，不擦除静态墙体；保留原始/scan以感知另一台车。
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
+        combination_method: 1
         observation_sources: scan
         scan:
           topic: /scan
@@ -256,17 +191,17 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        # 膨胀代价的距离衰减系数；增大则衰减更快、高代价带更窄。
-        cost_scaling_factor: 3.0
-        # 障碍膨胀范围，米；普通高代价区可通行，致命/内切区仍不可通行。
-        inflation_radius: 0.38
+        # ── 优先调整：全局路线离墙偏好，配合smac_lattice.yaml的cost_penalty ──
+        # 系数越小，离墙较远处仍有明显代价；半径须覆盖期望的离墙范围。
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.4
       always_send_full_costmap: true
       use_sim_time: true
       transform_tolerance: 0.2
       footprint: '[[0.1125, 0.165], [-0.3125, 0.165], [-0.3125, -0.165], [0.1125,
         -0.165]]'
-      # 车身轮廓外扩边距，米；局部与全局分别配置。
       footprint_padding: 0.01
+# Lattice启动时全局padding至少0.02m，给跟踪留下比局部多1cm的余量。
 map_saver:
   ros__parameters:
     save_map_timeout: 5.0
@@ -275,18 +210,23 @@ map_saver:
     map_subscribe_transient_local: true
 planner_server:
   ros__parameters:
+    # 以下GridBased是NavFn对照配置；默认Lattice启动时整体由smac_lattice.yaml覆盖。
     # 规划性能预期频率，Hz；实际周期在行为树 RateController.hz。
-    expected_planner_frequency: 10.0
+    expected_planner_frequency: 20.0
     planner_plugins:
     - GridBased
+    # 等待代价地图完成更新的超时，s；增大允许更长等待，并不会提高地图更新频率。
     costmap_update_timeout: 1.0
     GridBased:
       plugin: nav2_navfn_planner::NavfnPlanner
       # NavFn 终点搜索容差，米；过大可能在前沿较远处结束路径，导致重复访问。
       tolerance: 0.1
+      # 允许全局路径穿过未知栅格；仍受障碍代价和局部传感器碰撞检查约束。
       allow_unknown: true
       use_astar: false
+      # true按路径末段方向设置终点yaw；逐点朝向/救援入口使用另一个设为false的规划器。
       use_final_approach_orientation: true
+# 路径平滑服务；当前探索行为树未调用 SmoothPath，不会自动平滑每次规划。
 smoother_server:
   ros__parameters:
     smoother_plugins:
@@ -296,6 +236,7 @@ smoother_server:
       tolerance: 1.0e-10
       max_its: 1000
       do_refinement: true
+# Spin/BackUp等原生动作；恢复、主动观察可共用这些动作参数。
 behavior_server:
   ros__parameters:
     local_costmap_topic: local_costmap/costmap_raw
@@ -307,6 +248,7 @@ behavior_server:
     - spin
     - backup
     - drive_on_heading
+    - escape_occupied
     - assisted_teleop
     - wait
     spin:
@@ -315,6 +257,9 @@ behavior_server:
       plugin: nav2_behaviors::BackUp
     drive_on_heading:
       plugin: nav2_behaviors::DriveOnHeading
+    # 仅边距占据时尝试低速退出；实际轮廓和padding由启动脚本从局部地图几何派生。
+    escape_occupied:
+      plugin: edgeai_navigation::OccupiedEscape
     wait:
       plugin: nav2_behaviors::Wait
     assisted_teleop:
@@ -322,6 +267,7 @@ behavior_server:
     local_frame: odom
     global_frame: map
     robot_base_frame: base_footprint
+    # TF变换查询/时效容忍量，s；不是对所有传感器数据统一放宽年龄限制。
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
     # Spin 恢复角速度上限，rad/s；仍受速度平滑器限制。
@@ -331,6 +277,7 @@ behavior_server:
     # Spin 恢复角加速度上限，rad/s²。
     rotational_acc_lim: 0.8
     enable_stamped_cmd_vel: false
+# FollowWaypoints专用设置；当前单点导航/目标搜寻不通过此航点跟随器。
 waypoint_follower:
   ros__parameters:
     loop_rate: 20
@@ -341,6 +288,7 @@ waypoint_follower:
       plugin: nav2_waypoint_follower::WaitAtWaypoint
       enabled: true
       waypoint_pause_duration: 200
+# 路线图导航参数；当前单点探索未使用路线图服务器。
 route_server:
   ros__parameters:
     boundary_radius_to_achieve_node: 1.0
@@ -364,19 +312,25 @@ route_server:
       plugin: nav2_route::DistanceScorer
     CostmapScorer:
       plugin: nav2_route::CostmapScorer
+# 速度平滑和限幅；位于局部控制器/动作输出与碰撞监视器之间。
 velocity_smoother:
   ros__parameters:
+    # ── 优先调整：最终速度/加速度边界；同时约束导航、倒车、恢复 ──
+    # RPP巡航速度和转弯角速度应匹配这些边界；独立限幅可能改变曲率。
+    # 速度插值/限幅频率，Hz；高于控制器频率时可插入中间速度。
     smoothing_frequency: 20.0
+    # RPP启动时自动设true以协调各轴加减速；绝对速度匹配由预测前的MatchedRPP负责。
     scale_velocities: false
+    # OPEN_LOOP使用上次输出速度作为状态，CLOSED_LOOP使用里程计反馈。
     feedback: OPEN_LOOP
     # 最终速度上界，顺序 [vx(m/s), vy(m/s), wz(rad/s)]；导航和恢复均受限。
     max_velocity:
-    - 0.6
+    - 0.4
     - 0.0
     - 0.9
     # 最终速度下界，顺序 [vx, vy, wz]；负号表示倒车/反向旋转，幅值可与正向不同。
     min_velocity:
-    - -0.3
+    - -0.2
     - 0.0
     - -0.9
     # 最终加速度上界，顺序 [ax, ay, az]，单位 m/s²、m/s²、rad/s²。
@@ -391,12 +345,15 @@ velocity_smoother:
     - -0.8
     odom_topic: odom
     odom_duration: 0.1
+    # 各轴输出死区，顺序[vx,vy,wz]；低于阈值置零，过大可能吞掉精细接近指令。
     deadband_velocity:
     - 0.0
     - 0.0
     - 0.0
+    # 多久未收到新速度指令后输出停车，s；不是导航总超时。
     velocity_timeout: 1.0
     enable_stamped_cmd_vel: false
+# 最终速度链的碰撞监视；可能在局部控制器正常输出时继续减速或停车。
 collision_monitor:
   ros__parameters:
     base_frame_id: base_footprint
@@ -404,7 +361,9 @@ collision_monitor:
     cmd_vel_in_topic: cmd_vel_smoothed
     cmd_vel_out_topic: cmd_vel
     state_topic: collision_monitor_state
+    # TF变换查询/时效容忍量，s；不是对所有传感器数据统一放宽年龄限制。
     transform_tolerance: 0.2
+    # 传感器源数据过期阈值，s；源超时可触发停车，不是允许盲走的时间。
     source_timeout: 1.0
     base_shift_correction: true
     stop_pub_timeout: 2.0
@@ -415,12 +374,13 @@ collision_monitor:
       action_type: approach
       footprint_topic: /local_costmap/published_footprint
       # 碰撞监视器 approach 的预测时间，秒；更大通常更早减速。
-      time_before_collision: 1.2
+      time_before_collision: 0.3
       simulation_time_step: 0.1
       # 触发此碰撞区域所需的最少传感器点数。
       min_points: 1
       visualize: false
       enabled: true
+    # 本层传感器输入 ID 列表；每个 ID 在下方有独立配置。
     observation_sources:
     - scan
     scan:
@@ -430,9 +390,9 @@ collision_monitor:
       max_height: 0.5
       enabled: true
     enable_stamped_cmd_vel: false
+# 充电靠桩参数；当前没有配置充电桩任务，不控制救援目标接近。
 docking_server:
   ros__parameters:
-    # 控制器计算频率，Hz；不是全局路径重规划频率。
     controller_frequency: 50.0
     initial_perception_timeout: 5.0
     wait_charge_timeout: 5.0
@@ -472,6 +432,7 @@ docking_server:
       projection_time: 5.0
       simulation_step: 0.1
       dock_collision_threshold: 0.3
+# Nav2轻量运动/激光模拟器（Loopback）的保留配置；当前Gazebo场景不使用，不是SLAM回环检测。
 loopback_simulator:
   ros__parameters:
     base_frame_id: base_footprint

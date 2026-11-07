@@ -48,13 +48,14 @@ def make_world(package_share, targets_path, output_path, arena_path=None):
     share = Path(package_share)
     config = load_yaml(targets_path)
     validate_targets(config)
-    manifest = load_yaml(share / 'models/manifest.yaml')
+    assets = share / config.get('assets_directory', 'models')
+    manifest = load_yaml(assets / 'manifest.yaml')
     if any(manifest[key] != config[key] for key in ('dictionary', 'marker_size_m', 'panel_size_m')):
         raise ValueError('Dictionary or marker size changed: regenerate target assets')
     tree = ET.parse(arena_path or share / 'worlds' / 'empty.sdf')
     world = tree.getroot().find('world')
     for target in config['targets']:
-        model_path = share / 'models' / ('aruco_' + str(target['id'])) / 'model.sdf'
+        model_path = assets / ('aruco_' + str(target['id'])) / 'model.sdf'
         if not model_path.is_file():
             raise ValueError(f'Missing marker asset {model_path}; run generate_targets.py')
         include = ET.SubElement(world, 'include')
@@ -62,14 +63,18 @@ def make_world(package_share, targets_path, output_path, arena_path=None):
         ET.SubElement(include, 'name').text = target['name']
         ET.SubElement(include, 'pose').text = ' '.join(map(str, target['pose']))
         # Visual-only rescue disks do not affect lidar, collision, or autonomy.
-        for index, (x, y) in enumerate(rescue_zones(target, config)):
+        zones = ([target['pose'][:2]] if 'rescue_radius_m' in target
+                 else rescue_zones(target, config))
+        for index, (x, y) in enumerate(zones):
             zone = ET.SubElement(world, 'model', name=f"zone_{target['name']}_{index}")
             ET.SubElement(zone, 'static').text = 'true'
             ET.SubElement(zone, 'pose').text = f'{x} {y} 0.003 0 0 0'
             link = ET.SubElement(zone, 'link', name='zone')
             visual = ET.SubElement(link, 'visual', name='development_zone')
             cylinder = ET.SubElement(ET.SubElement(visual, 'geometry'), 'cylinder')
-            ET.SubElement(cylinder, 'radius').text = str(config['development_rescue_geometry']['radius_m'])
+            radius = (target['rescue_radius_m'] if 'rescue_radius_m' in target
+                      else config['development_rescue_geometry']['radius_m'])
+            ET.SubElement(cylinder, 'radius').text = str(radius)
             ET.SubElement(cylinder, 'length').text = '0.002'
             material = ET.SubElement(visual, 'material')
             color = '0.1 0.7 0.2 0.5' if target['type'] == 'normal' else '0.1 0.3 0.9 0.5'

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Schedule safe observation turns only between natural navigation tasks."""
 import json
+import signal
 import math
 from pathlib import Path
 import subprocess
@@ -156,6 +157,9 @@ class ObservationScan(Node):
 
 
 def main():
+    def interrupted(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
     rclpy.init();node=ObservationScan()
     try:rclpy.spin(node)
     except (KeyboardInterrupt,rclpy.executors.ExternalShutdownException):pass

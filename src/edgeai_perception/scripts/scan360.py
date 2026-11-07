@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Startup-only scan: authority must hold STOPPED/IDLE until Spin terminates."""
 import json
+import signal
 import math
 from pathlib import Path
 import time
@@ -16,6 +17,9 @@ from action_msgs.msg import GoalStatus
 
 
 def main():
+    def interrupted(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
     rclpy.init()
     node = Node('target_scan360')
     node.declare_parameter('output_file', '')

@@ -118,8 +118,9 @@ class RecoveryEvidence:
         dx, dy = pose[0]-self.start[0], pose[1]-self.start[1]
         yaw = abs(math.atan2(math.sin(pose[2]-self.start[2]),
                              math.cos(pose[2]-self.start[2])))
-        self.movement_verified = (yaw >= .25 if self.kind == 'spin'
-                                  else math.hypot(dx, dy) >= .04)
+        # Short turns are 0.20/0.35 rad; padding-only exits may finish after millimetres.
+        self.movement_verified = (yaw >= .10 if self.kind == 'spin'
+                                  else math.hypot(dx, dy) >= (.002 if self.kind == 'escape_occupied' else .04))
         self.outcome = 'AWAITING_NAVIGATION' if self.movement_verified else 'UNVERIFIED_NO_MOTION'
 
     def note_navigation(self, distance, following, pose, goal_succeeded=False):

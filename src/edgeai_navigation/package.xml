@@ -6,14 +6,33 @@
   <maintainer email="jingweid@kth.se">Jingwei Dong</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_util</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>nlohmann_json</depend>
+  <depend>nav2_behavior_tree</depend>
+  <depend>behaviortree_cpp</depend>
+  <depend>nav2_msgs</depend>
+  <depend>nav2_rotation_shim_controller</depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
+  <depend>nav2_regulated_pure_pursuit_controller</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
+  <depend>std_msgs</depend>
+  <depend>nav2_behaviors</depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>action_msgs</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

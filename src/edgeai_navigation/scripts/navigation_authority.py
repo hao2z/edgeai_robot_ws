@@ -23,20 +23,28 @@ from std_srvs.srv import SetBool, Trigger
 from frontier_exploration_ros2.srv import ControlExploration
 
 from authority_policy import Authority, AuthorityConfig, RecoveryEvidence
+from goal_policy import managed_trees, CONTROLLERS, POLICIES
 
 
 class NavigationAuthority(Node):
     def __init__(self, directory, mode='AUTO', tree=''):
         super().__init__('navigation_authority')
-        self.config = AuthorityConfig()
+        self.config = AuthorityConfig(backend_action="navigation_backend/navigate_to_pose",
+            auto_action="exploration/navigate_to_pose", manual_action="navigate_to_pose",
+            explorer_control="exploration/control_exploration")
+        self.declare_parameter('allow_auto',True)
+        self.allow_auto=self.get_parameter('allow_auto').value
         self.policy = Authority(mode=mode)
         self.group = ReentrantCallbackGroup()
         self.backend = ActionClient(self, NavigateToPose,
                                     self.config.backend_action, callback_group=self.group)
         self.manual = ActionClient(self, NavigateToPose, self.config.manual_action, callback_group=self.group)
+        self.manual_heading = ActionClient(self,NavigateToPose,'navigation/heading_to_pose',callback_group=self.group)
+        self.manual_require_heading = False
         self.explorer = self.create_client(ControlExploration, self.config.explorer_control,
                                            callback_group=self.group)
         self.tree = tree
+        self.goal_trees = managed_trees(tree, directory)
         self.current = None
         self.pending = None
         self.admissions = {}
@@ -55,7 +63,7 @@ class NavigationAuthority(Node):
         # Frontier explorer is launched with autostart=true. AUTO therefore
         # starts in the confirmed desired state and needs no startup RPC.
         # A service call is reserved for an actual pause/resume transition.
-        self.explorer_sync = mode == 'AUTO'
+        self.explorer_sync = mode == 'AUTO' if self.allow_auto else False
         self.explorer_inflight = None
         self.explorer_request_at = 0.0
         self.explorer_request_seq = 0
@@ -63,27 +71,34 @@ class NavigationAuthority(Node):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.audit = (self.directory/'authority-events.jsonl').open('a', buffering=1)
-        self.publisher = self.create_publisher(String, '/navigation_authority/state',
+        self.publisher = self.create_publisher(String, 'navigation_authority/state',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.dispatched_goal = self.create_publisher(PoseStamped, 'navigation_authority/dispatched_goal',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.servers = [ActionServer(self, NavigateToPose, endpoint,
             execute_callback=self.execute, callback_group=self.group,
             handle_accepted_callback=self.upstream_accepted,
-            goal_callback=lambda request, owner=owner: self.admit(request, owner),
-            cancel_callback=self.cancel) for endpoint, owner in
-            [('/exploration/navigate_to_pose', 'AUTO'), ('/navigate_to_pose', 'MANUAL')]]
-        self.create_service(SetBool, '/navigation_authority/set_manual', self.set_manual,
+            goal_callback=lambda request, owner=owner, arrival=arrival: self.admit(request, owner, arrival),
+            cancel_callback=self.cancel) for endpoint, owner, arrival in
+            [('exploration/navigate_to_pose', 'AUTO', 'position'),
+             ('navigate_to_pose', 'MANUAL', 'position'),
+             ('navigation/heading_to_pose', 'MANUAL', 'heading'),
+             ('navigation/rescue_to_pose', 'MANUAL', 'rescue')]]
+        self.create_service(SetBool, 'navigation_authority/set_manual', self.set_manual,
                             callback_group=self.group)
-        self.create_service(Trigger, '/navigation_authority/observation_hold', self.observation_hold,
+        self.create_service(SetBool,'navigation_authority/set_goal_heading',self.set_goal_heading,
                             callback_group=self.group)
-        self.create_service(Trigger, '/navigation_authority/stop', self.stop,
+        self.create_service(Trigger, 'navigation_authority/observation_hold', self.observation_hold,
                             callback_group=self.group)
-        self.create_service(ControlExploration, '/control_exploration', self.control,
+        self.create_service(Trigger, 'navigation_authority/stop', self.stop,
                             callback_group=self.group)
-        self.create_subscription(PoseStamped, '/goal_pose', self.manual_pose, 1)
-        self.create_subscription(Odometry, '/odom', self.odometry, qos_profile_sensor_data)
+        self.create_service(ControlExploration, 'control_exploration', self.control,
+                            callback_group=self.group)
+        self.create_subscription(PoseStamped, 'goal_pose', self.manual_pose, 1)
+        self.create_subscription(Odometry, 'odom', self.odometry, qos_profile_sensor_data)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        for kind in ('backup', 'drive_on_heading', 'spin', 'wait', 'follow_path', 'navigate_to_pose'):
-            self.create_subscription(GoalStatusArray, '/navigation_backend/'+kind+'/_action/status',
+        for kind in ('backup', 'drive_on_heading', 'escape_occupied', 'spin', 'wait', 'follow_path', 'navigate_to_pose'):
+            self.create_subscription(GoalStatusArray, 'navigation_backend/'+kind+'/_action/status',
                 lambda msg, kind=kind: self.action_status(kind, msg), status_qos)
         self.create_timer(.25, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME),
                           callback_group=self.group)
@@ -99,7 +114,7 @@ class NavigationAuthority(Node):
         self.get_logger().info(f'{event_type}: {message}; task={self.policy.generation}; '
                                f'owner={self.policy.owner}; phase={self.policy.phase}; {details}')
 
-    def admit(self, request, owner):
+    def admit(self, request, owner, arrival='position'):
         if request.behavior_tree and request.behavior_tree != self.tree:
             self.event('GOAL_REJECTED', '拒绝客户端替换受管理的恢复行为树', requester=owner)
             return GoalResponse.REJECT
@@ -113,7 +128,7 @@ class NavigationAuthority(Node):
         if token is None and not replacing:
             self.event('GOAL_REJECTED', '控制权或交接状态不允许派发', requester=owner)
             return GoalResponse.REJECT
-        context = dict(token=token, owner=owner, upstream=None, backend=None, cancel_sent=False,
+        context = dict(token=token, owner=owner, arrival=arrival, upstream=None, backend=None, cancel_sent=False,
                        created=time.monotonic(), feedback=time.monotonic(),
                        cancel_at=None, mode_changed=None, resolution=Future(), ready=Future(),
                        terminal_observed=None)
@@ -121,7 +136,8 @@ class NavigationAuthority(Node):
         if replacing:
             self.pending = context
             self.policy.request_cancel(self.current['token'])
-            self.event('GOAL_QUEUED', '替代目标已接受；等待旧任务终态后交接', requester=owner)
+            self.event('GOAL_QUEUED', '替代目标已接受；等待旧任务终态后交接', requester=owner,
+                       arrival_policy=arrival)
             self.send_cancel()
         else:
             self.activate(context, token)
@@ -134,7 +150,8 @@ class NavigationAuthority(Node):
         self.distance, self.recovery, self.following = None, None, False
         self.recoveries.clear()
         context['ready'].set_result(True)
-        self.event('GOAL_RESERVED', '任务已占用唯一导航执行槽', requester=context['owner'])
+        self.event('GOAL_RESERVED', '任务已占用唯一导航执行槽', requester=context['owner'],
+                   arrival_policy=context['arrival'])
 
     def upstream_accepted(self, handle):
         context = self.admissions[id(handle.request)]
@@ -151,7 +168,9 @@ class NavigationAuthority(Node):
                 handle.abort()
             return NavigateToPose.Result(error_msg='Queued goal canceled before dispatch')
         token = context['token']
-        goal = NavigateToPose.Goal(pose=handle.request.pose, behavior_tree=self.tree)
+        goal = NavigateToPose.Goal(pose=handle.request.pose,
+                                  behavior_tree=self.goal_trees[context['arrival']])
+        self.dispatched_goal.publish(goal.pose)
         try:
             backend = await self.backend.send_goal_async(goal,
                 feedback_callback=lambda msg: self.feedback(token, msg.feedback))
@@ -163,7 +182,10 @@ class NavigationAuthority(Node):
             context['backend'] = backend
             self.policy.accepted(token)
             self.event('BACKEND_ACCEPTED', 'Nav2 已接单；恢复期间保留同一任务',
-                       goal_uuid=bytes(backend.goal_id.uuid).hex())
+                       goal_uuid=bytes(backend.goal_id.uuid).hex(), arrival_policy=context['arrival'],
+                       controller_id=CONTROLLERS[context['arrival']],
+                       goal_checker_id=POLICIES[context['arrival']][0],
+                       behavior_tree=goal.behavior_tree)
             self.send_cancel()
             backend_result = backend.get_result_async()
             backend_result.add_done_callback(
@@ -191,7 +213,8 @@ class NavigationAuthority(Node):
             # Mode takeover is an external abort to the former owner, not success.
             handle.abort()
         self.event('GOAL_TERMINAL', '已收到 Nav2 最终结果，允许任务交接',
-                   status=status, error_code=result.error_code, error_msg=result.error_msg)
+                   status=status, error_code=result.error_code, error_msg=result.error_msg,
+                   arrival_policy=context['arrival'])
         self.finish(context)
         return result
 
@@ -293,6 +316,9 @@ class NavigationAuthority(Node):
         return response
 
     def set_manual(self, request, response):
+        if not request.data and not self.allow_auto:
+            response.success,response.message=False,'真值导航测试不启动自动探索，请使用手动选点'
+            return response
         self.change_mode('MANUAL' if request.data else 'AUTO')
         response.success, response.message = True, 'Mode requested; inspect /navigation_authority/state for completion'
         return response
@@ -304,7 +330,8 @@ class NavigationAuthority(Node):
 
     def control(self, request, response):
         # Scheduling lives at one owner; silently forwarding delayed commands would race ownership.
-        if request.delay_seconds != 0.0 or request.quit_after_stop or request.action not in (1, 2):
+        if (request.delay_seconds != 0.0 or request.quit_after_stop or request.action not in (1, 2)
+                or (request.action==1 and not self.allow_auto)):
             response.accepted, response.message = False, 'Managed control supports immediate start/stop without node shutdown'
             return response
         self.change_mode('AUTO' if request.action == 1 else 'STOPPED')
@@ -313,11 +340,22 @@ class NavigationAuthority(Node):
         response.message = 'Request registered; authority state reports actual completion'
         return response
 
+    def set_goal_heading(self,request,response):
+        self.manual_require_heading=request.data
+        response.success=True
+        response.message='heading' if request.data else 'position'
+        self.event('MANUAL_GOAL_POLICY','后续RViz手动目标朝向要求已更新',require_heading=request.data)
+        return response
+
     def manual_pose(self, pose):
         if self.policy.mode != 'MANUAL' or self.policy.phase != 'IDLE':
             self.event('MANUAL_GOAL_REJECTED', 'RViz 目标需先取得手动控制权，且等待旧任务结束')
             return
-        future = self.manual.send_goal_async(NavigateToPose.Goal(pose=pose))
+        if not self.backend.server_is_ready():
+            self.event('MANUAL_GOAL_REJECTED', 'Nav2导航后端未就绪，请检查nav.log中的启动错误')
+            return
+        client=self.manual_heading if self.manual_require_heading else self.manual
+        future = client.send_goal_async(NavigateToPose.Goal(pose=pose))
         future.add_done_callback(self.manual_goal_response)
 
     def manual_goal_response(self, future):
@@ -378,7 +416,7 @@ class NavigationAuthority(Node):
                 evidence = RecoveryEvidence(kind, self.fresh_pose(), self.distance)
                 self.recoveries[key] = evidence
                 self.recovery = evidence
-                self.event('RECOVERY_STARTED', '执行原生恢复动作，原任务保持', kind=kind)
+                self.event('RECOVERY_STARTED', '执行恢复动作，原任务保持', kind=kind)
             elif item.status in (4, 5, 6) and key in self.recoveries:
                 evidence = self.recoveries.pop(key)
                 evidence.finish(item.status == 4, self.fresh_pose())
@@ -389,6 +427,9 @@ class NavigationAuthority(Node):
             self.seen = dict(list(self.seen.items())[-128:])
 
     def sync_explorer(self):
+        if not self.allow_auto:
+            self.explorer_sync = False
+            return
         desired = self.policy.mode == 'AUTO'
         # Resume only after the previous backend task has actually terminated.
         if desired and self.policy.phase != 'IDLE':
@@ -454,6 +495,7 @@ class NavigationAuthority(Node):
         self.sync_explorer()
         state = asdict(self.policy)
         state.update(command_sequence=self.command_sequence, completed_goals=self.completed_goals,
+                     arrival_policy=c['arrival'] if c else None,
                      explorer_paused=self.explorer_sync is False, goal_uuid=bytes(c['backend'].goal_id.uuid).hex() if c and c['backend'] else '',
                      distance_remaining=self.distance, clock_paused=now-self.clock_advanced >= 2.0,
                      following_path=self.following, explorer_error=self.explorer_error,

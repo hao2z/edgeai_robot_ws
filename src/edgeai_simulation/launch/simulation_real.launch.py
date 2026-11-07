@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -42,12 +42,26 @@ def setup(context):
                        LaunchConfiguration('world_file').perform(context))
     gz_share = Path(get_package_share_directory('ros_gz_sim'))
     gui = LaunchConfiguration('gui').perform(context).lower() == 'true'
+    truth = LaunchConfiguration('truth').perform(context).lower() == 'true'
+    navigation_test = LaunchConfiguration('navigation_test').perform(context).lower() == 'true'
+    if navigation_test and (not truth or LaunchConfiguration('slam').perform(context).lower()=='true'):
+        raise ValueError('Truth navigation requires truth:=true and slam:=false')
     actions = [IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(gz_share / 'launch/gz_sim.launch.py')),
         launch_arguments={'gz_args': f'-r {"" if gui else "-s "}{world_path}'}.items()),
         Node(package='ros_gz_bridge', executable='parameter_bridge', name='clock_bridge',
              arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
              parameters=[{'use_sim_time': True}])]
+    if navigation_test:
+        map_file=LaunchConfiguration('map_file').perform(context)
+        if not Path(map_file).is_file():raise ValueError('Truth navigation map_file missing')
+        actions.extend([
+            Node(package='nav2_map_server',executable='map_server',name='map_server',
+                 parameters=[{'use_sim_time':True,'yaml_filename':map_file}]),
+            Node(package='nav2_lifecycle_manager',executable='lifecycle_manager',name='test_map_lifecycle_manager',
+                 parameters=[{'use_sim_time':True,'autostart':True,'node_names':['map_server'],'bond_timeout':0.}]),
+            ExecuteProcess(cmd=['python3','-u',str(share/'tools/navigation_truth_localization.py'),
+                                '--ros-args','-p','use_sim_time:=true'],output='screen')])
     raw_xml = xacro.process_file(str(description_share / 'urdf/edgeai_robot_real.urdf.xacro')).toxml()
     # Diagnostic switches are environment-only so the normal competition
     # configuration remains unchanged.  Removing the sensor from the model
@@ -67,12 +81,34 @@ def setup(context):
                     gazebo.remove(sensor)
         raw_xml = ET.tostring(root, encoding='unicode')
     for robot in fleet:
-        ns = robot['name'] if multi else ''
+        primary_unscoped = LaunchConfiguration('primary_unscoped').perform(context).lower() == 'true'
+        ns = robot['name'] if multi and not (primary_unscoped and robot is fleet[0]) else ''
         prefix = ns + '/' if ns else ''
         entity = ns or 'edgeai_robot_real'
         topic = lambda name: '/' + prefix + name
-        description = support.prepare_robot(raw_xml, ns, imu)
-        pose = robot['pose'] if multi else [-1.5, -1.5, 0.01, 0, 0, 0]
+        robot_xml=raw_xml
+        robot_disabled=set(disabled_sensors)
+        if primary_unscoped and robot is not fleet[0]:
+            # The waiting/localizing follower needs lidar, not a second RGB-D renderer.
+            robot_disabled.add('rgbd_camera')
+            root=ET.fromstring(robot_xml)
+            for gazebo in root.findall('gazebo'):
+                for sensor in list(gazebo.findall('sensor')):
+                    if sensor.get('name')=='rgbd_camera':gazebo.remove(sensor)
+            robot_xml=ET.tostring(root,encoding='unicode')
+        description = support.prepare_robot(robot_xml, ns, imu)
+        if truth:
+            root = ET.fromstring(description)
+            plugin = ET.SubElement(ET.SubElement(root, 'gazebo'), 'plugin',
+                filename='gz-sim-pose-publisher-system', name='gz::sim::systems::PosePublisher')
+            for key, value in dict(publish_model_pose='true', publish_link_pose='false',
+                                   publish_nested_model_pose='false', publish_visual_pose='false',
+                                   publish_collision_pose='false', publish_sensor_pose='false',
+                                   use_pose_vector_msg='true', update_frequency='20' if navigation_test else '2').items():
+                ET.SubElement(plugin, key).text = value
+            description = ET.tostring(root, encoding='unicode')
+        configured_pose = LaunchConfiguration('use_robot_pose').perform(context).lower() == 'true'
+        pose = robot['pose'] if multi or configured_pose else [-1.5, -1.5, 0.01, 0, 0, 0]
         actions.append(Node(package='robot_state_publisher', executable='robot_state_publisher',
                             namespace=ns, name='robot_state_publisher',
                             parameters=[{'robot_description': description, 'use_sim_time': True}]))
@@ -91,7 +127,7 @@ def setup(context):
             'camera/camera_info': ('sensor_msgs/msg/CameraInfo', 'gz.msgs.CameraInfo'),
             'camera/points': ('sensor_msgs/msg/PointCloud2', 'gz.msgs.PointCloudPacked'),
         }
-        if 'rgbd_camera' in disabled_sensors:
+        if 'rgbd_camera' in robot_disabled:
             bridge_types = {name: value for name, value in bridge_types.items()
                             if not name.startswith('camera/')}
         if 'lidar_sensor' in disabled_sensors:
@@ -101,13 +137,41 @@ def setup(context):
         arguments = [f'{topic(name)}@{ros}[{gz}' for name, (ros, gz) in bridge_types.items()]
         arguments.append(f'{topic("cmd_vel")}@geometry_msgs/msg/Twist]gz.msgs.Twist')
         remaps = [(topic('tf'), '/tf')] if multi else []
+        if truth:
+            gz_pose = f'/model/{entity}/pose'
+            arguments.append(f'{gz_pose}@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V')
+            remaps.append((gz_pose, topic('truth/poses')))
         actions.append(Node(package='ros_gz_bridge', executable='parameter_bridge', namespace=ns,
                             name='ros_gz_bridge', arguments=arguments, remappings=remaps,
                             parameters=[{'use_sim_time': True}], output='screen'))
-        if LaunchConfiguration('slam').perform(context).lower() == 'true':
+        if truth:
+            actions.append(ExecuteProcess(cmd=[
+                'python3', '-u', str(share / 'tools/truth_diagnostics.py'), '--ros-args',
+                '-r', '__ns:=/'+ns, '-p', 'use_sim_time:=false',
+                '-p', 'world_file:='+str(world_path),
+                '-p', 'targets_file:='+LaunchConfiguration('targets_file').perform(context),
+                '-p', 'entity:='+entity, '-p', 'frame_prefix:='+(prefix or "''"),
+                '-p', 'shared_map:='+str(primary_unscoped).lower(),
+                '-p', 'reference_frame:='+('map' if navigation_test or LaunchConfiguration('slam').perform(context).lower() == 'true' else 'odom'),
+                '-p', 'log_directory:='+(os.environ.get('EDGEAI_TRUTH_DIRECTORY') or "''")], output='screen'))
+        if (LaunchConfiguration('slam').perform(context).lower() == 'true' and
+                (not primary_unscoped or robot is fleet[0])):
             params = support.load_yaml(share / 'config/slam_toolbox.yaml')['slam_toolbox']['ros__parameters']
             params.update(use_sim_time=True, map_frame=prefix + 'map', odom_frame=prefix + 'odom',
                           base_frame=prefix + 'base_footprint', scan_topic=topic('scan'))
+            if primary_unscoped and multi and count==2:
+                nav_share=Path(get_package_share_directory('edgeai_navigation'))
+                filtered=support.load_yaml(nav_share/'config/fleet_scan_filter.yaml')
+                # One source for the initial relative pose used by filter and localization.
+                filtered['relative_pose']=support.load_yaml(nav_share/'config/cooperative_rescue.yaml')['initial_relative_pose']
+                args=['python3','-u',str(nav_share/'scripts/fleet_scan_filter.py'),'--ros-args','-p','use_sim_time:=true']
+                args.extend(['-r','robot2/odom:=/'+fleet[1]['name']+'/odom'])
+                import yaml
+                filter_file=world_dir/'fleet-filter.yaml'
+                filter_file.write_text(yaml.safe_dump({'fleet_scan_filter':{'ros__parameters':filtered}}))
+                args.extend(['--params-file',str(filter_file)])
+                actions.append(ExecuteProcess(cmd=args,output='screen'))
+                params['scan_topic']=topic('scan_slam')
             actions.append(Node(package='slam_toolbox', executable='async_slam_toolbox_node',
                                 namespace=ns, name='slam_toolbox', parameters=[params],
                                 remappings=[('/map', topic('map')), ('/map_metadata', topic('map_metadata'))],
@@ -122,6 +186,7 @@ def setup(context):
             fixed = prefix + ('map' if LaunchConfiguration('slam').perform(context).lower() == 'true' else 'odom')
             rviz_text = rviz_text.replace('Fixed Frame: odom', 'Fixed Frame: ' + fixed)
             if multi:
+                rviz_text = rviz_text.replace('Value: /truth/markers', 'Value: '+topic('truth/markers'))
                 rviz_text = rviz_text.replace('Target Frame: base_link', 'Target Frame: ' + prefix + 'base_link')
                 for name in sorted(['robot_description', 'map', 'map_updates', 'initialpose', 'goal_pose', 'clicked_point'] + list(bridge_types), key=len, reverse=True):
                     if name != 'tf':
@@ -138,13 +203,18 @@ def generate_launch_description():
     share = Path(get_package_share_directory('edgeai_simulation'))
     return LaunchDescription([
         DeclareLaunchArgument('multi_robot', default_value='false'),
+        DeclareLaunchArgument('primary_unscoped', default_value='false'),
         DeclareLaunchArgument('robot_count', default_value='1'),
-        DeclareLaunchArgument('robots_file', default_value=str(share / 'config/robots.yaml')),
-        DeclareLaunchArgument('targets_file', default_value=str(share / 'config/targets.yaml')),
-        DeclareLaunchArgument('world_file', default_value=str(share / 'worlds/empty.sdf')),
+        DeclareLaunchArgument('robots_file', default_value=str(share / 'config/robots_midterm.yaml')),
+        DeclareLaunchArgument('use_robot_pose', default_value='true'),
+        DeclareLaunchArgument('targets_file', default_value=str(share / 'config/targets_midterm.yaml')),
+        DeclareLaunchArgument('world_file', default_value=str(share / 'worlds/midterm.sdf')),
         DeclareLaunchArgument('imu_file', default_value=str(share / 'config/imu.yaml')),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='false'),
         DeclareLaunchArgument('slam', default_value='false'),
+        DeclareLaunchArgument('truth', default_value='true'),
+        DeclareLaunchArgument('navigation_test', default_value='false'),
+        DeclareLaunchArgument('map_file', default_value=''),
         OpaqueFunction(function=setup),
     ])

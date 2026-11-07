@@ -81,11 +81,9 @@ computeCircumscribedCost / optimized non-circular collision checking 提示。
 | 目标定位 | 受标记真实尺寸、内参、外参、角点、图像时刻TF和SLAM轨迹修正共同影响 |
 | 救援成功 | 必须按官方机器人参考点进入救援区并满足连续停留时间，不能只依赖Nav2成功 |
 
-开发救援区半径为18 cm，原25 cm导航容差可在区外报告成功。新增
-`config/nav2_rescue_rectangle.yaml` 是Task 2接入候选：5 cm位置容差、
-线/角停车阈值0.02 m/s和0.05 rad/s，朝向容差π，避免强加规则未要求的
-最终朝向；规划备用终点容差同步为5 cm。救援判定与视觉末端修正仍待实现。
-单独使用此候选文件时，须像运行脚本一样将相对 lattice 路径解析到配置目录。
+历史开发救援区半径为18 cm，原25 cm导航容差可在区外报告成功。
+早期独立救援候选配置已移除；现在由 `normal_rescue.yaml` 或 `midterm_single_rescue.yaml`
+设置任务阈值，启动器生成专用 `rescue_goal_checker`。当前流程与判定见 `normal-rescue.md`。
 
 如果救援区按同一参考点计算，保守预算应满足：
 
@@ -127,8 +125,8 @@ computeCircumscribedCost / optimized non-circular collision checking 提示。
 前沿最小长度阈值恢复 5 格，预处理膨胀核半径恢复 1 格，保持各自物理尺度。
 SLAM 扫描匹配的搜索分辨率、机器人尺寸、障碍物膨胀半径均未改变。
 
-2026-10-29 MPPI 圆形对照：默认 MPPI 入口仍使用历史文件名
-nav2_exploration_rectangle_mppi.yaml，但全局/局部 costmap 已移除 footprint，
+2026-10-29 MPPI 圆形对照（历史记录，现拆分至mppi_controller.yaml及navigation_profiles.yaml）：
+当时全局/局部 costmap 已移除 footprint，
 改为 robot_radius=0.37 m、footprint_padding=0。此半径包络轮轴参考点下
 含 padding 的原矩形。CostCritic.consider_footprint=false；Collision Monitor
 继续订阅 costmap 发布的轮廓，现在接收到的是圆的多边形近似。

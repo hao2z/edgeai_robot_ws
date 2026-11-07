@@ -62,6 +62,15 @@ class EventReducer:
                 group[0], group[1] = self.clock(), 0
 
     def consume(self, source, line, stopping=False):
+        if source=='cooperative' and 'COOPERATIVE_' in line:
+            self.emit(source,'ERROR' if '"success": false' in line else 'INFO',line.split(']: ',1)[-1],line)
+            return
+        if source=='suspects' and ('SUSPECT_PROPOSED:' in line or 'SUSPECT_RETAINED:' in line):
+            self.emit(source,'INFO',line.split(']: ',1)[-1],line)
+            return
+        if source == 'rescue' and 'RESCUE_' in line:
+            self.emit(source, 'ERROR' if ('RESCUE_FAILED:' in line or 'RESCUE_RESULT: 失败' in line) else 'INFO', line.split(']: ', 1)[-1], line)
+            return
         if source == 'observation' and 'OBSERVATION_' in line:
             self.emit(source, 'ERROR' if 'ERROR' in line or 'UNKNOWN' in line else 'INFO',
                       line.split(']: ', 1)[-1], line)
@@ -70,7 +79,7 @@ class EventReducer:
             self.emit(source, 'WARN' if 'INCOMPLETE' in line or 'ERROR' in line else 'INFO',
                       line.split(']: ', 1)[-1], line)
             return
-        if source == 'perception' and ('TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line):
+        if source == 'perception' and ('TARGET_DECODED:' in line or 'TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line):
             self.emit(source, 'INFO', line.split(']: ', 1)[-1], line)
             return
         if source == 'authority':
@@ -150,7 +159,7 @@ def follow(directory):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     directory = Path(directory)
-    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'scan360', 'observation')
+    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'suspects', 'scan360', 'observation', 'rescue', 'cooperative')
     for name in names:
         (directory / f'{name}.log').touch(exist_ok=True)
     handles = {name: (directory / f'{name}.log').open(encoding='utf-8', errors='replace')
@@ -159,7 +168,7 @@ def follow(directory):
     captured = set()
     terminal_output = True
     color = not os.environ.get('NO_COLOR') and (sys.stdout.isatty() or os.environ.get('FORCE_COLOR'))
-    colors = {'INFO': '\033[36m', 'OK': '\033[32m', 'WARN': '\033[33m', 'ERROR': '\033[31m'}
+    colors = {'WARN': '\033[33m', 'ERROR': '\033[31m'}
     with (directory / 'console.log').open('a', encoding='utf-8', buffering=1) as console, \
          (directory / 'events.log').open('a', encoding='utf-8', buffering=1) as events, \
          (directory / 'events.jsonl').open('a', encoding='utf-8', buffering=1) as structured:
@@ -172,7 +181,11 @@ def follow(directory):
                 description=description, evidence=evidence, **fields), ensure_ascii=False) + '\n')
             if terminal_output:
                 try:
-                    print(colors[level]+text+'\033[0m' if color else text, flush=True)
+                    # Keep timestamps and message text neutral; highlight severity only.
+                    display = text
+                    if color and level in colors:
+                        display = text.replace(f'[{level}]', f'{colors[level]}[{level}]\033[0m', 1)
+                    print(display, flush=True)
                 except (BrokenPipeError, OSError):
                     terminal_output = False
         reducer = EventReducer(emit)

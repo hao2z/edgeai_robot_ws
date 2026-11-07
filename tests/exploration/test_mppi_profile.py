@@ -2,15 +2,18 @@
 from pathlib import Path
 import unittest
 import yaml
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT/'src/edgeai_navigation/config'
+sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
+from navigation_config import load_navigation
 
 
 class PredictiveProfileTests(unittest.TestCase):
     def test_shared_geometry_and_actuator_limits(self):
-        baseline = yaml.safe_load((CONFIG/'nav2_exploration_rectangle.yaml').read_text())
-        config = yaml.safe_load((CONFIG/'nav2_exploration_rectangle_mppi.yaml').read_text())
+        baseline = load_navigation(CONFIG,'dwb')
+        config = load_navigation(CONFIG,'mppi')
         c = config['controller_server']['ros__parameters']
         f = c['FollowPath']
         s = config['velocity_smoother']['ros__parameters']

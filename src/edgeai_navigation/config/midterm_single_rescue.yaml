@@ -1,0 +1,72 @@
+# Default midterm mission: one robot explores, then rescues detected S1 once.
+enabled: true
+require_confirmation: false
+goal_source: detected_target
+target_id: 1
+search_enabled: true  # 未定位S1时，在已知空闲区域补充相机观察。
+alignment_enabled: true  # 优先由Shim完成位姿；导航成功后独立检查，不达标才进行末端修正。
+alignment_step_m: 0.03  # 每步最多前进3cm；仅朝缩小位置误差的方向前进。
+alignment_speed_mps: 0.03
+alignment_max_actions: 20  # 旋转和前进合计上限。
+alignment_timeout_s: 60.0  # 共用任务总预算，修正阶段另限60仿真秒。
+search_suspects:
+  enabled: true
+  max_positions: 6  # 所有疑似点合计最多6个观察位；表面法线优先，同一假设优先换相反侧。
+  standoff_m: 0.80
+  min_standoff_m: 0.55
+  max_standoff_m: 1.40
+  panel_size_m: 0.20
+  image_margin: 0.10  # 整块面板投影距离四边至少留10%画面。
+  min_panel_side_px: 24.0
+  view_half_angle_deg: 70.0
+  view_angle_samples: 7
+  min_view_spacing_m: 0.30
+  max_age_s: 8.0  # 实时候选年龄；建图保留的多帧候选不受此上限淘汰。
+  min_confidence: 0.5
+  known_target_radius_m: 0.30
+search_timeout_s: 180.0  # 搜寻仿真时间上限；同时受总墙钟预算限制。
+search_max_positions: 10
+search_spacing_m: 1.0
+search_clearance_m: 0.40  # 启动器至少采用车身外接半径加0.05米。
+search_navigation_timeout_s: 16.0  # 单次观察位姿导航的仿真秒。
+search_spin_timeout_s: 8.0  # 每个位置连续转2π的仿真时间上限；转速在behavior_server配置。
+search_frustum:
+  enabled: true
+  candidate_pool_size: 24  # 评分池；实际访问仍受 search_max_positions 限制。
+  yaw_samples: 8
+  direction_bins: 4  # 同一区域从不同侧观察，分别记录覆盖收益。
+  sample_step_m: 0.20
+  max_samples: 2500
+  near_m: 0.25
+  far_m: 2.5
+  heights_m: [0.20, 0.35, 0.50]  # 潜在目标高度采样；不是已知目标位置。
+  travel_weight: 0.5
+  turn_weight: 0.15
+map_pose: [0.0, 0.0, 0.0]
+# Approach from the observed marker normal. Stay away from the stand.
+normal_offset_m: 0.35
+approach_selection:
+  enabled: true  # 先验全局规划；终点不可达时换救援圈内停车位，保持目标ID。
+  angles_deg: [0, 30, -30, 60, -60]
+  extra_distances_m: [0.30, 0.40]
+  max_candidates: 12
+  planning_timeout_s: 10.0
+target_update_distance_m: 0.10  # 偏移点移动达到此距离时重新派发导航。
+target_update_yaw_rad: 0.25
+target_update_interval_s: 1.0  # 墙钟秒；导航途中检查最新定位的间隔。
+position_tolerance_m: 0.10
+# Offset + goal tolerance <= radius guarantees the estimated target distance
+# stays <= 0.45 m while dwell passes. This is not independent ground truth.
+target_radius_m: 0.50
+yaw_tolerance_rad: 0.25
+dwell_s: 10.0
+stopped_linear_mps: 0.02
+stopped_angular_rps: 0.05
+max_data_age_s: 0.5
+navigation_timeout_s: 180.0
+navigation_max_retries: 2  # 每个导航点最多额外重试2次；同一点合计最多3次下发。
+rescue_max_retries: 2  # 导航/末端修正失败后先重检救援条件，仍不满足才重做救援，最多额外2轮。
+navigation_retry_delay_s: 1.0  # 墙钟秒；等待后仍须检查仲裁空闲及TF新鲜度。
+navigation_retry_wait_s: 5.0  # 墙钟秒；单次等待恢复上限，受总预算约束。
+retry_tf_max_age_s: 0.15  # 配对位姿的仿真时间年龄，小于DWB的0.30秒容差。
+wall_timeout_s: 600.0

@@ -16,6 +16,8 @@ def generate(package_dir, config_path):
     spec.loader.exec_module(support)
     config = support.load_yaml(config_path)
     support.validate_targets(config)
+    assets = package_dir / config.get('assets_directory', 'models')
+    assets.mkdir(parents=True, exist_ok=True)
     dictionary_name = config['dictionary']
     if not hasattr(cv2.aruco, dictionary_name):
         raise ValueError('Unknown OpenCV ArUco dictionary: ' + dictionary_name)
@@ -32,9 +34,11 @@ def generate(package_dir, config_path):
         marker_id = target['id']
         if not isinstance(marker_id, int) or not 0 <= marker_id < len(dictionary.bytesList):
             raise ValueError(f'Marker ID outside dictionary: {marker_id}')
-        directory = package_dir / 'models' / f'aruco_{marker_id}'
+        directory = assets / f'aruco_{marker_id}'
         directory.mkdir(parents=True, exist_ok=True)
-        marker = cv2.aruco.generateImageMarker(dictionary, marker_id, marker_px)
+        draw = (cv2.aruco.generateImageMarker if hasattr(cv2.aruco, 'generateImageMarker')
+                else cv2.aruco.drawMarker)
+        marker = draw(dictionary, marker_id, marker_px)
         panel = np.full((panel_px, panel_px), 255, dtype=np.uint8)
         panel[margin:margin + marker_px, margin:margin + marker_px] = marker
         if not cv2.imwrite(str(directory / 'marker.png'), panel):
@@ -42,7 +46,7 @@ def generate(package_dir, config_path):
         size = config['panel_size_m']
         # Render binary modules as flat geometry. This avoids renderer-specific
         # PBR/mesh UV issues while preserving the exact generated dictionary bits.
-        cells = cv2.aruco.generateImageMarker(dictionary, marker_id, dictionary.markerSize + 2)
+        cells = draw(dictionary, marker_id, dictionary.markerSize + 2)
         cell_size = config['marker_size_m'] / cells.shape[0]
         visuals = []
         for row in range(cells.shape[0]):
@@ -68,12 +72,15 @@ def generate(package_dir, config_path):
         (directory / 'model.sdf').write_text(model)
         (directory / 'model.config').write_text(f'<?xml version="1.0"?><model><name>aruco_{marker_id}</name><version>1.0</version><sdf version="1.9">model.sdf</sdf></model>')
         # Round-trip validation rejects mirrored, invalid or incorrectly encoded assets.
-        corners, ids, _ = cv2.aruco.ArucoDetector(dictionary).detectMarkers(panel)
+        if hasattr(cv2.aruco, 'ArucoDetector'):
+            corners, ids, _ = cv2.aruco.ArucoDetector(dictionary).detectMarkers(panel)
+        else:
+            corners, ids, _ = cv2.aruco.detectMarkers(panel, dictionary)
         if ids is None or ids.flatten().tolist() != [marker_id]:
             raise RuntimeError(f'Generated marker {marker_id} did not decode')
         ET.fromstring(model)
         manifest['ids'].append(marker_id)
-    (package_dir / 'models' / 'manifest.yaml').write_text(yaml.safe_dump(manifest))
+    (assets / 'manifest.yaml').write_text(yaml.safe_dump(manifest))
     print(yaml.safe_dump(manifest), end='')
 
 
@@ -86,5 +93,5 @@ if __name__ == '__main__':
         package = args.package_dir.resolve()
     else:
         from ament_index_python.packages import get_package_share_directory
-        package = Path(get_package_share_directory('edgeai_robot_description'))
+        package = Path(get_package_share_directory('edgeai_simulation'))
     generate(package, args.config or package / 'config/targets.yaml')

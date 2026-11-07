@@ -4,15 +4,18 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 
 import rclpy
 from rclpy.action import ActionClient, ActionServer, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy
 from rclpy.task import Future
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import SetBool, Trigger
 from frontier_exploration_ros2.srv import ControlExploration
 
@@ -66,8 +69,12 @@ class ActionHandshakeTest(unittest.TestCase):
             server = ActionServer(backend_node, NavigateToPose,
                 '/navigation_backend/navigate_to_pose', execute_callback=execute,
                 cancel_callback=lambda handle: CancelResponse.ACCEPT, callback_group=group)
-            authority = NavigationAuthority(directory)
+            tree=Path(__file__).resolve().parents[2]/'src/edgeai_navigation/config/behavior_trees/explore_recovery.xml'
+            authority = NavigationAuthority(directory, tree=str(tree))
             client_node = Node('replacement_owner')
+            dispatched = []
+            client_node.create_subscription(PoseStamped, '/navigation_authority/dispatched_goal',
+                dispatched.append, QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
             client = ActionClient(client_node, NavigateToPose, '/exploration/navigate_to_pose')
             executor = SingleThreadedExecutor()
             for node in (backend_node, authority, client_node):
@@ -85,10 +92,16 @@ class ActionHandshakeTest(unittest.TestCase):
 
             try:
                 until(lambda: authority.backend.server_is_ready() and client.server_is_ready())
-                first = result(client.send_goal_async(NavigateToPose.Goal()))
+                request = NavigateToPose.Goal()
+                request.pose.header.frame_id = 'map'
+                request.pose.pose.position.x, request.pose.pose.position.y = 3.594, -.518
+                request.pose.pose.orientation.w = 1.
+                first = result(client.send_goal_async(request))
                 self.assertTrue(first.accepted)
                 first_result = first.get_result_async()
                 until(lambda: len(executions) == 1 and authority.policy.phase == 'ACTIVE')
+                until(lambda: bool(dispatched))
+                self.assertEqual(dispatched[-1], executions[0].request.pose)
                 second = result(client.send_goal_async(NavigateToPose.Goal()))
                 self.assertTrue(second.accepted)
                 second_result = second.get_result_async()
@@ -116,6 +129,47 @@ class ActionHandshakeTest(unittest.TestCase):
                 result(third_result)
                 until(lambda: authority.policy.phase == 'IDLE')
                 self.assertEqual(len(executions), 3)
+                # A queued point carries its own policy, and cannot change the
+                # active point's tree. A later ordinary point resets naturally.
+                authority.change_mode('MANUAL')
+                ordinary=ActionClient(client_node,NavigateToPose,'/navigate_to_pose')
+                heading=ActionClient(client_node,NavigateToPose,'/navigation/heading_to_pose')
+                rescue=ActionClient(client_node,NavigateToPose,'/navigation/rescue_to_pose')
+                until(lambda: ordinary.server_is_ready() and heading.server_is_ready()
+                      and rescue.server_is_ready() and authority.policy.phase=='IDLE')
+                a=result(ordinary.send_goal_async(request)); ar=a.get_result_async()
+                until(lambda: len(executions)==4)
+                active_tree=executions[3].request.behavior_tree
+                b=result(heading.send_goal_async(request)); br=b.get_result_async()
+                until(lambda: executions[3].is_cancel_requested)
+                self.assertEqual(len(executions),4)
+                self.assertEqual(executions[3].request.behavior_tree,active_tree)
+                pending[3].set_result(True);result(ar)
+                until(lambda: len(executions)==5)
+                pending[4].set_result(True);self.assertEqual(result(br).status,4)
+                until(lambda: authority.policy.phase=='IDLE')
+                for expected,client in enumerate((rescue,ordinary),6):
+                    handle=result(client.send_goal_async(request)); done=handle.get_result_async()
+                    until(lambda: len(executions)==expected and authority.policy.phase=='ACTIVE')
+                    pending[-1].set_result(True);self.assertEqual(result(done).status,4)
+                    until(lambda: authority.policy.phase=='IDLE')
+                policies=[('general_goal_checker','GridBased'),('heading_goal_checker','GridBasedHeading'),
+                          ('rescue_goal_checker','GridBasedHeading'),('general_goal_checker','GridBased')]
+                for handle,(checker,planner) in zip(executions[3:],policies):
+                    bound=ET.parse(handle.request.behavior_tree)
+                    self.assertEqual(bound.find('.//FollowPath').get('goal_checker_id'),checker)
+                    self.assertEqual(bound.find('.//ComputePathToPose').get('planner_id'),planner)
+                self.assertEqual(len(executions),7)
+                # RViz can select a per-point yaw rule through the new preference.
+                for expected,require_heading,controller in [(8,True,'FollowPathHeading'),(9,False,'FollowPath')]:
+                    response=authority.set_goal_heading(SetBool.Request(data=require_heading),SetBool.Response())
+                    self.assertTrue(response.success)
+                    authority.manual_pose(request.pose)
+                    until(lambda:len(executions)==expected)
+                    bound=ET.parse(executions[-1].request.behavior_tree)
+                    self.assertEqual(bound.find('.//FollowPath').get('controller_id'),controller)
+                    pending[-1].set_result(True)
+                    until(lambda:authority.policy.phase=='IDLE')
             finally:
                 executor.shutdown()
                 server.destroy()

@@ -14,6 +14,15 @@ spec.loader.exec_module(module)
 
 
 class SessionLoggingTest(unittest.TestCase):
+    def test_suspect_discovery_is_visible_in_live_monitor(self):
+        records=[]
+        reducer=module.EventReducer(lambda *args,**kw:records.append(args))
+        reducer.consume('suspects','[INFO] [1] [suspect_targets]: SUSPECT_PROPOSED: 疑似目标 #0，法线轴=90°')
+        reducer.consume('suspects','[INFO] [2] [suspect_targets]: SUSPECT_RETAINED: 疑似目标 #0，多帧保留')
+        self.assertEqual(len(records),2)
+        self.assertIn('法线轴',records[0][2])
+        self.assertIn('SUSPECT_RETAINED',records[1][2])
+
     def test_success_duplicates_and_recovered_timing_do_not_spam(self):
         records, now = [], [0.0]
         reducer = module.EventReducer(lambda *a, **kw: records.append(a), lambda: now[0])

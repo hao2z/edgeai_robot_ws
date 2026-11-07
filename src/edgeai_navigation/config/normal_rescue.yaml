@@ -1,0 +1,36 @@
+# 开发场景救援协议，官方尺寸/停留标准公布后更新。参考点为 base_footprint。
+enabled: true  # 探索自然完成后执行一次；时间到/进程失败不会启动救援。
+require_confirmation: false  # 一次有效定位即可救援；多帧确认仅记录质量，不作为门槛。
+goal_source: detected_target  # detected_target 或 map_pose
+# -1：选择已定位普通目标中观测数最多者；指定 ID 可固定目标。
+target_id: -1
+search_enabled: true
+search_suspects:
+  enabled: false  # 中期场景默认启用；其他目标尺寸需配置检测节点。
+search_timeout_s: 120.0
+search_max_positions: 6
+search_spacing_m: 1.0
+search_clearance_m: 0.40
+search_navigation_timeout_s: 20.0
+search_spin_timeout_s: 30.0  # 每个位置连续转2π；发现目标立即取消旋转并转入救援。
+search_frustum:
+  enabled: false  # 中期场景默认启用；其他场景可单独选择。
+# map_pose 模式显式指定地图坐标 [x, y, yaw]，单位米、弧度。
+map_pose: [0.0, 0.0, 0.0]
+normal_offset_m: 0.70  # 沿标记朝外法线偏移，机器人最终面向标记。
+target_update_distance_m: 0.10
+target_update_yaw_rad: 0.25
+target_update_interval_s: 1.0
+position_tolerance_m: 0.10
+yaw_tolerance_rad: 0.25
+dwell_s: 3.0  # 连续满足位姿及停车条件，使用仿真时间。
+stopped_linear_mps: 0.02
+stopped_angular_rps: 0.05
+max_data_age_s: 0.5
+navigation_timeout_s: 180.0  # 仿真时间；恢复动作仍由 Nav2 BT 执行。
+navigation_max_retries: 2  # ABORTED后最多额外重试2次；取消/控制权变化不重试。
+rescue_max_retries: 2  # 任务级失败后重检，并有界重试；总时间预算不重置。
+navigation_retry_delay_s: 1.0  # 墙钟秒。
+navigation_retry_wait_s: 5.0  # 等待空闲控制槽及新鲜TF的墙钟上限。
+retry_tf_max_age_s: 0.15  # 配对位姿的最大仿真时间年龄。
+wall_timeout_s: 600.0  # 暂停/失联兜底，独立于建图 Duration。

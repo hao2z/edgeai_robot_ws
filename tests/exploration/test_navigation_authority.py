@@ -109,6 +109,13 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(r.note_navigation(0, True, (1, 0, 0), True))
         self.assertEqual(r.outcome, 'UNVERIFIED_NO_ODOMETRY')
 
+    def test_short_recovery_turn_and_padding_exit_have_matching_motion_thresholds(self):
+        spin=RecoveryEvidence('spin',(0,0,0),2.)
+        spin.finish(True,(0,0,.2));self.assertTrue(spin.movement_verified)
+        escape=RecoveryEvidence('escape_occupied',(0,0,0),2.)
+        escape.finish(True,(-.006,0,0));self.assertTrue(escape.movement_verified)
+        self.assertFalse(escape.recovered)  # Motion alone is not navigation recovery.
+
 
 if __name__ == '__main__':
     unittest.main()

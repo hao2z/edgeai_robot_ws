@@ -12,9 +12,9 @@ MPPI 是尚未通过起步方向验收的实验配置，须显式使用 `-Contro
 .\Start-Autonomous-Exploration.ps1 -Controller mppi -Duration 300
 ```
 
-专用配置为 `src/edgeai_navigation/config/nav2_exploration_rectangle_mppi.yaml`，
-由 `src/edgeai_navigation/tools/prepare_mppi_config.py` 组合现有矩形 DWB 几何配置和 MPPI 基础参数生成。
-完整配置生成入口 `prepare_nav2_config.py` 同样调用该函数。
+控制器参数在 `src/edgeai_navigation/config/mppi_controller.yaml`。
+公共导航参数在 `nav2_exploration_rectangle.yaml`，历史圆形对照差异在 `navigation_profiles.yaml`。
+启动器通过 `navigation_config.py` 组合三者，再应用所选全局规划器和到点策略；不再生成或维护重复的整套MPPI导航配置。
 runner 必须同时选择 mppi + rectangle，避免 rectangle 配置覆盖 controller 选择而实际仍运行 DWB。
 
 控制器直接使用 MPPI DiffDrive，不再经过 Rotation Shim。预测为 80 步 × 0.05 秒 = 4 秒，

@@ -1,5 +1,9 @@
 # Single-robot autonomous exploration: development results
 
+> 当前状态（2026-11-07）：默认任务已扩展为单机建图 → S1 → 共享地图/双 AMCL → C1 双机救援，
+> Windows 默认 RPP + Smac Lattice。已有完整成功轮次，见 [项目状态](docs/project-status.md)。
+> 下方 2026-10-29/30 的参数、限制和实验是历史基线，不代表当前默认配置；当前值见配置文件和每轮快照。
+
 The default integration uses SLAM Toolbox, Nav2 DWB and upstream
 `frontier_exploration_ros2` 1.6.1, pinned to
 `11864e4ac6789dc81fd71bad51e43339c01deca2`. Historical upstream validation is described below; current adapter tests and
@@ -24,8 +28,11 @@ MPPI 是独立比较配置，不能把 DWB 的参数与测试结论直接套用�
 
 | 经常调整的内容 | 配置位置 |
 |---|---|
-| DWB 速度、评分、进展检查、碰撞模型 | `src/edgeai_navigation/config/nav2_exploration_rectangle.yaml` |
-| MPPI 独立比较配置 | `src/edgeai_navigation/config/nav2_exploration_rectangle_mppi.yaml` |
+| DWB 速度、采样和评分 | `src/edgeai_navigation/config/dwb_controller.yaml` |
+| RPP 前视、速度和转弯 | `src/edgeai_navigation/config/rpp_controller.yaml` |
+| MPPI 采样、预测和评分 | `src/edgeai_navigation/config/mppi_controller.yaml` |
+| 公共地图、车身、进展检查、恢复及速度平滑 | `src/edgeai_navigation/config/nav2_exploration_rectangle.yaml` |
+| baseline/safe 与 MPPI 比较时的公共参数差异 | `src/edgeai_navigation/config/navigation_profiles.yaml` |
 | 重规划周期、恢复顺序、重试次数 | `src/edgeai_navigation/config/behavior_trees/explore_recovery.xml` |
 | 目标评估、抢占、失败区域抑制 | `src/edgeai_exploration/config/frontier_exploration.yaml` |
 
@@ -68,7 +75,7 @@ DWB 位置到达容差与 NavFn 目标搜索容差均为 0.10 m。
 
 ```bash
 cd /mnt/d/KTH/Competition/edgeai_robot_ws
-bash scripts/simulation/start-autonomous-exploration.sh --controller dwb --arena competition --duration 300
+bash scripts/simulation/start-autonomous-exploration.sh --controller dwb --arena midterm --duration 300
 ```
 
 This runs the test in the current terminal and opens Gazebo/RViz through WSLg.
@@ -79,7 +86,7 @@ named options. `--duration` is wall-clock seconds, not simulated seconds.
 ## Windows launch
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\KTH\Competition\edgeai_robot_ws\Start-Autonomous-Exploration.ps1 -Controller dwb -Arena competition -Duration 300
+powershell -ExecutionPolicy Bypass -File D:\KTH\Competition\edgeai_robot_ws\Start-Autonomous-Exploration.ps1 -Controller dwb -Arena midterm -Duration 300
 ```
 
 This opens the test terminal, a live event monitor and a screenshot observer;
@@ -194,7 +201,7 @@ sessions must be restarted to load the restored tree.
 
 MPPI circular comparison (2026-10-29): `--controller mppi` now uses a 0.37 m
 radius in both costmaps and `CostCritic.consider_footprint=false`. Inflation is
-0.40 m to cover that radius. The historical `nav2_exploration_rectangle_mppi.yaml`
+0.40 m to cover that radius. The historical MPPI comparison profile (now composed from `mppi_controller.yaml` and `navigation_profiles.yaml`)
 filename is retained for launcher compatibility. DWB retains the rectangle.
 Collision Monitor consumes the costmap's published circular outline.
 

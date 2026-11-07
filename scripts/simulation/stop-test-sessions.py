@@ -53,7 +53,8 @@ for registration in (root / 'runtime').glob('exploration-*.json'):
     def matches():
         try:
             return (Path(f'/proc/{pid}/stat').read_text().split()[21] == record['start_ticks']
-                    and b'run-open-source-exploration.sh' in Path(f'/proc/{pid}/cmdline').read_bytes())
+                    and any(name in Path(f'/proc/{pid}/cmdline').read_bytes() for name in
+                            (b'run-open-source-exploration.sh',b'cooperative_truth_test.py')))
         except FileNotFoundError:
             return False
 
