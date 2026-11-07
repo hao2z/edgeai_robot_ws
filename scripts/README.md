@@ -1,5 +1,9 @@
 # Operational scripts
 
+Linux/WSL users: `bash edgeai.sh --help` at the repository root. The common
+entry covers mission, manual navigation, cooperative diagnostics, monitoring,
+controller probes and stopping; see [Linux quickstart](../docs/linux-quickstart.md).
+
 - `simulation/`: launch and stop simulator/exploration sessions.
 - `ros/`: environment activation, interactive shell and live monitoring.
 - `setup/`: host/workspace installation and pinned open-source overlay setup.

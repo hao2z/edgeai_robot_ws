@@ -24,7 +24,7 @@ $env:EDGEAI_ROS_BACKEND = 'native'
 $linuxDirectory = Linux-Path $directory
 $testArgs = @('--directory',$linuxDirectory,'--params',"$linuxDirectory/params-source.yaml",'--duration',$Duration,'--domain',$DomainId)
 if ($FilterCheck) { $testArgs += '--filter-check' }
-& $wslExe -d $Distro -- bash "$linuxRoot/scripts/ros/with-ros-env.sh" bash "$linuxRoot/scripts/simulation/run-cooperative-truth-test.sh" @testArgs
+& $wslExe -d $Distro -- env EDGEAI_CAPTURE_ACK=true bash "$linuxRoot/scripts/ros/with-ros-env.sh" bash "$linuxRoot/scripts/simulation/run-cooperative-truth-test.sh" @testArgs
 $code = $LASTEXITCODE
 Write-Host "Cooperative test result: $directory (exit=$code)"
 if ($code -ne 0) { throw "Cooperative test failed; inspect $directory/cooperative.log" }

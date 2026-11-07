@@ -3,10 +3,8 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 set -euo pipefail
 export PATH="$HOME/.pixi/bin:$PATH"
 export COLUMNS=120 LINES=40
-export GALLIUM_DRIVER=d3d12
-export MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
 CHECK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ ${1:-vcxsrv} == vcxsrv ]]; then
+if [[ ${1:-auto} == vcxsrv ]]; then
     HOST_IP=$(ip -4 route show default | awk 'NR==1 {print $3}')
     export DISPLAY="$HOST_IP:1"
     export XAUTHORITY="$PROJECT_ROOT/runtime/vcxsrv.xauth"
@@ -15,10 +13,9 @@ if [[ ${1:-vcxsrv} == vcxsrv ]]; then
     unset WAYLAND_DISPLAY
     timeout 10s xdpyinfo >/dev/null
 else
-    export DISPLAY=:0 QT_QPA_PLATFORM=xcb
-    unset XAUTHORITY
+    source "$PROJECT_ROOT/scripts/display/configure-desktop.sh"
     if ! timeout 5s xdpyinfo >/dev/null 2>&1; then
-        echo 'WSLg X11 display :0 is unavailable. Restore WSLg, or explicitly use -DisplayServer VcXsrv.' >&2
+        echo 'X11 display is unavailable. Check DISPLAY/XAUTHORITY and the desktop session, or select VcXsrv explicitly on Windows.' >&2
         exit 1
     fi
 fi

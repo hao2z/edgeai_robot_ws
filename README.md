@@ -26,6 +26,8 @@ The canonical development workspace is this repository, on branch
 当前可运行基线、常调参数位置、最近测试与已知限制见
 [AUTONOMOUS_EXPLORATION.md](AUTONOMOUS_EXPLORATION.md)。
 
+Linux队员从 [Linux上手说明](docs/linux-quickstart.md) 开始；统一入口为 `bash edgeai.sh mission`，帮助为 `bash edgeai.sh --help`。
+
 Windows/WSL entry points, run from this directory:
 
 中期检查新场地、S1/C1 标记和双机起点使用

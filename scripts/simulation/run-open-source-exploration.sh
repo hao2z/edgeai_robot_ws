@@ -8,9 +8,7 @@ export ROS_DOMAIN_ID=${EDGEAI_ROS_DOMAIN:-87}
 exec 9>"$HOME/.cache/edgeai-autonomous-$ROS_DOMAIN_ID.lock"
 flock -n 9 || { echo 'An exploration session already uses this ROS domain.' >&2; exit 1; }
 export GZ_PARTITION="edgeai_nav2_${ROS_DOMAIN_ID}_$$"
-export DISPLAY=:0 QT_QPA_PLATFORM=xcb
-export GALLIUM_DRIVER=${EDGEAI_GALLIUM_DRIVER:-d3d12} MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-unset XAUTHORITY
+source "$PROJECT_ROOT/scripts/display/configure-desktop.sh"
 set +u  # colcon-generated setup scripts expect some variables to be unset.
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
 source "$EDGEAI_BUILD_ROOT/install/local_setup.bash"

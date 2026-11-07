@@ -5,28 +5,30 @@ check_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     cat <<'HELP'
 Usage: bash scripts/simulation/start-autonomous-exploration.sh [options]
-  --duration SECONDS       Wall-clock test budget, 30..3600 (default: 300)
+  --duration SECONDS       Wall-clock test budget, 30..3600 (default: 3600)
   --arena simple|competition|midterm         (default: midterm)
-  --controller dwb|mppi|rpp                  (default: dwb)
+  --controller dwb|mppi|rpp                  (default: rpp)
   --planner lattice|navfn                     (default: lattice)
   --backend native|pixi                      (default: native)
   --domain ID                                (default: 86)
   --map PATH               Output map basename; normally generated per run
   --scan360                Scan one full turn before exploration
+  --single-robot          Disable cooperative handover
+  --navigation-test       Static truth map and manual RViz goals; single robot
   --depth-obstacles config|true|false       Local depth layer (default: config)
   --check                  Check runtime/packages without starting/stopping tests
   --help                   Show this help
 Legacy positional form remains: [duration] [map basename] [arena] [domain]
 HELP
 }
-duration=300
+duration=3600
 map_basename=''
 arena=midterm
 domain=86
 check_only=false
 if [[ $# -gt 0 && $1 != --* ]]; then
     [[ $# -le 4 ]] || { usage >&2; exit 2; }
-    duration=${1:-300}
+    duration=${1:-3600}
     map_basename=${2:-}
     arena=${3:-midterm}
     domain=${4:-86}
@@ -35,6 +37,8 @@ else
         case "$1" in
             --help) usage; exit 0 ;;
             --scan360) export EDGEAI_SCAN360=true; shift ;;
+            --single-robot) export EDGEAI_COOPERATIVE_RESCUE=false; shift ;;
+            --navigation-test) export EDGEAI_NAVIGATION_TEST=true EDGEAI_COOPERATIVE_RESCUE=false; shift ;;
             --check) check_only=true; shift ;;
             --duration|--map|--arena|--domain|--controller|--backend|--planner|--depth-obstacles)
                 [[ $# -ge 2 && $2 != --* ]] || { echo "Missing value: $1" >&2; exit 2; }
@@ -65,7 +69,7 @@ if [[ ! -f "$cache/frontier-install/local_setup.bash" ]]; then
 fi
 export EDGEAI_GUI=true EDGEAI_RVIZ=true
 export EDGEAI_ROS_DOMAIN=$domain
-controller=${EDGEAI_CONTROLLER:-dwb}
+controller=${EDGEAI_CONTROLLER:-rpp}
 export EDGEAI_GLOBAL_PLANNER=${EDGEAI_GLOBAL_PLANNER:-lattice}
 [[ $EDGEAI_GLOBAL_PLANNER == lattice || $EDGEAI_GLOBAL_PLANNER == navfn ]] || { echo 'Planner must be lattice or navfn.' >&2; exit 2; }
 [[ $controller == mppi || $controller == dwb || $controller == rpp ]] || { echo 'Controller must be mppi, dwb or rpp.' >&2; exit 2; }

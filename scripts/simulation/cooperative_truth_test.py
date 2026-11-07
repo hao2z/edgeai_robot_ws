@@ -60,7 +60,6 @@ def main():
                      'Color':'255; 128; 0','Line Style':'Lines','Line Width':.03,'Value':True})
     (directory/'cooperative.rviz').write_text(yaml.safe_dump(rviz,sort_keys=False))
     os.environ.update(ROS_DOMAIN_ID=str(args.domain),GZ_PARTITION=f'edgeai_cooperative_{args.domain}_{os.getpid()}',
-        DISPLAY=':0',QT_QPA_PLATFORM='xcb',GALLIUM_DRIVER='d3d12',MESA_D3D12_DEFAULT_ADAPTER_NAME='NVIDIA',
         EDGEAI_TRUTH_DIRECTORY=str(directory),PROJECT_ROOT=str(ROOT),
         CYCLONEDDS_URI='<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>')
     record=dict(pid=os.getpid(),start_ticks=Path('/proc/self/stat').read_text().split()[21],
@@ -112,7 +111,7 @@ def main():
         print('Test interrupted',flush=True)
     finally:
         (directory/'final-capture').touch()
-        capture_end=time.monotonic()+12.
+        capture_end=time.monotonic()+(12. if os.environ.get('EDGEAI_CAPTURE_ACK')=='true' else 0.)
         while not (directory/'capture-finished').exists() and time.monotonic()<capture_end:time.sleep(.2)
         for child in reversed(processes):
             if child.poll() is None:
