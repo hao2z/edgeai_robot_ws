@@ -14,9 +14,9 @@ The manifest and lockfile define the workspace dependencies. Use the Pixi enviro
 ## Install and build
 
 ```bash
-git clone https://github.com/dongjw-hit/edgeai_robot_ws.git
+git clone --branch zyq https://github.com/hao2z/edgeai_robot_ws.git
 cd edgeai_robot_ws
-pixi install
+pixi install --locked
 pixi run colcon build --symlink-install
 ```
 
@@ -34,7 +34,7 @@ The script resolves the workspace relative to its own location, activates Pixi, 
 
 The launch file loads `edgeai_robot_real.urdf.xacro`, starts the world in `worlds/empty.sdf`, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. The old simple model and its launch script have been removed; `start_sim.sh` is the current entry point.
 
-The portable realistic startup has been tested successfully. AMCL localization remains a local experiment; its launch and parameter files are not included in this repository. Installed AMCL dependencies do **not** mean that localization or autonomous navigation is complete.
+The single-robot autonomy package below uses live SLAM for localization and Nav2 for navigation. Restarting into AMCL on a saved map is not implemented. This team repository is forked from `dongjw-hit/edgeai_robot_ws`.
 
 ## ROS commands in another terminal
 
@@ -53,7 +53,7 @@ Replace `/path/to/edgeai_robot_ws` with your clone location. The following comma
 | Topic | ROS message type | Purpose |
 | --- | --- | --- |
 | `/cmd_vel` | `geometry_msgs/msg/Twist` | Robot velocity commands |
-| `/odom` | `nav_msgs/msg/Odometry` | Gazebo DiffDrive odometry |
+| `/odom` | `nav_msgs/msg/Odometry` | Wheel odometry; corrected to the chassis reference in the autonomy demo |
 | `/tf` | `tf2_msgs/msg/TFMessage` | Dynamic transforms, including `odom` → `base_footprint` |
 | `/tf_static` | `tf2_msgs/msg/TFMessage` | Fixed robot and sensor transforms |
 | `/joint_states` | `sensor_msgs/msg/JointState` | Simulated joint states |
@@ -137,3 +137,13 @@ src/edgeai_robot_description/
   config/slam_toolbox.yaml           Mapping parameters
   maps/                             Packaged map resources
 ```
+
+## 单机器人基线验收
+
+运行 `./scripts/run_single_robot_baseline.sh --gui` 可自动完成传感器、TF、前进/转向/停止、SLAM、地图导出和重新加载验收。省略 `--gui` 仅运行服务器。流程会创建独立仿真并自动关闭，结果保存到忽略提交的 `artifacts/`。详见 [中文基线说明](docs/single_robot_baseline_zh.md)。
+
+## 单机自主闭环
+
+用户提供的 `competition_rooms.sdf` 已通过左上房间自主救援的 8 项验收：从空白地图探索、绕行进房、识别室内目标并连续停留 3 秒；独立真值检查无障碍重叠。探索通行间距为 0.40 m，整圈旋转观察间距为 0.60 m。运行 `./scripts/run_autonomy_demo.sh --scenario rooms --gui`，详见 [房间场景实测记录](docs/competition_rooms_review_zh.md)。两个 0.75 m 入口仍未完成通行验收。原 SDF 保持不变，练习标记只加在测试副本中。
+
+运行 `./scripts/run_autonomy_demo.sh --gui`，可启动未知地图探索、ArUco 视觉定位、Nav2 导航和普通救援连续停留演示。`--scenario east` 可换一个目标安装位置，`--scenario behind` 验证初始被障碍物遮挡的背面目标和自主绕行。任务不读取 Gazebo 真值；独立测试器在执行后核对定位、障碍间距和救援结果。所有标记/救援参数均为练习参数，详见 [中文自主闭环说明](docs/autonomy_closed_loop_zh.md)。

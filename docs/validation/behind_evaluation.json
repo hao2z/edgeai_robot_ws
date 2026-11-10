@@ -1,0 +1,80 @@
+{
+  "status": "passed",
+  "mission_status": "completed",
+  "checks": {
+    "mission_completed": {
+      "passed": true
+    },
+    "frontier_navigation": {
+      "passed": true,
+      "completed_goals": 11,
+      "failed_attempts": 0
+    },
+    "ground_truth_obstacle_clearance": {
+      "passed": true,
+      "minimum_clearance_m": 0.22044556991201977,
+      "overlap_samples": 0
+    },
+    "map_and_frozen_targets": {
+      "passed": true
+    },
+    "target_localization": {
+      "passed": true,
+      "error_m": 0.033303140769740794,
+      "normal_error_degrees": 0.7838804174267939,
+      "estimated_world": [
+        -0.8332759702012322,
+        1.056067535371227,
+        0.1909692791197413
+      ]
+    },
+    "ground_truth_continuous_dwell": {
+      "passed": true,
+      "sampled_duration_s": 2.9879999999999995,
+      "max_zone_error_m": 0.09934285072242692,
+      "movement_m": 0.0,
+      "rescue_zone_world": [
+        -0.8,
+        1.657
+      ]
+    },
+    "occluded_target_detour": {
+      "passed": true,
+      "initial_marker_occluded": true,
+      "straight_rescue_route_blocked": true,
+      "maximum_lateral_detour_m": 3.1264331362643363,
+      "travelled_distance_m": 13.947450534142458,
+      "straight_distance_m": 3.2336742260159728,
+      "first_confirmed_robot_world": [
+        -1.751284098352463,
+        1.9329700837198913
+      ]
+    }
+  },
+  "map_to_world": [
+    [
+      1.0,
+      1.7530735555468303e-20,
+      0.0,
+      -1.5
+    ],
+    [
+      -1.7530735555468303e-20,
+      1.0,
+      0.0,
+      -1.5
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ]
+}

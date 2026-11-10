@@ -1,9 +1,10 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from ament_index_python.packages import get_package_share_directory
@@ -50,7 +51,7 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'gz_args': f'-r {world_file}'
+            'gz_args': LaunchConfiguration('gz_args')
         }.items()
     )
 
@@ -60,7 +61,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
-        parameters=[robot_description]
+        parameters=[robot_description, {'use_sim_time': True}]
     )
 
     # Spawn the new robot
@@ -83,6 +84,8 @@ def generate_launch_description():
         executable='parameter_bridge',
         name='ros_gz_bridge',
         output='screen',
+        remappings=[('/odom', LaunchConfiguration('odom_output_topic')),
+                    ('/tf', LaunchConfiguration('odom_tf_output_topic'))],
         arguments=[
             '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
@@ -124,6 +127,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('gz_args', default_value=f'-r {world_file}',
+                              description='Gazebo arguments; add -s for server-only mode'),
+        DeclareLaunchArgument('odom_output_topic', default_value='/odom'),
+        DeclareLaunchArgument('odom_tf_output_topic', default_value='/tf'),
         gazebo,
         robot_state_publisher,
         spawn_robot,

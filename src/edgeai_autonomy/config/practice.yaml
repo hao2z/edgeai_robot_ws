@@ -1,0 +1,15 @@
+# Development fixture ONLY. Official marker and rescue geometry are still TBD.
+marker_dictionary: DICT_4X4_50
+marker_size_m: 0.24
+normal_marker_ids: [23]
+optical_frame: camera_optical_frame
+min_observations: 3
+max_reprojection_error_px: 2.0
+rescue_standoff_m: 0.60
+rescue_radius_m: 0.18
+dwell_seconds: 3.0
+exploration_min_goals: 1
+exploration_max_goals: 16
+exploration_clearance_m: 0.40
+observation_clearance_m: 0.60
+mission_timeout_sim_seconds: 1200.0
