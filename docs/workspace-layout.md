@@ -8,8 +8,10 @@ live in this repository.
 | `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
 | `src/edgeai_simulation/` | Gazebo launch files, worlds, target models, simulation configuration and arena tools |
 | `src/edgeai_navigation/` | Nav2 parameters, behavior trees, navigation authority and configuration generators |
-| `src/edgeai_exploration/` | Frontier configuration, upstream adapters, completion watcher and exploration RViz configuration |
+| `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration RViz configuration |
 | `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
+| `src/edgeai_mission/` | Fixed-rule coordinator, target-search/S1/C1 task Actions and behavior trees |
+| `src/edgeai_perception/` | ArUco detection, SLAM-keyframe target anchoring and camera observation |
 | `scripts/` | Environment, installation, build, launch, monitoring and capture entry points |
 | `tests/` | Simulation checks, navigation diagnostics and local run evidence |
 | `docs/competition/` | Original competition reference documents |

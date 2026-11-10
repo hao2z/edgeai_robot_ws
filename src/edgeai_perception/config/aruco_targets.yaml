@@ -4,6 +4,8 @@ aruco_targets:
     image_topic: /camera/image
     camera_info_topic: /camera/camera_info
     optical_frame: camera_optical_frame
+    map_anchoring: slam_graph  # 每帧绑定SLAM关键帧；历史目标随对应图节点修正。
+    anchor_max_distance_m: 1.0
     # Development fixtures only; no target truth coordinates are loaded.
     dictionary: DICT_4X4_50
     marker_size_m: 0.20  # black marker edge, NOT the 0.24 m white panel

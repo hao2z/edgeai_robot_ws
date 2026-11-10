@@ -63,8 +63,9 @@ class GeometryTests(unittest.TestCase):
         from sensor_msgs.msg import CameraInfo
         from geometry_msgs.msg import TransformStamped
         from aruco_targets import Targets
+        from rclpy.parameter import Parameter
         rclpy.init()
-        node = Targets()
+        node = Targets(parameter_overrides=[Parameter('map_anchoring',value='map')])
         try:
             info = CameraInfo(width=640, height=480)
             info.k = [600.,0.,320.,0.,600.,240.,0.,0.,1.]
@@ -75,6 +76,10 @@ class GeometryTests(unittest.TestCase):
             static.transform.rotation.w = 1.
             static.transform.translation.x = 2.
             node.buffer.set_transform_static(static, 'test')
+            dynamic = TransformStamped()
+            dynamic.header.frame_id = 'map'; dynamic.child_frame_id = 'odom'
+            dynamic.transform.rotation.w = 1.; dynamic.transform.translation.y = 4.
+            node.buffer.set_transform_static(dynamic, 'test')
             with tempfile.TemporaryDirectory() as output:
                 node.output = Path(output)
                 for _ in range(3):

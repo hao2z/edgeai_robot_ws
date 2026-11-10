@@ -42,6 +42,15 @@ class RescueTests(unittest.TestCase):
         self.assertAlmostEqual(abs(goal['yaw']), 3.141592653589793)
         self.assertEqual(goal['target_id'], 1)
 
+    def test_search_selects_only_requested_cooperative_id(self):
+        self.c.update(target_id=2,target_type='cooperative')
+        rows=[dict(id=1,type='normal',yaw=0.,x=1.,y=2.,spread_m=.01),
+              dict(id=2,type='cooperative',yaw=0.,x=3.,y=2.,spread_m=.01)]
+        registry=dict(frame_id='map',targets=rows)
+        self.assertEqual(select_goal(self.c,registry)['target_id'],2)
+        rows[1]['yaw']=None
+        with self.assertRaisesRegex(ValueError,'cooperative'):select_goal(self.c,registry)
+
     def test_continuous_dwell_resets_on_motion_or_missing_data(self):
         d = Dwell(self.c)
         for i in range(30):

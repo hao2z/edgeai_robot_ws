@@ -80,18 +80,6 @@ def managed_trees(source, directory):
             for child in list(parent):
                 if child.tag in ('GoalCheckerSelector', 'PlannerSelector', 'ControllerSelector'):
                     parent.remove(child)
-                elif policy=='rescue' and parent.tag=='Fallback' and child.tag=='WouldAPlannerRecoveryHelp':
-                    # A different parking goal can resolve unreachable endpoints;
-                    # retain controller and start-occupied motion recoveries.
-                    parent.remove(child)
-                elif policy=='rescue' and parent.tag=='Fallback' and child.tag=='WouldAControllerRecoveryHelp':
-                    # Do not let an older controller error mask a newer planning failure.
-                    index=list(parent).index(child)
-                    parent.remove(child)
-                    gate=ET.Element('Sequence')
-                    ET.SubElement(gate,'ScriptCondition',code='compute_path_error_code == 0')
-                    gate.append(child)
-                    parent.insert(index,gate)
             if parent.tag == 'ComputePathToPose':
                 parent.set('planner_id', planner)
             elif parent.tag == 'FollowPath':

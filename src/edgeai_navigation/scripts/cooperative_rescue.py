@@ -140,6 +140,7 @@ class CooperativeRescue(Node):
     def wait(self,predicate,timeout=15.,ownership=False):
         end=min(self.deadline,time.monotonic()+timeout)
         while rclpy.ok() and time.monotonic()<end:
+            if getattr(self,'stop_requested',False) and not self.closing:raise KeyboardInterrupt()
             rclpy.spin_once(self,timeout_sec=.05)
             if ownership:self.check_owner()
             if not self.closing and self.process is not None and self.process.poll() is not None:
@@ -297,13 +298,26 @@ class CooperativeRescue(Node):
             self.event('TEST_SETUP',map='static truth map',targets='known world coordinates',localization='AMCL',initial_poses=poses)
             self.start_localization(*poses)
             return
-        self.event('WAITING_S1')
-        path=self.directory/'rescue-result.json'
-        self.wait(lambda:path.is_file(),86400.)
-        result=json.loads(path.read_text())
-        if not result.get('success'):raise RuntimeError('S1 failed; cooperative rescue not started')
+        if getattr(self,'handover_reference',None):
+            reference=json.loads(Path(self.handover_reference).read_text())
+            self.mapping_start_pose=reference['mapping_start_pose']
+            self.initial_odom['robot2']=reference['initial_odom2']
+            self.event('HANDOVER_REQUESTED',source='mission_coordinator')
+        else:
+            self.event('WAITING_S1')
+            path=self.directory/'rescue-result.json'
+            self.wait(lambda:path.is_file(),86400.)
+            result=json.loads(path.read_text())
+            if not result.get('success'):raise RuntimeError('S1 failed; cooperative rescue not started')
         self.deadline=time.monotonic()+self.c['wall_timeout_s']
-        self.wait(lambda:len(self.odom)==2 and self.map is not None,15.)
+        def handover_ready():
+            if len(self.odom)!=2 or self.map is None or self.now()<=0:return False
+            # This worker may now start only after S1: map and odom can arrive
+            # before the newly-created TF buffer has the complete root tree.
+            try:self.tf_pose('base_footprint')
+            except TransformException:return False
+            return True
+        self.wait(handover_ready,15.)
         root_pose=self.tf_pose('base_footprint')
         # Keep robot1's odometry drift out of the stationary follower's prior.
         if self.mapping_start_pose is None:
@@ -312,6 +326,7 @@ class CooperativeRescue(Node):
         second=compose(compose(root_start,self.c['initial_relative_pose']),
                        relative(self.initial_odom['robot2'],pose_value(self.odom['robot2'].pose.pose)))
         self.event('HANDOVER',initial_poses=[root_pose,second])
+        self.finalize_targets()
         save=subprocess.run(['ros2','run','nav2_map_server','map_saver_cli','-f',str(self.directory/'cooperative-map'),
             '--ros-args','-p','use_sim_time:=true'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=30.)
         (self.directory/'cooperative-map-save.log').write_text(save.stdout)
@@ -323,6 +338,16 @@ class CooperativeRescue(Node):
         self.seed_enabled=False
         self.start_localization(root_pose,second)
 
+    def finalize_targets(self):
+        client=self.create_client(Trigger,'/targets/finalize_map')
+        try:
+            result=self.service(client,Trigger.Request(),15.)
+            binding=json.loads(result.message)
+            if not binding.get('finalized') or binding.get('mode')!='fixed_map':
+                raise RuntimeError('Target map finalization not confirmed')
+            self.event('TARGET_MAP_FINALIZED',**binding)
+        finally:self.destroy_client(client)
+
     def start_localization(self,root_pose,second):
         folder=self.directory/'robot2';folder.mkdir(exist_ok=True)
         nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text())
@@ -331,6 +356,12 @@ class CooperativeRescue(Node):
         os.environ.setdefault('CYCLONEDDS_URI','<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>')
         self.process=subprocess.Popen(['ros2','launch','edgeai_navigation','cooperative_navigation.launch.py',
             'directory:='+str(self.directory)],stdout=self.log,stderr=subprocess.STDOUT,start_new_session=True)
+        if getattr(self,'handover_reference',None):
+            # Let the parent coordinator clean up this owned launch group even
+            # if the transitional Python worker is forcefully terminated.
+            owned=dict(pid=self.process.pid,start_ticks=Path(f'/proc/{self.process.pid}/stat').read_text().split()[21])
+            path=self.directory/'mission-owned-navigation.json';tmp=path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(owned));tmp.replace(path)
         for ns,pose in zip(('','robot2'),(root_pose,second)):
             state_client=self.create_client(GetState,'/'+(ns+'/' if ns else '')+'amcl/get_state')
             active_by=time.monotonic()+40.
@@ -346,6 +377,35 @@ class CooperativeRescue(Node):
             self.initial_pubs[ns].publish(msg)
             self.acquire_manual(ns)
         self.initialized=True
+
+    def wait_navigation_active(self,timeout=45.):
+        """Action discovery and authority IDLE do not imply lifecycle activation."""
+        names=['/map_server']+[
+            '/'+(ns+'/' if ns else '')+name
+            for ns in ('','robot2')
+            for name in ('amcl','controller_server','planner_server','behavior_server',
+                         'velocity_smoother','collision_monitor','bt_navigator')]
+        clients={name:self.create_client(GetState,name+'/get_state') for name in names}
+        deadline=min(self.deadline,time.monotonic()+timeout);waiting=None
+        def budget():
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise RuntimeError('Cooperative navigation activation timeout')
+            return remaining
+        try:
+            while True:
+                self.wait(lambda:all(c.service_is_ready() for c in clients.values()),budget(),True)
+                futures={name:c.call_async(GetState.Request()) for name,c in clients.items()}
+                self.wait(lambda:all(f.done() for f in futures.values()),budget(),True)
+                inactive={name:f.result().current_state.label for name,f in futures.items()
+                          if f.result().current_state.id!=State.PRIMARY_STATE_ACTIVE}
+                if not inactive:
+                    self.event('NAVIGATION_READY',nodes=names);return
+                if inactive!=waiting:
+                    self.event('NAVIGATION_WAITING',inactive=inactive);waiting=inactive
+                next_poll=time.monotonic()+.2
+                self.wait(lambda:time.monotonic()>=next_poll,budget(),True)
+        finally:
+            for client in clients.values():self.destroy_client(client)
 
     def localize(self):
         self.event('LOCALIZING')
@@ -385,6 +445,11 @@ class CooperativeRescue(Node):
         try:
             registry=json.loads(path.read_text())
             if registry.get('frame_id')!='map':raise ValueError('Target registry frame is not map')
+            expected=getattr(self,'targets',{}).get('map_binding',{})
+            if expected.get('finalized'):
+                binding=registry.get('map_binding',{})
+                if (binding.get('epoch')!=expected.get('epoch') or binding.get('mode')!='fixed_map'
+                    or not binding.get('finalized')):raise ValueError('Target registry belongs to another or unfinished map')
             target=next((t for t in registry['targets'] if t['id']==self.c['target_id']),None)
             if (target is None or not target.get('confirmed',False) or
                     any(not isinstance(target.get(k),(int,float)) or not math.isfinite(target[k])
@@ -418,8 +483,25 @@ class CooperativeRescue(Node):
         self.target=target;self.target_ready=True
         return changed
 
-    def select_parking_pair(self):
+    def select_parking_pair(self,locked=None,excluded=None):
         pairs=parking_pairs(self.map,self.target,self.footprint,self.c)
+        if excluded:
+            pairs=[pair for pair in pairs if not any(
+                math.dist(pair[i][:2],old[:2])<.04
+                for i,ns in enumerate(('','robot2')) for old in excluded.get(ns,[]))]
+        if locked:
+            from cooperative_policy import footprint_clear,separated
+            constrained=[]
+            for pair in pairs:
+                pair=[list(p) for p in pair]
+                if any(math.dist(pair[i][:2],pose[:2])>.10 for i,ns in enumerate(('','robot2'))
+                       for key,pose in locked.items() if ns==key):continue
+                for i,ns in enumerate(('','robot2')):
+                    if ns in locked:pair[i]=list(locked[ns])
+                if (all(footprint_clear(self.map,p,self.footprint) for p in pair) and
+                    math.dist(pair[0][:2],pair[1][:2])>=self.c['min_separation_m'] and separated(*pair,self.footprint)):
+                    constrained.append(pair)
+            pairs=constrained
         # Reachability is checked through each robot's native planner before dispatch.
         pairs.sort(key=lambda pair:sum(math.dist(self.tf_pose('robot2/base_footprint' if ns else 'base_footprint')[:2],p[:2])
                    for ns,p in zip(('','robot2'),pair)))
@@ -428,6 +510,11 @@ class CooperativeRescue(Node):
             okay=True
             for ns,p in zip(('','robot2'),pair):
                 plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedHeading'),15.)
+                if plan.status==6 and plan.result.error_code==ComputePathToPose.Result.START_OCCUPIED:
+                    # Preflight planning cannot move the robot. Let the same
+                    # native navigation tree as ordinary goals attempt escape.
+                    self.event('PLAN_START_OCCUPIED_NAV_RECOVERY',robot=ns or 'robot1',goal=p)
+                    continue
                 if plan.status!=4 or plan.result.error_code!=0:
                     self.event('PLAN_REJECTED',robot=ns or 'robot1',start=self.tf_pose('robot2/base_footprint' if ns else 'base_footprint'),
                                goal=p,error=plan.result.error_code,message=getattr(plan.result,'error_msg',''))
@@ -438,7 +525,7 @@ class CooperativeRescue(Node):
         return selected
 
     def execute(self):
-        self.handover();self.localize()
+        self.handover();self.wait_navigation_active();self.localize()
         target=next((t for t in self.targets['targets'] if t['id']==self.c['target_id'] and t.get('yaw') is not None),None)
         if target is None:raise RuntimeError('C1 not localized during mapping; target search required')
         self.target=target
@@ -534,10 +621,12 @@ class CooperativeRescue(Node):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--directory',required=True);parser.add_argument('--config',required=True)
     parser.add_argument('--static-test',action='store_true',help='Use prepared static map and target coordinates; skip S1/SLAM handover')
+    parser.add_argument('--handover-reference',help='Explicit coordinator handover; do not independently wait for S1')
     args,ros_args=parser.parse_known_args();rclpy.init(args=ros_args)
     node=CooperativeRescue(args.directory,yaml.safe_load(Path(args.config).read_text()))
     node.static_test=args.static_test
-    if args.static_test:node.seed_enabled=False
+    node.handover_reference=args.handover_reference
+    if args.static_test or args.handover_reference:node.seed_enabled=False
     signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(KeyboardInterrupt()))
     result=dict(success=False)
     try:result=node.execute()

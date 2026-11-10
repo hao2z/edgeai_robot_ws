@@ -8,6 +8,7 @@ The canonical development workspace is this repository, on branch
 | `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
 | `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
 | `src/edgeai_navigation/` | Shared Nav2 configuration, independent controller tuning and control authority |
+| `src/edgeai_mission/` | Fixed-rule coordinator, S1/C1 task Actions and behavior trees |
 | `src/edgeai_perception/` | ArUco detection and target localization during mapping |
 | `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
 | `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
@@ -18,7 +19,7 @@ The canonical development workspace is this repository, on branch
 
 当前已跑通单机建图、目标定位、S1 单救援与 C1 双机器人协作救援。
 默认 Windows 入口使用 native Jazzy + RPP + Smac Lattice；当前进度、成功轮次证据、限制和启动方式见
-[项目状态（2026-11-07）](docs/project-status.md)及[双机协作救援](docs/cooperative-rescue.md)。
+[项目状态（2026-11-10）](docs/project-status.md)及[双机协作救援](docs/cooperative-rescue.md)。
 
 历史建图＋目标寻找版本的结果、截图和限制见
 [2026-10-30 开发基线](docs/mapping-target-search-baseline-2026-10-30.md)。
@@ -51,7 +52,7 @@ Both entries default to the native apt Jazzy environment. No manual `source`
 or Pixi activation is required. Use Linux `--backend native` / Windows
 `-Backend native` to override a saved backend. Linux `--check` / Windows
 `-CheckOnly` validates the environment and installed project packages without
-starting or stopping a session. Duration is a wall-clock budget in seconds.
+starting or stopping a session. Duration limits the exploration stage in wall-clock seconds; target search and rescue tasks have separate budgets. It is not a competition-wide timer.
 
 This opens Gazebo/RViz, stops registered previous project sessions and streams
 events in the current terminal. Per-run logs and the final map are saved under
@@ -70,7 +71,7 @@ between goal tolerance and measured accuracy are documented in
 [geometry and accuracy](docs/geometry-and-accuracy.md).
 RViz also shows global/local costs and paths, same-time footprint comparisons,
 SLAM correction and message ages; see [visualization and time alignment](docs/rviz-navigation-observability.md).
-Large heading changes use Nav2 Rotation Shim before DWB tracking; ordinary
+Large heading changes use Nav2 Rotation Shim before RPP tracking; ordinary
 exploration gain updates no longer repeatedly cancel the active goal. See
 [turning and goal coordination diagnosis](docs/navigation-turn-diagnosis.md).
 
@@ -138,9 +139,9 @@ sources the build cache's `install/local_setup.bash`, launches
 `simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`.
 Press **Ctrl+C** in its terminal to stop the launched session.
 
-The low-level launch loads `edgeai_robot_real.urdf.xacro`, defaults to `worlds/midterm.sdf` and the midterm target/start configuration, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. `start_sim.sh` remains a simulation-only entry point; the Windows default mission entry delegates to autonomous exploration and one S1 rescue.
+The low-level launch loads `edgeai_robot_real.urdf.xacro`, defaults to `worlds/midterm.sdf` and the midterm target/start configuration, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. `start_sim.sh` remains a simulation-only entry point; the Windows default mission entry runs mapping/target search, S1, then C1 with two robots.
 
-The portable realistic startup has been tested successfully. AMCL localization remains a local experiment; its launch and parameter files are not included in this repository. Installed AMCL dependencies do **not** mean that localization or autonomous navigation is complete.
+The default mission includes shared-map handover and two AMCL instances. See [task workflow](docs/task-workflow.md) for task Actions, checks and bounded retries. The first mapping task checks all required rescue targets and searches for missing markers before starting S1.
 
 ## ROS commands in another terminal
 

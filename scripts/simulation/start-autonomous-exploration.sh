@@ -80,7 +80,7 @@ export EDGEAI_GLOBAL_PLANNER=${EDGEAI_GLOBAL_PLANNER:-lattice}
 [[ $arena == competition || $arena == simple || $arena == midterm ]] || { echo 'Arena must be competition, simple or midterm.' >&2; exit 2; }
 echo "ROS backend=$EDGEAI_ROS_BACKEND controller=$controller arena=$arena domain=$domain duration=${duration}s"
 if $check_only; then
-    for package in edgeai_simulation edgeai_navigation edgeai_exploration edgeai_perception; do
+    for package in edgeai_simulation edgeai_navigation edgeai_exploration edgeai_perception edgeai_mission; do
         bash "$PROJECT_ROOT/scripts/ros/ros-command.sh" ros2 pkg prefix "$package"
     done
     if [[ $controller == rpp ]]; then

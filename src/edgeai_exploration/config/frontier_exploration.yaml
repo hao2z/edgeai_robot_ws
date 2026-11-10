@@ -51,13 +51,14 @@ frontier_explorer:
     max_linear_speed_vmax: 0.6
     max_angular_speed_wmax: 0.9
     sensor_effective_range_m: 1.5
+    # 前沿选择的最小距离，米。
     frontier_selection_min_distance: 0.6
     frontier_visit_tolerance: 0.4
     # 候选目标到机器人的最小距离，米。
-    frontier_candidate_min_goal_distance_m: 1.0
+    frontier_candidate_min_goal_distance_m: 0.8
     occ_threshold: 65
     # 前沿最小栅格数量；随地图分辨率变化，过小易追逐细小残留前沿。
-    min_frontier_size_cells: 9
+    min_frontier_size_cells: 6
     sigma_s: 2.0
     sigma_r: 30.0
     dilation_kernel_radius_cells: 1

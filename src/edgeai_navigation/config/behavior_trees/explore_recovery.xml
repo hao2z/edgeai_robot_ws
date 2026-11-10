@@ -36,7 +36,11 @@
       </PipelineSequence>
       <Sequence>
         <Fallback>
-          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <!-- A stale controller error must not hide the current planner error. -->
+          <Sequence>
+            <ScriptCondition code="compute_path_error_code == 0"/>
+            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          </Sequence>
           <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
           <!-- 全局安全边距下起点占用时，仅允许通过局部实时检查的退出动作。 -->
           <PlannerStartOccupied error_code="{compute_path_error_code}"/>

@@ -11,17 +11,21 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.clock import Clock,ClockType
 from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import Buffer, TransformListener, TransformException
 from aruco_geometry import detector, estimate, transform_point, rotation_matrix, rotation_quaternion, fuse_quaternions
+from landmark_anchors import AnchorGraph
 
 
 class Targets(Node):
-    def __init__(self):
-        super().__init__('aruco_targets')
+    def __init__(self,**kwargs):
+        super().__init__('aruco_targets',**kwargs)
         defaults = dict(image_topic='/camera/image', camera_info_topic='/camera/camera_info',
                         optical_frame='camera_optical_frame', dictionary='DICT_4X4_50',
                         marker_size_m=.20, processing_hz=15.0, max_image_age_s=.5,
@@ -29,7 +33,8 @@ class Targets(Node):
                         min_distance_m=.15, max_distance_m=5.0, confirmation_observations=3,
                         fusion_window_s=20.0, max_observations_per_id=20,
                         outlier_distance_m=.30, stale_after_s=10.0, output_directory='',
-                        target_types='', min_marker_distance_rate=.02)
+                        target_types='', min_marker_distance_rate=.02,
+                        map_anchoring='slam_graph',anchor_max_distance_m=1.0)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = {k: self.get_parameter(k).value for k in defaults}
@@ -48,7 +53,12 @@ class Targets(Node):
         self.decoded_ids = set()
         self.stats_started = self.get_clock().now().nanoseconds
         self.records = {}
-        self.orientations = {}
+        if self.p['map_anchoring'] not in ('slam_graph','map'):raise ValueError('Invalid map_anchoring')
+        if not np.isfinite(self.p['anchor_max_distance_m']) or self.p['anchor_max_distance_m']<=0:
+            raise ValueError('anchor_max_distance_m must be positive and finite')
+        self.mapping=self.p['map_anchoring']=='slam_graph';self.frozen=False;self.finalizing=False
+        self.graph=AnchorGraph(max_distance=self.p['anchor_max_distance_m']);self.pending=deque(maxlen=100)
+        self.last_anchor_audit=None
         self.target_types = {}
         for item in str(self.p['target_types']).split(','):
             if ':' in item:
@@ -67,10 +77,86 @@ class Targets(Node):
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.estimates = self.create_publisher(String, 'targets/estimates', qos)
         self.markers = self.create_publisher(MarkerArray, 'targets/markers', qos)
+        self.create_subscription(String,'/slam_toolbox/anchor_graph',self.graph_received,qos)
+        self.finalize_group=ReentrantCallbackGroup()
+        self.finalize_client=self.create_client(Trigger,'/slam_toolbox/finalize_anchors',callback_group=self.finalize_group)
+        self.finalize_service=self.create_service(Trigger,'targets/finalize_map',self.finalize_map,callback_group=self.finalize_group)
         self.create_timer(1/self.p['processing_hz'], self.process)
         self.create_timer(1.0, self.publish)
         self.create_timer(5.0, self.publish_diagnostics)
         self.get_logger().info('TARGET_SEARCH_READY: ArUco探测已启用；仅使用图像、内参和TF，不控制导航')
+
+    def graph_received(self,msg):
+        if not self.mapping:return
+        try:self.update_graph(json.loads(msg.data))
+        except (ValueError,KeyError,TypeError) as error:self.warn('TARGET_ANCHOR_GRAPH_INVALID: '+str(error))
+
+    def update_graph(self,data):
+        if self.graph.update(data):
+            self.records.clear();self.confirmed.clear();self.pending.clear()
+            self.get_logger().warning('TARGET_MAP_RESET: SLAM图已更换，清除旧图目标')
+        self.drain_pending()
+
+    def drain_pending(self):
+        waiting=deque(maxlen=100);now=self.get_clock().now().nanoseconds
+        for key,stamp,point,rotation,robot,row in self.pending:
+            if not 0<=now-stamp<=5e9:continue
+            try:binding=self.graph.bind(stamp,point,rotation,robot)
+            except ValueError:waiting.append((key,stamp,point,rotation,robot,row));continue
+            self.accept(key,stamp,binding,row)
+        self.pending=waiting
+
+    def accept(self,key,stamp,binding,row):
+        point,_=self.graph.project(binding)
+        history=self.records.setdefault(key,deque(maxlen=self.p['max_observations_per_id']))
+        newest=max(stamp,history[-1][0] if history else stamp)
+        cutoff=newest-self.p['fusion_window_s']*1e9
+        if stamp<cutoff:return
+        while history and history[0][0]<cutoff:history.popleft()
+        if len(history)>=self.p['confirmation_observations']:
+            center=np.median([self.graph.project(h[1])[0] for h in history],axis=0)
+            if np.linalg.norm(point-center)>self.p['outlier_distance_m']:
+                self.stats['position_outlier']+=1;self.warn(f'TARGET_OUTLIER: ID={key} 观测偏离历史，拒绝融合');return
+        first=not history
+        ordered=sorted([*history,(stamp,binding)],key=lambda item:item[0])
+        history.clear();history.extend(ordered);self.stats['position_accepted']+=1
+        row.update(anchor_kind=binding['kind'],anchor_node_id=binding.get('node_id'),map_epoch=self.graph.epoch)
+        self.observations.publish(String(data=json.dumps(row)))
+        if self.output:
+            with (self.output/'target-observations.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
+        if first:self.get_logger().info(f'TARGET_FOUND: 发现 ArUco ID={key}')
+        if len(history)>=self.p['confirmation_observations'] and key not in self.confirmed:
+            self.confirmed.add(key);self.get_logger().info(f'TARGET_CONFIRMED: 多帧确认 ArUco ID={key}')
+
+    async def finalize_map(self,request,response):
+        if self.finalizing:response.message='Target finalization already in progress';return response
+        self.finalizing=True;timer=None
+        try:
+            if self.mapping:
+                if not self.finalize_client.service_is_ready():raise RuntimeError('SLAM anchor finalizer unavailable')
+                future=self.finalize_client.call_async(Trigger.Request())
+                timer=self.create_timer(8.,lambda:future.cancel() if not future.done() else None,
+                                        callback_group=self.finalize_group,clock=Clock(clock_type=ClockType.STEADY_TIME))
+                snapshot=await future
+                if snapshot is None or not snapshot.success:raise RuntimeError('SLAM map/anchor finalization failed')
+                data=json.loads(snapshot.message)
+                if not data.get('finalized'):raise ValueError('SLAM snapshot was not finalized')
+                self.update_graph(data)
+                frozen={key:deque(((stamp,self.graph.freeze(binding)) for stamp,binding in history),
+                                  maxlen=history.maxlen) for key,history in self.records.items()}
+                self.records=frozen;self.pending.clear();self.mapping=False
+            self.frozen=True;self.publish()
+            response.success=True;response.message=json.dumps(self.map_binding())
+            self.get_logger().info('TARGET_MAP_FINALIZED: 最终地图与关键帧目标已定稿；后续新观测直接绑定静态地图')
+        except Exception as error:response.message=str(error)
+        finally:
+            if timer:self.destroy_timer(timer)
+            self.finalizing=False
+        return response
+
+    def map_binding(self):
+        return dict(mode='slam_graph' if self.mapping else 'fixed_map',epoch=self.graph.epoch,
+                    graph_revision=self.graph.revision,finalized=self.frozen)
 
     def warn(self, reason):
         now = time.monotonic()
@@ -125,6 +211,10 @@ class Targets(Node):
                 self.stats['frames_without_decoded_id'] += 1
                 return
             tf = self.buffer.lookup_transform('odom', self.p['optical_frame'], stamp)
+            if self.mapping:
+                base=self.buffer.lookup_transform('odom','base_footprint',stamp).transform
+                robot=[base.translation.x,base.translation.y]
+            else:map_camera=self.buffer.lookup_transform('map',self.p['optical_frame'],stamp).transform
             k = np.array(info.k, dtype=float).reshape(3, 3)
             d = np.array(info.d, dtype=float)
             accepted_in_frame = set()
@@ -143,34 +233,19 @@ class Targets(Node):
                 key = int(marker_id)
                 camera_marker = cv2.Rodrigues(rvec)[0]
                 marker_rotation = rotation_matrix(tf.transform.rotation) @ camera_marker
-                marker_quaternion = rotation_quaternion(marker_rotation)
-                history = self.records.setdefault(key, deque(maxlen=self.p['max_observations_per_id']))
-                yaw_history = self.orientations.setdefault(key, deque(maxlen=self.p['max_observations_per_id']))
-                while history and stamp.nanoseconds-history[0][0] > self.p['fusion_window_s']*1e9:
-                    history.popleft()
-                if len(history) >= self.p['confirmation_observations']:
-                    center = np.median([h[1] for h in history], axis=0)
-                    if np.linalg.norm(point-center) > self.p['outlier_distance_m']:
-                        self.stats['position_outlier'] += 1
-                        self.warn(f'TARGET_OUTLIER: ID={key} 观测偏离历史，拒绝融合')
-                        continue
                 accepted_in_frame.add(key)
-                self.stats['position_accepted'] += 1
-                first = not history
-                history.append((stamp.nanoseconds, point))
-                yaw_history.append((stamp.nanoseconds, marker_quaternion))
                 row = dict(id=key, stamp_ns=stamp.nanoseconds, frame_id=self.p['optical_frame'],
                            camera_position=tvec.tolist(), camera_rvec=rvec.tolist(),
                            odom_position=point.tolist(), reprojection_error_px=error)
-                self.observations.publish(String(data=json.dumps(row)))
-                if self.output:
-                    with (self.output/'target-observations.jsonl').open('a') as f:
-                        f.write(json.dumps(row)+'\n')
-                if first:
-                    self.get_logger().info(f'TARGET_FOUND: 发现 ArUco ID={key}')
-                if len(history) >= self.p['confirmation_observations'] and key not in self.confirmed:
-                    self.confirmed.add(key)
-                    self.get_logger().info(f'TARGET_CONFIRMED: 多帧确认 ArUco ID={key}')
+                if self.mapping:
+                    try:binding=self.graph.bind(stamp.nanoseconds,point,marker_rotation,robot)
+                    except ValueError:
+                        self.pending.append((key,stamp.nanoseconds,point,marker_rotation,robot,row))
+                        self.stats['anchor_pending']+=1;continue
+                else:
+                    binding=dict(kind='map',point=transform_point(map_camera,tvec),
+                                 rotation=rotation_matrix(map_camera.rotation)@camera_marker)
+                self.accept(key,stamp.nanoseconds,binding,row)
         except TransformException:
             self.stats['observation_tf_unavailable'] += 1
             self.warn('TARGET_TF_UNAVAILABLE: 图像时刻的相机TF不可用，跳过定位')
@@ -197,35 +272,32 @@ class Targets(Node):
 
     def publish(self):
         now = self.get_clock().now()
-        try:
-            tf = self.buffer.lookup_transform('map', 'odom', now)
-        except TransformException:
-            if self.records:
-                self.warn('TARGET_MAP_TF_UNAVAILABLE: 当前map到odom变换不可用，暂缓地图定位发布')
-            return
         rows, markers = [], MarkerArray()
+        clear=Marker(action=Marker.DELETEALL);clear.header.frame_id='map';clear.header.stamp=now.to_msg()
+        markers.markers.append(clear)
         for key, history in self.records.items():
             if not history:
                 continue
-            center = np.median([h[1] for h in history], axis=0)
-            point = transform_point(tf.transform, center)
-            rotations = [h[1] for h in self.orientations.get(key, [])
-                         if h[0] >= history[0][0]]
-            odom_rotation = rotation_matrix(fuse_quaternions(rotations))
-            map_rotation = rotation_matrix(tf.transform.rotation) @ odom_rotation
+            try:projected=[self.graph.project(h[1]) for h in history]
+            except ValueError as error:self.warn('TARGET_ANCHOR_UNAVAILABLE: '+str(error));continue
+            point=np.median([p for p,_ in projected],axis=0)
+            map_rotation=rotation_matrix(fuse_quaternions([rotation_quaternion(r) for _,r in projected]))
             orientation = rotation_quaternion(map_rotation)
             # Marker +Z is its outward normal; ground-plane yaw follows this normal.
             normal = map_rotation[:, 2]
             yaw = float(np.arctan2(normal[1], normal[0])) if np.linalg.norm(normal[:2]) > .1 else None
             stale = (now.nanoseconds-history[-1][0])*1e-9 > self.p['stale_after_s']
             state = 'stale' if stale else ('confirmed' if key in self.confirmed else 'candidate')
-            spread = float(np.sqrt(np.mean([np.sum((h[1]-center)**2) for h in history])))
+            spread = float(np.sqrt(np.mean([np.sum((p-point)**2) for p,_ in projected])))
             rows.append(dict(id=key, type=self.target_types.get(key, 'unknown'),
                              position=point.tolist(), orientation=orientation.tolist(),
                              x=float(point[0]), y=float(point[1]), z=float(point[2]), yaw=yaw,
                              confirmed=key in self.confirmed,
                              frame_id='map', state=state, last_observed_ns=history[-1][0],
-                             observations=len(history), spread_m=spread))
+                             observations=len(history), spread_m=spread,
+                             anchor_nodes=sorted({h[1].get('node_id',h[1].get('source_node_id')) for h in history
+                                                  if h[1].get('node_id',h[1].get('source_node_id')) is not None}),
+                             coordinate_source='slam_keyframes' if self.mapping else 'fixed_map'))
             m = Marker()
             m.header.frame_id = 'map'; m.header.stamp = now.to_msg()
             m.ns = 'aruco_target'; m.id = key; m.type = Marker.SPHERE; m.action = Marker.ADD
@@ -245,11 +317,19 @@ class Targets(Node):
             label.text = f'ID {key} [{state}]'
             markers.markers.append(label)
         output = dict(schema_version=1, frame_id='map', stamp_ns=now.nanoseconds,
+                      map_binding=self.map_binding(),
                       orientation_convention='OpenCV marker axes; quaternion xyzw; yaw=outward normal heading',
                       targets=rows)
         self.estimates.publish(String(data=json.dumps(output)))
         self.markers.publish(markers)
         if self.output:
+            used={node for row in rows for node in row['anchor_nodes']}
+            anchors=[self.graph.nodes[key] for key in sorted(used)]
+            signature=json.dumps([self.map_binding()['mode'],self.graph.epoch,anchors])
+            if signature!=self.last_anchor_audit:
+                self.last_anchor_audit=signature
+                with (self.output/'target-anchor-history.jsonl').open('a') as f:
+                    f.write(json.dumps(dict(stamp_ns=now.nanoseconds,map_binding=self.map_binding(),nodes=anchors))+'\n')
             temporary = self.output/'targets.json.tmp'
             temporary.write_text(json.dumps(output, indent=2))
             temporary.replace(self.output/'targets.json')

@@ -1,0 +1,9 @@
+# A task is long-running and cancelable; its behavior tree owns unit ordering.
+string task_id
+---
+bool success
+string reason
+string result_json
+---
+string phase
+string details_json

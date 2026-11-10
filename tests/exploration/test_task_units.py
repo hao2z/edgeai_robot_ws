@@ -1,0 +1,197 @@
+"""Unit adapter contracts: independent navigation, deadlines and terminal checks."""
+from concurrent.futures import Future
+from pathlib import Path
+from types import SimpleNamespace as NS
+import sys
+import time
+import unittest
+from unittest.mock import patch
+from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import ComputePathToPose
+
+ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'src/edgeai_mission/scripts'))
+sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
+from task_units import Units,UnitFailure
+
+
+def ready(value):
+    f=Future();f.set_result(value);return f
+
+
+class Handle:
+    accepted=True
+    def __init__(self):self.future=Future();self.cancellations=0
+    def get_result_async(self):return self.future
+    def cancel_goal_async(self):
+        self.cancellations+=1
+        if not self.future.done():self.finish(5,0)
+        return ready(NS())
+    def finish(self,status=4,error=0):self.future.set_result(NS(status=status,result=NS(error_code=error)))
+
+
+class Client:
+    def __init__(self):self.goals=[]
+    def server_is_ready(self):return True
+    def send_goal_async(self,goal):
+        h=Handle();self.goals.append(h);return ready(h)
+
+
+class TaskUnits(unittest.TestCase):
+    def test_stop_request_is_handled_before_entering_ros_spin(self):
+        import rclpy
+        from cooperative_rescue import CooperativeRescue
+        from normal_rescue import Rescue
+        for algorithm in (CooperativeRescue,Rescue):
+            node=algorithm.__new__(algorithm)
+            node.deadline=float('inf');node.stop_requested=True;node.closing=False
+            with patch.object(rclpy,'ok',return_value=True),patch.object(rclpy,'spin_once') as spin:
+                with self.assertRaises(KeyboardInterrupt):node.wait(lambda:False)
+                spin.assert_not_called()
+
+    def joint(self):
+        u=Units.__new__(Units);u.task='c1';u.pending={};u.arrived=set();u.selected=[[0.,0.,0.],[1.,0.,0.]]
+        u.navigation_deadlines={};u.condition_complete=False;u.failure_kind='initial';u.fatal_reason=None
+        u.failed_parking={}
+        u.has_control=True
+        u.node=NS(c=dict(navigation_timeout_s=180.,radius_m=.7,dwell_s=10.),nav={'':Client(),'robot2':Client()},
+            handles=[],check_owner=lambda:None,goal_pose=lambda p:PoseStamped(),event=lambda *a,**kw:None,
+            states={'':dict(phase='IDLE'),'robot2':dict(phase='IDLE')},
+            get_clock=lambda:NS(now=lambda:NS(nanoseconds=2_000_000_000)))
+        def wait(predicate,timeout):
+            if not predicate():raise RuntimeError('transition not ready')
+        u.node.wait=wait
+        return u
+
+    def test_first_task_checks_both_types_and_reports_missing_c1(self):
+        from rescue_policy import select_goal
+        u=self.joint();u.task='find_targets';u.target_index=0
+        u.required_targets=[dict(id=1,type='normal'),dict(id=2,type='cooperative')]
+        u.node.deadline=time.monotonic()+30
+        u.node.c.update(normal_offset_m=.35,goal_source='detected_target')
+        rows=[dict(id=1,type='normal',x=1.,y=2.,yaw=0.,spread_m=.01)]
+        u.node.select_current_goal=lambda:select_goal(u.node.c,dict(frame_id='map',targets=rows))
+        u.invoke('select_target');self.assertEqual(u.goal['target_id'],1)
+        self.assertFalse(u.invoke('next_target')['complete'])
+        with self.assertRaisesRegex(ValueError,'cooperative'):u.invoke('select_target')
+        rows.append(dict(id=2,type='cooperative',x=3.,y=2.,yaw=0.,spread_m=.01))
+        u.invoke('select_target');self.assertEqual(u.goal['target_id'],2)
+        self.assertTrue(u.invoke('next_target')['complete'])
+        u.invoke('check_targets');self.assertTrue(u.condition_complete)
+
+    def test_c1_missing_target_has_explicit_reason(self):
+        u=self.joint();u.node.c['target_id']=2
+        with self.assertRaisesRegex(UnitFailure,'C1 target not localized'):
+            u.joint_target(dict(frame_id='map',targets=[]))
+
+    def test_dispatches_both_without_waiting_for_first_result(self):
+        u=self.joint();u.dispatch()
+        self.assertEqual(set(u.pending),{'','robot2'})
+        self.assertTrue(all(not entry[1].done() for entry in u.pending.values()))
+
+    def test_failure_preserves_other_active_action_and_does_not_resend(self):
+        u=self.joint();u.dispatch();healthy=u.pending['robot2'][0]
+        u.pending[''][0].finish(6,208)
+        with self.assertRaises(UnitFailure):u.poll_navigation()
+        u.cancel_navigation();u.dispatch()
+        self.assertIs(u.pending['robot2'][0],healthy)
+        self.assertEqual(healthy.cancellations,0)
+        self.assertEqual(len(u.node.nav['robot2'].goals),1)
+        self.assertEqual(len(u.node.nav[''].goals),2)
+        self.assertEqual(u.failed_parking[''],[[0.,0.,0.]])
+
+    def test_no_result_during_nav2_recovery_does_not_trigger_task_retry(self):
+        u=self.joint();u.dispatch()
+        for _ in range(5):self.assertFalse(u.poll_navigation()['complete'])
+        self.assertEqual([h[0].cancellations for h in u.pending.values()],[0,0])
+
+    def test_start_occupied_failure_does_not_blacklist_parking_goal(self):
+        u=self.joint();u.dispatch();u.pending[''][0].finish(6,ComputePathToPose.Result.START_OCCUPIED)
+        with self.assertRaises(UnitFailure):u.poll_navigation()
+        self.assertFalse(u.failed_parking)
+
+    def test_arrived_robot_waits_while_other_navigates(self):
+        u=self.joint();u.dispatch();u.pending[''][0].finish()
+        self.assertFalse(u.poll_navigation()['complete'])
+        u.cancel_navigation();u.dispatch()
+        self.assertEqual(len(u.node.nav[''].goals),1)
+        u.pending['robot2'][0].finish()
+        self.assertTrue(u.poll_navigation()['complete'])
+        self.assertFalse(u.condition_complete,'Navigation completion is not rescue success')
+
+    def test_timeout_cancels_and_confirms_only_failed_robot(self):
+        u=self.joint();u.dispatch();late=u.pending[''][0];healthy=u.pending['robot2'][0]
+        u.navigation_deadlines['']=time.monotonic()-1
+        with self.assertRaisesRegex(UnitFailure,'timeout'):u.poll_navigation()
+        self.assertTrue(late.future.done());self.assertEqual(late.cancellations,1)
+        self.assertEqual(healthy.cancellations,0)
+
+    def test_external_cancellation_is_fatal_and_sticky(self):
+        u=self.joint();u.node.deadline=time.monotonic()+30;u.dispatch();u.pending[''][0].finish(5)
+        with self.assertRaises(UnitFailure) as first:u.invoke('poll_navigation')
+        self.assertEqual(first.exception.category,'fatal')
+        with self.assertRaises(UnitFailure) as second:u.invoke('dispatch_navigation')
+        self.assertEqual(second.exception.category,'fatal')
+
+    def test_external_cancel_between_retry_units_cannot_be_discarded(self):
+        u=self.joint();u.dispatch();u.pending['robot2'][0].finish(5)
+        with self.assertRaises(UnitFailure) as error:u.cancel_navigation()
+        self.assertEqual(error.exception.category,'fatal')
+        u.cancel_navigation(True,shutting_down=True)
+        self.assertFalse(u.pending)
+
+    def test_ownership_loss_cannot_be_masked_by_region_fallback(self):
+        u=self.joint();u.node.deadline=time.monotonic()+30
+        def lost():raise RuntimeError('operator takeover')
+        u.node.check_owner=lost
+        with self.assertRaises(UnitFailure):u.invoke('dispatch_navigation')
+        with self.assertRaises(UnitFailure) as error:u.invoke('inside_rescue_region')
+        self.assertEqual(error.exception.category,'fatal')
+
+    def test_ownership_loss_inside_calculation_is_not_retryable(self):
+        u=self.joint();u.node.deadline=time.monotonic()+30;owned=[True]
+        def check():
+            if not owned[0]:raise RuntimeError('operator takeover')
+        def calculation(**kw):
+            owned[0]=False;raise RuntimeError('legacy wait failed')
+        u.node.check_owner=check;u.node.select_parking_pair=calculation
+        with self.assertRaises(UnitFailure) as error:u.invoke('select_parking')
+        self.assertEqual(error.exception.category,'fatal')
+        self.assertEqual(u.fatal_reason,'operator takeover')
+
+    def test_success_requires_rescue_condition_confirmation(self):
+        u=self.joint()
+        with self.assertRaisesRegex(UnitFailure,'conditions'):u.record_success()
+
+    def test_cancel_failure_still_attempts_authority_and_process_cleanup(self):
+        u=self.joint();closed=[]
+        def fail(*a,**kw):raise RuntimeError('cancel confirmation timeout')
+        u.cancel_navigation=fail;u.node.close=lambda:closed.append('shutdown')
+        u.node.destroy_node=lambda:closed.append('destroy')
+        with self.assertRaisesRegex(RuntimeError,'cancel confirmation'):u.close()
+        self.assertEqual(closed,['shutdown','destroy'])
+
+    def test_start_occupied_preflight_reaches_native_navigation_recovery(self):
+        from cooperative_rescue import CooperativeRescue
+        n=CooperativeRescue.__new__(CooperativeRescue)
+        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
+        n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped()
+        events=[];n.event=lambda name,**kw:events.append(name)
+        n.action=lambda *a:NS(status=6,result=NS(error_code=ComputePathToPose.Result.START_OCCUPIED))
+        pair=([.5,0.,0.],[0.,.5,0.])
+        with patch('cooperative_rescue.parking_pairs',return_value=[pair]):
+            self.assertEqual(n.select_parking_pair(),pair)
+        self.assertEqual(events.count('PLAN_START_OCCUPIED_NAV_RECOVERY'),2)
+
+    def test_reselect_parking_excludes_failed_goal_history(self):
+        from cooperative_rescue import CooperativeRescue
+        n=CooperativeRescue.__new__(CooperativeRescue)
+        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
+        n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped();n.event=lambda *a,**kw:None
+        n.action=lambda *a:NS(status=4,result=NS(error_code=0))
+        failed=([.5,0.,0.],[0.,.5,0.]);next_pair=([.6,0.,0.],[0.,.5,0.])
+        with patch('cooperative_rescue.parking_pairs',return_value=[failed,next_pair]):
+            self.assertEqual(n.select_parking_pair(excluded={'':[failed[0]]}),next_pair)
+
+
+if __name__=='__main__':unittest.main()

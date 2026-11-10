@@ -172,7 +172,7 @@ def setup(context):
                 args.extend(['--params-file',str(filter_file)])
                 actions.append(ExecuteProcess(cmd=args,output='screen'))
                 params['scan_topic']=topic('scan_slam')
-            actions.append(Node(package='slam_toolbox', executable='async_slam_toolbox_node',
+            actions.append(Node(package='edgeai_navigation', executable='anchored_slam_toolbox',
                                 namespace=ns, name='slam_toolbox', parameters=[params],
                                 remappings=[('/map', topic('map')), ('/map_metadata', topic('map_metadata'))],
                                 output='screen'))

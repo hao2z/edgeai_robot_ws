@@ -1,23 +1,36 @@
 # 任务流程入口
 
-已完成阶段、最新成功结果和待接手问题见 [阶段成果记录](project-status.md)。下文为当前结构与后续架构建议。
-
-当前默认流程：robot1 探索/建图 → 未发现 S1 时补充搜寻 → S1 导航/独立救援判定/重试 → S1 完成 → 保存地图并停用 SLAM → 两机 AMCL → C1 双停车位导航 → 两机共同连续停留。
+更新：2026-11-10。默认流程为robot1建图并找到全部必需目标→S1→地图交接→双机定位/C1。按固定规则调度；Shell负责启动和清理，不决定下一救援阶段。
 
 | 层级 | 定义位置 | 职责 |
 |---|---|---|
-| 启动与阶段交接 | `scripts/simulation/run-open-source-exploration.sh` | 启动进程、自然探索完成、S1结果交给协作协调器 |
-| S1任务 | `src/edgeai_navigation/scripts/normal_rescue.py` | `execute`取得控制权/搜寻，`complete_rescue`重检重试，`rescue_attempt`导航后独立验收 |
-| S1判定与修正 | `rescue_policy.py`、`rescue_alignment.py` | 救援半径或精确点规则、朝向、停车、连续时间；小幅修正 |
-| C1协调 | `src/edgeai_navigation/scripts/cooperative_rescue.py` | 地图/定位交接、两机目标分配、共同验收 |
-| 每次导航 | `src/edgeai_navigation/config/behavior_trees/explore_recovery.xml` | 规划、路径复用、局部控制和脱困；`goal_policy.py`生成逐任务派生树 |
+| 总任务 | `src/edgeai_mission/config/integrated.xml` | 执行第一任务、S1成功后启动C1 |
+| 第一任务 | integrated.xml中的MappingAndTargetSearch、tasks/find_targets.xml | 前沿完成、停止探索、逐个检查ID/类型、补搜缺失目标、保存输出 |
+| 单机救援 | `src/edgeai_mission/config/tasks/s1.xml` | 选目标/必要搜寻、选位、导航、条件检查、修正、有界重试 |
+| 双机救援 | `src/edgeai_mission/config/tasks/c1.xml` | 交接、就绪/定位有界重试、双位选择、并发导航、共同停留、重选 |
+| 任务接口 | `src/edgeai_mission/action/ExecuteTask.action`、`src/task_executor.cpp` | 可反馈、可取消的S1/C1任务执行 |
+| 单位适配 | `src/edgeai_mission/scripts/task_units.py` | 计算、派发、轮询、一次判定；复用navigation算法 |
+| 每次导航 | `src/edgeai_navigation/config/behavior_trees/explore_recovery.xml` | 规划、控制与恢复；两机及各到位策略保留共同恢复入口 |
+| 启动 | `scripts/simulation/run-open-source-exploration.sh` | 参数、进程、日志和清理，不决定业务顺序 |
 
-配置：S1使用 `midterm_single_rescue.yaml`，C1使用 `cooperative_rescue.yaml`。修改参数后重启。`navigation_max_retries` 控制每次导航内部重试，`rescue_max_retries` 控制确认失败后的任务级重检和重做，均共用原有时间预算。最终结果保存每次导航、候选位、修正和任务重试记录。
+协调器通过 `/mission/tasks/s1/execute`、`/mission/tasks/c1/execute` 调用任务，接收Feedback和Result。任务树通过内部服务调用单位算法，再调用各机器人的Nav2 Action执行运动。候选计算和试规划都不移动机器人。
 
-## 是否统一到行为树
+任务树负责救援判定，协调器负责调度和汇总。导航成功只表示到达导航要求，必须另行通过救援距离、有效数据、停车与连续停留检查。
 
-可以。建议增加上层任务行为树，保留现有 Nav2 导航行为树。上层表达探索、目标搜寻、S1救援、地图交接、两机定位、C1救援的顺序与有界重试；几何计算、目标感知、定位质量和停留判定继续由各自模块负责。
+S1配置为 `src/edgeai_navigation/config/midterm_single_rescue.yaml`，C1为 `cooperative_rescue.yaml`。导航失败次数与救援重做次数分别控制；运行时写入 `mission-runtime.json` 的 `task_navigation_attempts`、`task_attempts`，表示包含首次的尝试次数。重试不重置总预算；Nav2内部恢复次数独立。
 
-接入前应把现有阶段包装成可取消、可反馈进度、返回结构化失败原因的 ROS action。上层树只调用阶段 action 和条件节点，不另建速度控制权，不绕过导航仲裁。现有 Nav2 树继续负责一次导航的内部恢复。不要在两个层级重复叠加未知次数的重试，也不要让行为树把等待超时误当成动作已停止。
+运行树快照在会话的 `mission-trees/`。`mission.log` / `mission-events.jsonl`记录调度与反馈；`task-unit-events.jsonl`记录单位操作结果；最终查看 `mission-result.json`、`rescue-result.json`、`cooperative-result.json`。
 
-当前尚未迁移上层任务树；总流程仍由脚本与两个任务协调器执行，已有完整成功轮次。若后续迁移，应保留现有半径判定与有界重试语义，单独验证新编排的取消、超时和阶段交接。
+停止总任务：
+
+```bash
+ros2 service call /mission/stop std_srvs/srv/Trigger '{}'
+```
+
+响应只表示收到请求，最终结果在清理确认后发布。参数/树修改后重新启动会话。
+
+实现边界、验证与剩余拆分工作见 [重构记录](mission-refactor-status.md)。完整比赛模式、单位行为与异常清单见 [设计文档](mission-behavior-tree-design.md)，其中规划项不等于已实现功能。
+
+目标随SLAM局部修正及静态地图交接机制见 [目标地图绑定](target-map-anchoring.md)。交接前先固定最终地图与关键帧目标，再保存地图并启动AMCL。
+
+第一任务将前沿建图完成与视觉目标齐备分开检查：前沿耗尽不代表S1/C1都已找到。find_targets任务通过现有搜寻模块补齐缺失目标，全部通过check_targets后才允许进入S1。C1树只检查交接后的目标有效性，不承担首次搜寻。默认双机required_targets为ID1/normal、ID2/cooperative；单机对照只要求S1。任务输出target-search-result.json，不覆盖S1救援结果。

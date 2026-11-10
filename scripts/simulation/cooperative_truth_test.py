@@ -40,8 +40,8 @@ def main():
     world=directory/'truth-world.sdf';make_world(share,targets,world,share/'worlds/midterm.sdf')
     generate(world,directory/'cooperative-map')
     data=yaml.safe_load(targets.read_text())
-    (directory/'cooperative-targets.json').write_text(json.dumps(dict(targets=[
-        dict(id=t['id'],x=t['pose'][0],y=t['pose'][1],yaw=t['pose'][5]) for t in data['targets']]),indent=2))
+    (directory/'cooperative-targets.json').write_text(json.dumps(dict(frame_id="map",targets=[
+        dict(id=t['id'],type=t['type'],x=t['pose'][0],y=t['pose'][1],yaw=t['pose'][5]) for t in data['targets']]),indent=2))
     robots=yaml.safe_load((share/'config/robots_midterm.yaml').read_text())
     # First robot starts beside S1, as after successful single rescue.
     if not args.filter_check:robots['robots'][0]['pose']=[1.,3.65,.01,0.,0.,1.5707963267948966]
@@ -99,12 +99,36 @@ def main():
             '--directory',str(directory),'--tree',nav['bt_navigator']['ros__parameters']['default_nav_to_pose_bt_xml'],
             '--ros-args','-p','use_sim_time:=true','-p','allow_auto:=false'])
         launch('rviz',['rviz2','-d',str(directory/'cooperative.rviz'),'--ros-args','-p','use_sim_time:=true'])
-        coordinator=launch('cooperative',['python3','-u',str(ROOT/'src/edgeai_navigation/scripts/cooperative_rescue.py'),
-            '--static-test','--directory',str(directory),'--config',str(ROOT/'src/edgeai_navigation/config/cooperative_rescue.yaml'),
-            '--ros-args','-p','use_sim_time:=true'])
+        # Exercise the same task Action and behavior tree as the default mission.
+        from ament_index_python.packages import get_package_prefix
+        import rclpy
+        from rclpy.action import ActionClient
+        from edgeai_mission.action import ExecuteTask
+        task_tree=directory/'c1-task.xml'
+        task_tree.write_text((ROOT/'src/edgeai_mission/config/tasks/c1.xml').read_text())
+        settings=dict(directory=str(directory),project_root=str(ROOT),cooperative_static_test=True,
+            wall_timeout_s=args.duration,task_trees=dict(c1=str(task_tree)),
+            unit_worker_script=str(ROOT/'src/edgeai_mission/scripts/task_units.py'))
+        config=directory/'mission-runtime.json';config.write_text(json.dumps(settings,indent=2))
+        binary=Path(get_package_prefix('edgeai_mission'))/'lib/edgeai_mission/task_executor'
+        launch('c1-task',[str(binary),'--ros-args','-p','config:='+str(config),'-p','task_name:=c1'])
         time.sleep(8.);(directory/'ready').touch();print('COOPERATIVE TRUTH TEST '+str(directory),flush=True)
-        result=coordinator.wait(timeout=args.duration)
-        print((directory/'cooperative-result.json').read_text(),flush=True)
+        rclpy.init();peer=rclpy.create_node('cooperative_test_client')
+        try:
+            client=ActionClient(peer,ExecuteTask,'/mission/tasks/c1/execute')
+            if not client.wait_for_server(timeout_sec=10.):raise RuntimeError('C1 task server unavailable')
+            end=time.monotonic()+args.duration
+            def wait(future):
+                while not future.done() and time.monotonic()<end:rclpy.spin_once(peer,timeout_sec=.05)
+                if not future.done():raise subprocess.TimeoutExpired('C1 task Action',args.duration)
+                return future.result()
+            handle=wait(client.send_goal_async(ExecuteTask.Goal(task_id=directory.name+':c1')))
+            if not handle.accepted:raise RuntimeError('C1 task rejected')
+            terminal=wait(handle.get_result_async())
+            result=0 if terminal.status==4 and terminal.result.success else 1
+            (directory/'task-action-result.json').write_text(json.dumps(dict(success=result==0,reason=terminal.result.reason,result_json=terminal.result.result_json)))
+            print((directory/'task-action-result.json').read_text(),flush=True)
+        finally:peer.destroy_node();rclpy.shutdown()
     except subprocess.TimeoutExpired:
         print('Test wall timeout',flush=True)
     except KeyboardInterrupt:

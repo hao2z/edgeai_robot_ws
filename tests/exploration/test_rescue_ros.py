@@ -118,7 +118,8 @@ class FakeNavigation(Node):
             self.transform.transform.rotation=handle.request.pose.pose.orientation
             if len(self.calls) == self.search_discover_at:
                 Path(self.search_file).write_text(json.dumps(dict(frame_id='map',targets=[
-                    dict(id=1,type='normal',x=handle.request.pose.pose.position.x+.7,
+                    *getattr(self,'retained_search_targets',[]),
+                    dict(id=getattr(self,'search_target_id',1),type=getattr(self,'search_target_type','normal'),x=handle.request.pose.pose.position.x+.7,
                          y=handle.request.pose.pose.position.y,yaw=3.141592653589793,spread_m=.01)])))
                 deadline=time.monotonic()+5
                 while not handle.is_cancel_requested and time.monotonic()<deadline:

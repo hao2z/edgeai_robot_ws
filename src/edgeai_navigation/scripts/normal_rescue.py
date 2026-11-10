@@ -129,6 +129,7 @@ class Rescue(Node):
     def wait(self, predicate, timeout=20.0, check_owner=False):
         deadline = min(self.deadline, time.monotonic()+timeout)
         while rclpy.ok() and time.monotonic() < deadline:
+            if getattr(self,'stop_requested',False) and not getattr(self,'closing',False):raise KeyboardInterrupt()
             rclpy.spin_once(self, timeout_sec=.05)
             if check_owner:
                 self.check_owner()
@@ -367,8 +368,7 @@ class Rescue(Node):
             failures += 1
             self.event('RETRY_WAIT', f'第 {attempt} 次导航失败（{failure}）；保留目标ID，等待控制槽释放和新鲜TF后按最新定位重试')
             self.wait_to_retry(goal, started)
-    def execute(self, goal=None):
-        self.event('PREPARING', json.dumps(goal))
+    def acquire_control(self):
         self.wait(lambda: self.manual.service_is_ready() and self.client.server_is_ready()
                   and self.rescue_client.server_is_ready()
                   and self.state is not None and time.monotonic()-self.state_received < 2.0)
@@ -386,11 +386,13 @@ class Rescue(Node):
                     and self.state['explorer_paused'])
         self.wait(acquired)
         self.expected_sequence = requested_sequence
+
+    def find_target(self, goal=None):
         if goal is None:
             try:
                 goal = self.select_current_goal()
             except ValueError as exc:
-                if ('No eligible localized normal target' not in str(exc) or
+                if ('No eligible localized ' not in str(exc) or
                         not self.c.get('search_enabled', False)):
                     raise
                 from target_research import search_target
@@ -402,7 +404,12 @@ class Rescue(Node):
                     self.search_active = False
                     self.search_activation.publish(Bool(data=False))
         self.rescue_goal = goal
-        return self.complete_rescue(goal)
+        return goal
+
+    def execute(self, goal=None):
+        self.event('PREPARING', json.dumps(goal))
+        self.acquire_control()
+        return self.complete_rescue(self.find_target(goal))
 
     def complete_rescue(self,goal):
         self.navigation_started=self.get_clock().now().nanoseconds/1e9

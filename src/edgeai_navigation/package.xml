@@ -24,11 +24,14 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <depend>std_msgs</depend>
+  <depend>slam_toolbox</depend>
+  <depend>boost</depend>
+  <depend>libtbb-dev</depend>
+  <depend>std_srvs</depend>
   <depend>nav2_behaviors</depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>nav2_amcl</exec_depend>

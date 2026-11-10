@@ -1,0 +1,33 @@
+<root BTCPP_format="4" main_tree_to_execute="SingleRescue">
+  <BehaviorTree ID="SingleRescue">
+    <Sequence>
+      <TaskUnit operation="acquire"/>
+      <Fallback><TaskUnit operation="select_target"/><TaskUnit operation="search_target"/></Fallback>
+      <RetryTask attempts="{task_attempts}">
+        <Sequence>
+          <RetryTask attempts="{navigation_attempts}">
+            <Sequence>
+              <TaskUnit operation="cancel_navigation"/>
+              <TaskUnit operation="select_approach"/>
+              <Fallback>
+                <Sequence><TaskUnit operation="dispatch_navigation"/><UntilDone><TaskUnit operation="poll_navigation"/></UntilDone></Sequence>
+                <TaskUnit operation="inside_rescue_region"/>
+              </Fallback>
+            </Sequence>
+          </RetryTask>
+          <UntilDone>
+            <Sequence>
+              <TaskUnit operation="check_rescue"/>
+              <Fallback>
+                <TaskDone/>
+                <Sequence><CorrectionNeeded/><TaskUnit operation="correct"/></Sequence>
+                <AlwaysSuccess/>
+              </Fallback>
+            </Sequence>
+          </UntilDone>
+        </Sequence>
+      </RetryTask>
+      <TaskUnit operation="record_success"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

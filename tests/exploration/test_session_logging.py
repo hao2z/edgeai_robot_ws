@@ -14,6 +14,14 @@ spec.loader.exec_module(module)
 
 
 class SessionLoggingTest(unittest.TestCase):
+    def test_mission_stage_failure_is_visible_in_main_event_stream(self):
+        records=[]
+        reducer=module.EventReducer(lambda *args,**kw:records.append(args))
+        reducer.consume('mission','[INFO] [1] [mission_coordinator]: MISSION_STAGE_FINISHED: {"step":"s1","success":false}')
+        self.assertEqual(records[0][0],'mission')
+        self.assertEqual(records[0][1],'ERROR')
+        self.assertIn('MISSION_STAGE_FINISHED',records[0][2])
+
     def test_suspect_discovery_is_visible_in_live_monitor(self):
         records=[]
         reducer=module.EventReducer(lambda *args,**kw:records.append(args))

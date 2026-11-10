@@ -1,0 +1,33 @@
+<root BTCPP_format="4" main_tree_to_execute="JointRescue">
+  <BehaviorTree ID="JointRescue">
+    <Sequence>
+      <TaskUnit operation="handover"/>
+      <!-- Startup readiness/localization can be retried without replaying map handover. -->
+      <RetryTask attempts="{navigation_attempts}">
+        <Sequence>
+          <TaskUnit operation="wait_navigation_ready"/>
+          <TaskUnit operation="localize"/>
+        </Sequence>
+      </RetryTask>
+      <TaskUnit operation="prepare_target"/>
+      <RetryTask attempts="{task_attempts}">
+        <Sequence>
+          <RetryTask attempts="{navigation_attempts}">
+            <Sequence>
+              <TaskUnit operation="cancel_navigation"/>
+              <Fallback>
+                <TaskUnit operation="select_parking_locked"/>
+                <!-- Retarget both only when no viable pair preserves the healthy robot. -->
+                <Sequence><TaskUnit operation="cancel_all_navigation"/><TaskUnit operation="select_parking"/></Sequence>
+              </Fallback>
+              <TaskUnit operation="dispatch_navigation"/>
+              <UntilDone><TaskUnit operation="poll_navigation"/></UntilDone>
+            </Sequence>
+          </RetryTask>
+          <UntilDone><TaskUnit operation="check_rescue"/></UntilDone>
+        </Sequence>
+      </RetryTask>
+      <TaskUnit operation="record_success"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

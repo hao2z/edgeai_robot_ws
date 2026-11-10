@@ -1,0 +1,30 @@
+<root BTCPP_format="4" main_tree_to_execute="IntegratedMission">
+  <!-- Fixed scheduling rules; each task owns its unit-behavior tree. -->
+  <BehaviorTree ID="IntegratedMission">
+    <Sequence>
+      <SubTree ID="MappingAndTargetSearch"/>
+      <Fallback>
+        <Inverter><RescueEnabled/></Inverter>
+        <Sequence>
+          <ExecuteTask task="s1"/>
+          <Fallback>
+            <Inverter><CooperativeEnabled/></Inverter>
+            <ExecuteTask task="c1"/>
+          </Fallback>
+        </Sequence>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+  <!-- First task: mapping and visual localization of every required rescue target. -->
+  <BehaviorTree ID="MappingAndTargetSearch">
+    <Sequence>
+      <AwaitExploration/>
+      <MissionStage step="quiesce"/>
+      <Fallback>
+        <Inverter><RescueEnabled/></Inverter>
+        <ExecuteTask task="find_targets"/>
+      </Fallback>
+      <MissionStage step="save_map"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

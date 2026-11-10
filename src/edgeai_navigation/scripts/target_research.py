@@ -20,7 +20,7 @@ def search_target(node):
         try:
             return node.select_current_goal()
         except ValueError as exc:
-            if 'No eligible localized normal target' not in str(exc):
+            if 'No eligible localized ' not in str(exc):
                 raise
             return None
     node.event('SEARCH_STARTED', '未定位救援目标，开始在已知空闲区域移动并连续转圈观察')

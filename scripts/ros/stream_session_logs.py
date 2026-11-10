@@ -62,13 +62,16 @@ class EventReducer:
                 group[0], group[1] = self.clock(), 0
 
     def consume(self, source, line, stopping=False):
+        if source=='mission' and 'MISSION_' in line:
+            self.emit(source,'ERROR' if '"success":false' in line else 'INFO',line.split(']: ',1)[-1],line)
+            return
         if source=='cooperative' and 'COOPERATIVE_' in line:
             self.emit(source,'ERROR' if '"success": false' in line else 'INFO',line.split(']: ',1)[-1],line)
             return
         if source=='suspects' and ('SUSPECT_PROPOSED:' in line or 'SUSPECT_RETAINED:' in line):
             self.emit(source,'INFO',line.split(']: ',1)[-1],line)
             return
-        if source == 'rescue' and 'RESCUE_' in line:
+        if source in ('rescue', 'target-search') and 'RESCUE_' in line:
             self.emit(source, 'ERROR' if ('RESCUE_FAILED:' in line or 'RESCUE_RESULT: 失败' in line) else 'INFO', line.split(']: ', 1)[-1], line)
             return
         if source == 'observation' and 'OBSERVATION_' in line:
@@ -159,7 +162,7 @@ def follow(directory):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     directory = Path(directory)
-    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'suspects', 'scan360', 'observation', 'rescue', 'cooperative')
+    names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'suspects', 'scan360', 'observation', 'target-search', 'rescue', 'cooperative', 'mission')
     for name in names:
         (directory / f'{name}.log').touch(exist_ok=True)
     handles = {name: (directory / f'{name}.log').open(encoding='utf-8', errors='replace')

@@ -22,7 +22,7 @@ bash edgeai.sh check
 
 | 命令 | 用途 |
 |---|---|
-| `bash edgeai.sh mission` | 默认完整任务：RPP、Smac Lattice、中期场地、双机器人、3600秒墙钟上限 |
+| `bash edgeai.sh mission` | 默认完整任务：RPP、Smac Lattice、中期场地、双机器人；探索阶段3600秒墙钟上限 |
 | `bash edgeai.sh mission --single-robot` | 单机建图和S1救援对照 |
 | `bash edgeai.sh navigation` | 加载仿真真值地图与定位，单机手动选点测试 |
 | `bash edgeai.sh cooperative` | 使用上一轮运行参数，跳过探索/S1，直接做静态地图C1专项 |
@@ -55,3 +55,11 @@ bash edgeai.sh cooperative --filter-check
 - Windows自动截图、窗口最大化和终端窗口关闭没有Linux等效；Linux日志照常保存，截图手动完成。当前仅做入口和环境检查，尚未在队员的原生Ubuntu桌面完成图形验收。
 
 任务流程、验证与遗留问题见 [项目状态](project-status.md) 和 [开发记录](development-record-2026-11-07.md)。
+
+## 任务树与结果
+
+第一任务先建图并补齐所有必需救援目标，再执行S1、地图交接和C1。总树在src/edgeai_mission/config/integrated.xml，补搜树在config/tasks/find_targets.xml，S1/C1各有独立任务树。修改源码或新增包后先重新构建。
+
+会话内查看target-search-result.json、rescue-result.json、cooperative-result.json和mission-result.json；任务树快照在mission-trees/，单位结果在task-unit-events.jsonl。第一任务搜寻复用midterm_single_rescue.yaml的search_*配置，实际目标清单见mission-runtime.json的required_targets。探索、补搜和救援预算独立，--duration不是总任务时限。
+
+当前架构与验证边界见 [任务流程](task-workflow.md) 和 [目标地图绑定](target-map-anchoring.md)。

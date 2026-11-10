@@ -90,11 +90,11 @@ def select_goal(config, registry):
         target_id = config['target_id']
     elif config['goal_source'] == 'detected_target':
         rows = [r for r in registry.get('targets', [])
-                if r.get('type') == 'normal' and r.get('yaw') is not None
+                if r.get('type') == config.get('target_type', 'normal') and r.get('yaw') is not None
                 and (not config.get('require_confirmation', False) or r.get('confirmed'))
                 and (config['target_id'] < 0 or r['id'] == config['target_id'])]
         if registry.get('frame_id') != 'map' or not rows:
-            raise ValueError('No eligible localized normal target with map orientation')
+            raise ValueError('No eligible localized '+config.get('target_type', 'normal')+' target with map orientation')
         row = min(rows, key=lambda r: (-r.get('observations', 1), r['spread_m'], r['id']))
         target_id = row['id']
         yaw = row['yaw']

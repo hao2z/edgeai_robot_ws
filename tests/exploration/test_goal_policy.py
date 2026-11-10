@@ -34,10 +34,9 @@ class GoalTrees(unittest.TestCase):
                 self.assertIsNotNone(retry.find('.//SelectRecovery'))
                 self.assertFalse(tree.findall('.//Wait'))
                 planner_help=tree.findall('.//WouldAPlannerRecoveryHelp')
-                self.assertEqual(len(planner_help),1 if policy=='rescue' else 2)
+                self.assertEqual(len(planner_help),2)
                 self.assertIsNotNone(tree.find('.//PlannerStartOccupied'))
-                if policy=='rescue':
-                    self.assertEqual(tree.find('.//ScriptCondition').get('code'),'compute_path_error_code == 0')
+                self.assertEqual(tree.find('.//ScriptCondition').get('code'),'compute_path_error_code == 0')
                 for tag in ('BackUp','Spin','RecoveryNode','ClearEntireCostmap'):
                     self.assertEqual(len(tree.findall('.//'+tag)),len(ET.parse(source).findall('.//'+tag)))
 

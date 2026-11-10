@@ -1,6 +1,6 @@
 # 中期检查仿真场景
 
-> 2026-11-07 更新：默认任务入口现为双机器人流程：robot1 探索/S1 → 共享地图与双 AMCL → C1。
+> 2026-11-10 更新：默认任务入口现为双机器人流程：robot1 探索/S1 → 共享地图与双 AMCL → C1。
 > 单机对照使用 `Start-Autonomous-Exploration.ps1 -SingleRobot`。
 > 当前结果、预算限制与入口见 [项目状态](../project-status.md)。
 
@@ -16,9 +16,9 @@ powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1
 powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1
 ```
 
-robot1 世界起点为 (0.45, 0.55)、朝北，保持根命名空间；robot2 等待并使用独立前缀。检测使用 0.16 m 尺寸和 `1:normal,2:cooperative` 映射。探索自然完成后选择 S1（ID 1）救援；未发现时执行有预算的补充搜寻。超时或进程异常不算探索完成。S1 完成后保存最终地图和目标、停止 SLAM，并启动共享地图与两机 AMCL，随后执行 C1。单机对照加 `-SingleRobot`，仅完成 S1。
+robot1 世界起点为 (0.45, 0.55)、朝北，保持根命名空间；robot2 等待并使用独立前缀。检测使用 0.16 m 尺寸和 `1:normal,2:cooperative` 映射。探索自然完成后，第一任务先检查S1/C1并对缺失目标执行有预算的补充搜寻，全部必需目标定位后才进入S1救援。超时或进程异常不算探索完成。S1 完成后保存最终地图和目标、停止 SLAM，并启动共享地图与两机 AMCL，随后执行 C1。单机对照加 `-SingleRobot`，仅完成 S1。
 
-S1 参数在 `src/edgeai_navigation/config/midterm_single_rescue.yaml`，C1 参数在 `cooperative_rescue.yaml`；距离、停车与连续停留由任务协调器独立判定，不能仅以导航成功代替救援成功。S1要求0.50m内连续10秒，C1要求两机同时在0.70m内连续10秒。Windows 默认探索预算3600秒，各阶段另有预算，尚未统一成中期共享13分钟计时；详见 [任务流程](../task-workflow.md)。
+S1 参数在 `src/edgeai_navigation/config/midterm_single_rescue.yaml`，C1 参数在 `cooperative_rescue.yaml`；距离、停车与连续停留由任务树独立判定，不能仅以导航成功代替救援成功。S1要求0.50m内连续10秒，C1要求两机同时在0.70m内连续10秒。Windows 默认探索预算3600秒，各阶段另有预算，尚未统一成中期共享13分钟计时；详见 [任务流程](../task-workflow.md)。
 
 救援导航明确失败（ABORTED，包括 TF_ERROR）后，默认保留 S1 目标额外重试 2 次；等待至少 1 秒墙钟时间，确认控制槽空闲、控制权未改变及配对 TF/里程计不超过 0.15 秒后重发。单次等待恢复上限为 5 秒墙钟时间，各次共用原导航和救援总预算。取消或控制权切换不会被重试覆盖。参数为 `navigation_max_retries`、`navigation_retry_delay_s`、`navigation_retry_wait_s` 和 `retry_tf_max_age_s`，详见 [救援执行说明](../normal-rescue.md)。
 
@@ -91,6 +91,6 @@ bash scripts/setup/build-workspace.sh --packages-select edgeai_simulation
 
 2026-11-04 实机仿真检查记录在 `tests/results/runs/20261104-midterm-environment-check/`：场地和双机已在 Gazebo 显示，SDF 校验通过，两车相机/雷达/里程计话题均建立。使用真实 `/robot1/camera/image` 静态采图，S1 从世界位置 (1.7, 3.5)、朝向目标时解码 ID 1，C1 从 (4.1, 2.0)、朝南时解码 ID 2；叠加图为 `S1-camera-decoded.png` 和 `C1-camera-decoded.png`。该检查通过仿真 set_pose 放置相机采图，未验证自主导航或探索覆盖率，完成后已将机器人恢复到起点。
 
-当前相机较低，在 S1 正南约 0.5 m 处近距离平视时，标记上半部超出图像，无法完整解码。保留文档规定的标记高度，观察任务应选择留有距离和完整视野的位置；不要把这一视场裁切现象直接当成转速或任务冲突。
+早期较高标记曾在近距离超出相机视场；当前按用户要求将中心降至0.15m，区别于文档约0.35m的推荐值。观察位仍需留有完整视野和距离，正式演示前确认现场布置。
 
 自主任务入口和普通仿真入口的默认场景均为 midterm。显式 `-Arena competition`（自主入口）仍可使用旧开发场景，纯仿真 `-Arena simple` 可使用旧简单场景。中期自主入口在运行时覆盖标记尺寸和类型映射，原开发感知 YAML 保留供旧场景使用。中期场景不会调用假设旧起点和旧场地坐标的覆盖率评估器；地图照常保存，尚不报告中期覆盖率百分比。

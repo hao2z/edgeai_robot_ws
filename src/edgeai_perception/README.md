@@ -6,7 +6,7 @@ SLAM/Nav2. It never sends navigation goals or velocity commands. Set Linux env
 
 Configuration: `config/aruco_targets.yaml`. Development assumptions are
 DICT_4X4_50 and a 0.20 m black marker edge, NOT the 0.24 m panel. Update these
-when official technical specifications are available. No target truth pose or
+when selecting another arena. The midterm runner overrides the edge to 0.16 m and maps ID1 to normal / ID2 to cooperative. No target truth pose or
 fixture YAML is loaded by the detector.
 
 Inputs: `/camera/image`, `/camera/camera_info`, and image-time TF from
@@ -27,14 +27,12 @@ Marker centres and fused orientations are now published; the post-mapping normal
 rescue pipeline is documented in `docs/normal-rescue.md`. Automatic observations
 remain opportunistic and do not guarantee that all markers will be seen. Three accepted frames confirm an ID. Confirmation is
 not an accuracy guarantee: spread is sample consistency, not total uncertainty.
-The odom-frame sliding window is reprojected using map→odom at publication time;
-this follows rigid SLAM corrections but cannot fully undo historical nonrigid
-pose-graph deformation. Raw observations are retained for future refinement.
+Observations bind to nearby SLAM keyframes and follow each corrected map pose. Before static-map handover, the final graph and target registry are frozen together; old observations then remain fixed in map. See [map anchoring](../../docs/target-map-anchoring.md). Raw observations and compact anchor-change records remain available for diagnosis.
 Depth fusion is not enabled in this release.
 
-Build: `bash scripts/setup/build-workspace.sh --packages-select edgeai_perception edgeai_exploration`
+Build: `bash scripts/setup/build-workspace.sh --packages-select edgeai_perception edgeai_navigation edgeai_exploration`
 
-Manual execution after environment setup:
+Manual mapping execution requires the project anchored_slam_toolbox node. With a static map, add the ROS parameter map_anchoring:=map. After environment setup:
 
 ```bash
 bash scripts/ros/with-ros-env.sh ros2 run edgeai_perception aruco_targets.py \
