@@ -1,29 +1,29 @@
-"""One cooperative owner of Nav2; recovery stays inside the accepted action."""
+"""Nav2 execution-slot ownership and confirmed cancellation/mode handoff."""
 import argparse
 from dataclasses import asdict
 import json
-import math
 from pathlib import Path
 import time
 
 import rclpy
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionClient, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.task import Future
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 from frontier_exploration_ros2.srv import ControlExploration
 
-from authority_policy import Authority, AuthorityConfig, RecoveryEvidence
+from authority_policy import Authority, AuthorityConfig
 from goal_policy import managed_trees, CONTROLLERS, POLICIES
+from navigation_requests import NavigationRequests
+from navigation_telemetry import NavigationTelemetry
 
 
 class NavigationAuthority(Node):
@@ -38,9 +38,6 @@ class NavigationAuthority(Node):
         self.group = ReentrantCallbackGroup()
         self.backend = ActionClient(self, NavigateToPose,
                                     self.config.backend_action, callback_group=self.group)
-        self.manual = ActionClient(self, NavigateToPose, self.config.manual_action, callback_group=self.group)
-        self.manual_heading = ActionClient(self,NavigateToPose,'navigation/heading_to_pose',callback_group=self.group)
-        self.manual_require_heading = False
         self.explorer = self.create_client(ControlExploration, self.config.explorer_control,
                                            callback_group=self.group)
         self.tree = tree
@@ -48,13 +45,6 @@ class NavigationAuthority(Node):
         self.current = None
         self.pending = None
         self.admissions = {}
-        self.pose = None
-        self.pose_time = 0.0
-        self.odom_frame = None
-        self.following = False
-        self.recovery = None
-        self.recoveries = {}
-        self.seen = {}
         self.distance = None
         self.command_sequence = 0
         self.completed_goals = 0
@@ -75,18 +65,9 @@ class NavigationAuthority(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.dispatched_goal = self.create_publisher(PoseStamped, 'navigation_authority/dispatched_goal',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.servers = [ActionServer(self, NavigateToPose, endpoint,
-            execute_callback=self.execute, callback_group=self.group,
-            handle_accepted_callback=self.upstream_accepted,
-            goal_callback=lambda request, owner=owner, arrival=arrival: self.admit(request, owner, arrival),
-            cancel_callback=self.cancel) for endpoint, owner, arrival in
-            [('exploration/navigate_to_pose', 'AUTO', 'position'),
-             ('navigate_to_pose', 'MANUAL', 'position'),
-             ('navigation/heading_to_pose', 'MANUAL', 'heading'),
-             ('navigation/rescue_to_pose', 'MANUAL', 'rescue')]]
+        self.requests = NavigationRequests(self)
+        self.telemetry = NavigationTelemetry(self)
         self.create_service(SetBool, 'navigation_authority/set_manual', self.set_manual,
-                            callback_group=self.group)
-        self.create_service(SetBool,'navigation_authority/set_goal_heading',self.set_goal_heading,
                             callback_group=self.group)
         self.create_service(Trigger, 'navigation_authority/observation_hold', self.observation_hold,
                             callback_group=self.group)
@@ -94,12 +75,9 @@ class NavigationAuthority(Node):
                             callback_group=self.group)
         self.create_service(ControlExploration, 'control_exploration', self.control,
                             callback_group=self.group)
-        self.create_subscription(PoseStamped, 'goal_pose', self.manual_pose, 1)
-        self.create_subscription(Odometry, 'odom', self.odometry, qos_profile_sensor_data)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        for kind in ('backup', 'drive_on_heading', 'escape_occupied', 'spin', 'wait', 'follow_path', 'navigate_to_pose'):
-            self.create_subscription(GoalStatusArray, 'navigation_backend/'+kind+'/_action/status',
-                lambda msg, kind=kind: self.action_status(kind, msg), status_qos)
+        self.create_subscription(GoalStatusArray,'navigation_backend/navigate_to_pose/_action/status',
+                                 self.terminal_status,status_qos)
         self.create_timer(.25, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME),
                           callback_group=self.group)
         self.event('AUTHORITY_READY', '统一导航仲裁已启动', mode=mode)
@@ -147,8 +125,8 @@ class NavigationAuthority(Node):
         context['token'] = token
         context['created'] = context['feedback'] = time.monotonic()
         self.current = context
-        self.distance, self.recovery, self.following = None, None, False
-        self.recoveries.clear()
+        self.distance = None
+        self.telemetry.reset()
         context['ready'].set_result(True)
         self.event('GOAL_RESERVED', '任务已占用唯一导航执行槽', requester=context['owner'],
                    arrival_policy=context['arrival'])
@@ -201,9 +179,7 @@ class NavigationAuthority(Node):
             # A planner failure is reported, but does not stop frontier scheduling.
             # The explorer decides whether to retry, suppress, or preempt the goal.
             self.event('START_OCCUPIED_REPORTED', '起点被判占据；保持自动探索，由探索器处理目标策略')
-        if self.recovery and self.recovery.note_navigation(
-                self.distance, self.following, self.fresh_pose(), status == GoalStatus.STATUS_SUCCEEDED):
-            self.event('NAVIGATION_RESTORED', '恢复动作后原任务已完成', evidence=asdict(self.recovery))
+        self.telemetry.note_navigation(status == GoalStatus.STATUS_SUCCEEDED)
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.completed_goals += 1
             handle.succeed()
@@ -231,7 +207,7 @@ class NavigationAuthority(Node):
         if self.current is context:
             self.policy.terminal(context['token'])
             self.current = None
-            self.following = False
+            self.telemetry.following = False
             pending, self.pending = self.pending, None
             if pending is not None:
                 token = self.policy.reserve(pending['owner'])
@@ -307,7 +283,7 @@ class NavigationAuthority(Node):
     def observation_hold(self, request, response):
         # Atomic admission check: never cancel a navigation task to obtain a view.
         if (self.policy.mode != 'AUTO' or self.policy.phase != 'IDLE'
-                or self.current is not None or self.pending is not None or self.following):
+                or self.current is not None or self.pending is not None or self.telemetry.following):
             response.success, response.message = False, 'Navigation busy; observation deferred'
             return response
         self.change_mode('STOPPED')
@@ -340,32 +316,6 @@ class NavigationAuthority(Node):
         response.message = 'Request registered; authority state reports actual completion'
         return response
 
-    def set_goal_heading(self,request,response):
-        self.manual_require_heading=request.data
-        response.success=True
-        response.message='heading' if request.data else 'position'
-        self.event('MANUAL_GOAL_POLICY','后续RViz手动目标朝向要求已更新',require_heading=request.data)
-        return response
-
-    def manual_pose(self, pose):
-        if self.policy.mode != 'MANUAL' or self.policy.phase != 'IDLE':
-            self.event('MANUAL_GOAL_REJECTED', 'RViz 目标需先取得手动控制权，且等待旧任务结束')
-            return
-        if not self.backend.server_is_ready():
-            self.event('MANUAL_GOAL_REJECTED', 'Nav2导航后端未就绪，请检查nav.log中的启动错误')
-            return
-        client=self.manual_heading if self.manual_require_heading else self.manual
-        future = client.send_goal_async(NavigateToPose.Goal(pose=pose))
-        future.add_done_callback(self.manual_goal_response)
-
-    def manual_goal_response(self, future):
-        try:
-            handle = future.result()
-            if handle.accepted:
-                handle.get_result_async().add_done_callback(lambda done: done.result())
-        except Exception as error:
-            self.event('MANUAL_CLIENT_ERROR', '手动目标请求异常', error=str(error))
-
     def feedback(self, token, message):
         if not self.current or self.current['token'] != token:
             return
@@ -376,55 +326,15 @@ class NavigationAuthority(Node):
         self.distance = message.distance_remaining
         if self.current['upstream']:
             self.current['upstream'].publish_feedback(message)
-        if self.recovery and self.recovery.note_navigation(self.distance, self.following, self.fresh_pose()):
-            self.event('NAVIGATION_RESTORED', '恢复动作有实际位移，且原任务重新行驶并接近目标',
-                       evidence=asdict(self.recovery))
+        self.telemetry.note_navigation()
 
-    def odometry(self, message):
-        frame = (message.header.frame_id, message.child_frame_id)
-        if self.odom_frame is not None and frame != self.odom_frame and self.recovery:
-            self.recovery.start = None
-        self.odom_frame = frame
-        p, q = message.pose.pose.position, message.pose.pose.orientation
-        self.pose = (p.x, p.y, math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
-        self.pose_time = message.header.stamp.sec+message.header.stamp.nanosec/1e9
-
-    def fresh_pose(self):
-        age = self.get_clock().now().nanoseconds/1e9-self.pose_time
-        return self.pose if 0 <= age <= .5 else None
-
-    def action_status(self, kind, message):
-        if kind == 'follow_path':
-            self.following = any(item.status == GoalStatus.STATUS_EXECUTING for item in message.status_list)
-            return
+    def terminal_status(self,message):
+        # A matching backend UUID is execution evidence, not a recovery diagnostic.
+        c=self.current
+        if not c or not c['backend'] or c['terminal_observed'] is not None:return
         for item in message.status_list:
-            key = (kind, bytes(item.goal_info.goal_id.uuid).hex())
-            previous = self.seen.get(key)
-            self.seen[key] = item.status
-            if previous == item.status or not self.current:
-                continue
-            if kind == 'navigate_to_pose':
-                c = self.current
-                if (c['backend'] and bytes(item.goal_info.goal_id.uuid) == bytes(c['backend'].goal_id.uuid)
-                    and item.status in (4, 5, 6) and c['terminal_observed'] is None):
-                    c['terminal_observed'] = (item.status, time.monotonic())
-                continue
-            if item.status == GoalStatus.STATUS_EXECUTING:
-                if kind == 'wait':
-                    self.event('RECOVERY_WAIT', 'Nav2 等待环境更新；等待完成不等于脱困')
-                    continue
-                evidence = RecoveryEvidence(kind, self.fresh_pose(), self.distance)
-                self.recoveries[key] = evidence
-                self.recovery = evidence
-                self.event('RECOVERY_STARTED', '执行恢复动作，原任务保持', kind=kind)
-            elif item.status in (4, 5, 6) and key in self.recoveries:
-                evidence = self.recoveries.pop(key)
-                evidence.finish(item.status == 4, self.fresh_pose())
-                self.event('RECOVERY_ACTION_RESULT', '恢复动作结束；需分别核对动作、位移和导航恢复',
-                           kind=kind, status=item.status, evidence=asdict(evidence))
-        # Status history is bounded independently of the session duration.
-        if len(self.seen) > 256:
-            self.seen = dict(list(self.seen.items())[-128:])
+            if bytes(item.goal_info.goal_id.uuid)==bytes(c['backend'].goal_id.uuid) and item.status in (4,5,6):
+                c['terminal_observed']=(item.status,time.monotonic());break
 
     def sync_explorer(self):
         if not self.allow_auto:
@@ -498,8 +408,8 @@ class NavigationAuthority(Node):
                      arrival_policy=c['arrival'] if c else None,
                      explorer_paused=self.explorer_sync is False, goal_uuid=bytes(c['backend'].goal_id.uuid).hex() if c and c['backend'] else '',
                      distance_remaining=self.distance, clock_paused=now-self.clock_advanced >= 2.0,
-                     following_path=self.following, explorer_error=self.explorer_error,
-                     recovery=asdict(self.recovery) if self.recovery else None)
+                     following_path=self.telemetry.following, explorer_error=self.explorer_error,
+                     recovery=self.telemetry.snapshot())
         self.publisher.publish(String(data=json.dumps(state, ensure_ascii=False)))
 
 

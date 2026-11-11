@@ -1,6 +1,13 @@
-# Only SLAM consumes scan_slam. Navigation and AMCL retain the raw scan.
+# 建图使用scan_slam；协作AMCL使用各自scan_localization；避障始终使用原始scan。
 # Relative pose is injected from cooperative_rescue.initial_relative_pose by the launch file.
 root_odom_frame: odom
 bounds: [-0.3125, 0.1125, -0.165, 0.165]  # follower base_footprint: xmin,xmax,ymin,ymax
 margin_m: 0.15  # Covers coarse initial position uncertainty; avoid unnecessary large masks.
 max_age_s: 0.5
+localization:
+  enabled: true
+  margin_m: 0.05  # 定位专用的小余量，勿沿用粗略起点的0.15m扩大范围。
+  max_age_s: 0.5
+  max_wait_s: 0.1  # 等待扫描时刻TF；超时原样转发，不丢扫描、不使用最新TF替代。
+  max_std_xy_m: 0.15  # 两机AMCL均达标才过滤；未收敛时使用原始扫描启动定位。
+  max_std_yaw_rad: 0.20

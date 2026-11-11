@@ -1,42 +1,39 @@
 # 当前版本与验证记录
 
-更新：2026-11-10。分支：codex/Junnan-dev。
+更新：2026-11-11。分支：`codex/Junnan-dev`。
 
-## 默认任务
+## 默认流程和本轮改动
 
-robot1 自主建图并定位所有必需目标 → S1 单机救援 → 固定最终地图与目标 → 双机 AMCL 定位 → C1 并发导航和共同连续停留。
+robot1在线建图并定位全部必需目标 → S1单机救援 → 冻结共享地图与目标 → 两机AMCL定位 → C1并发导航与共同停留。
 
-第一任务的 MappingAndTargetSearch 子树位于 src/edgeai_mission/config/integrated.xml。
-前沿探索结束后暂停探索派发，调用 tasks/find_targets.xml 检查目标清单；缺少 S1 或 C1 时复用疑似目标优先、视锥观察及转圈搜寻。全部必需目标有效定位后，才保存输出并进入救援。默认双机必需目标为 ID1/normal、ID2/cooperative；单机对照只要求 S1。
+- 建图完成由协调行为树检查：已知栅格面积至少18 m²，位置在`edgeai_mission/config/mapping.yaml`。无有效前沿但面积不足时有界换位补图；换位期间探索器继续计算候选，发现可用前沿后交还导航。全部目标已定位后停止途中观察转圈。
+- 前沿和普通点仅检查位置，输入朝向作为规划偏好。Lattice默认比较4个分散朝向，共享2秒预算，复用成功朝向；指定朝向和救援点保留固定朝向。仲裁器拆出请求适配与运动证据，继续负责唯一执行槽和确认取消。
+- C1两车均检查朝向，最小停车点间距0.70 m。候选预规划考虑对方停车车身；导航时双方全局/局部代价地图加入对方实时轮廓。AMCL扫描按同刻相对位置过滤对方，避障仍保留原始激光，深度障碍与其共同作用。
+- 疑似目标独立持续运行5 Hz，不依赖探索和搜寻心跳。保留RGB-D路径，增加不依赖颜色的深度几何候选与可选激光位置支持，记录筛选拒绝原因；实际发现率仍需新轮次验证。
+- 日志和RViz平等显示两机；任务输出统一中文阶段与节流。S1/C1成功后记录真值距离、朝向、估计误差、目标定位误差及停留历史采样核验。
+- 修复仿真launch的局部yaml导入错误；相机恢复30 Hz，默认以100墙钟Hz转发原始`/clock`时间戳。新增只读性能采样；是否提升整轮倍率尚无受控对照结论。
 
-| 层级 | 负责内容 |
+## 运行证据
+
+原始会话和回放文件保留在本机`tests/results/runs/`，不上传Git。以下是选取的实例，不能用于计算整体成功率。
+
+| 会话 | 已确认结果 |
 |---|---|
-| mission_coordinator | 固定规则调度、任务 Action 调用、健康检查与总预算 |
-| task_executor + 任务树 | find_targets、S1、C1 的单位顺序、检查、有界重试 |
-| task_units.py | 复用几何、感知、搜寻、定位算法，调用 Nav2 |
-| Nav2 行为树 | 规划、控制、无进展与碰撞风险下的恢复 |
-| Shell | 参数准备、进程、日志和清理 |
+| `20261111-014150-740-domain86` | 任务汇总成功；S1估计距离0.327 m，C1为0.552/0.604 m |
+| `20261111-015430-875-domain86` | 任务汇总成功；S1为0.453 m，C1为0.647/0.624 m |
+| `20261111-022352-944-domain86` | 任务汇总成功；S1为0.422 m，C1为0.609/0.580 m；性能采样窗口约0.50x |
+| `20261111-023216-379-domain86` | S1成功，C1最终robot2错误205；不能视为完整成功 |
+| `20261111-024123-602-domain86` | S1成功，C1任务墙钟预算耗尽；S1历史真值回放通过：距离0.403239 m、朝向误差0.386°，21个样本覆盖10秒 |
+| `20261111-025754-128-domain86` | S1成功，C1到位后共同停留反复清零，用户取消；两处判定问题已修复，待新整轮回归 |
 
-导航到点不等于救援成功。S1/C1 另行检查任务距离、新鲜数据、停车和连续停留；C1两机共同计时，任一不满足会重置。目标观测绑定SLAM关键帧，最终地图冻结后不随当前AMCL刚体变换重投影。
+上述成功通常是估计位姿判定。S1回放的距离估计误差+0.000284 m、朝向估计误差-0.385°、目标定位误差0.000316 m仅属于该样本，不是系统精度保证。真值核验是有限频率采样，不能替代连续碰撞检查。
 
-## 已核实的运行证据
-
-原始记录仅保留本机 tests/results/runs/，不随Git上传。
-
-| 会话 | 结果 |
-|---|---|
-| 20261110-010835-542-domain86 | 整体成功，168.717仿真秒汇总；S1估计距离0.420m，C1 0.544/0.600m，各停留10秒；含一次C1双停车位重选 |
-| 20261110-013749-839-domain86 | mission-result.json记录成功，161.624仿真秒汇总 |
-| 20261110-014714-076-domain86 | S1成功；C1就绪和定位通过，缺失ID2却直接进入prepare_target失败；本版本新增第一任务补搜，尚待用户完整仿真验证 |
-
-成功结果来自感知/定位估计，不自动证明真实距离、无碰撞或比赛验收。不能从以上选择的轮次计算整体成功率。较早记录见 [11月7日状态快照](history/project-status-2026-11-07.md)。
-
-## 启动与调整
+## 常用入口
 
 ~~~powershell
 .\Start-Autonomous-Exploration.ps1
 .\Start-Autonomous-Exploration.ps1 -SingleRobot
-.\Start-Simulation.ps1 -SimulationOnly -Robots 2
+.\Start-Navigation-Test.ps1 -Controller rpp -Planner lattice
 ~~~
 
 ~~~bash
@@ -46,42 +43,46 @@ bash edgeai.sh mission
 bash edgeai.sh navigation
 ~~~
 
-Linux安装与手动选点入口见 [队员上手](linux-quickstart.md)。配置入口：
-
-| 内容 | 文件（导航配置相对 src/edgeai_navigation/config） |
+| 调整内容 | 入口 |
 |---|---|
-| 第一任务和救援顺序 | src/edgeai_mission/config/integrated.xml、tasks/*.xml |
-| 必需目标、任务预算 | src/edgeai_mission/scripts/prepare_mission.py、会话mission-runtime.json |
-| 补搜视锥/疑似点、S1条件 | midterm_single_rescue.yaml |
-| C1定位、双位余量、共同计时 | cooperative_rescue.yaml |
-| RPP/Shim、Lattice | rpp_controller.yaml、smac_lattice.yaml |
-| 地图、进展判定、恢复 | nav2_exploration_rectangle.yaml、behavior_trees/explore_recovery.xml |
+| 协调流程、任务单位树 | `src/edgeai_mission/config/integrated.xml`、`tasks/*.xml` |
+| 18 m²门槛、补图次数 | `src/edgeai_mission/config/mapping.yaml` |
+| 前沿提取、过滤、观察 | `src/edgeai_exploration/config/frontier_exploration.yaml` |
+| 多朝向模式、数量、预算 | `src/edgeai_navigation/config/smac_lattice.yaml` |
+| RPP/Shim与公共速度边界 | `rpp_controller.yaml`、`nav2_exploration_rectangle.yaml`（navigation/config） |
+| S1与搜寻 | `src/edgeai_navigation/config/midterm_single_rescue.yaml` |
+| C1距离、朝向、对方占据 | `src/edgeai_navigation/config/cooperative_rescue.yaml` |
+| 建图/定位激光过滤 | `src/edgeai_navigation/config/fleet_scan_filter.yaml` |
+| 疑似感知频率和传感器支持 | `src/edgeai_perception/config/suspect_targets.yaml` |
+| 相机、时钟、只读性能检查 | [仿真性能](simulation-performance.md) |
 
-每轮实际配置以 nav2-runtime.yaml、mission-runtime.json 和 mission-trees/ 为准。
-[任务流程](task-workflow.md)、[重构记录](mission-refactor-status.md)、[目标地图绑定](target-map-anchoring.md)分别说明职责、异常处理和坐标关系。
+每轮实际参数以会话`nav2-runtime.yaml`、`mission-runtime.json`、`mission-trees/`为准。日志入口为`runtime/latest-session.txt`；`events.log`供人阅读，`events.jsonl`保留结构化证据。
 
-## 剩余事项
+## 剩余事项和验证边界
 
-- 首任务补搜的完整用户仿真回归；持续保存成功、失败和中断轮次。
-- 独立Part2从规定起点完成S1+C1，及统一13分钟总预算；当前cooperative专项只覆盖C1。
-- 独立核对真值距离、碰撞、连续停留以及粗略初值扰动下的AMCL收敛。
-- 停车位检查考虑两车最终轮廓与各自规划，但没有预留另一车未来停车占据、联合路径或窄通道预约。
-- 前沿、搜寻内部候选/扫描和途中观察未全部拆成任务树单位；当前迁移覆盖任务调度与救援编排。
-- DWB对照配置倒车下限-0.3m/s与公共平滑器-0.2m/s不一致，矩形验证相关断言仍失败；默认RPP配置与该对照问题分开记录。
-- 标记中心目前按用户要求降至0.15m，区别于文档约0.35m的推荐值，演示前应确认现场条件。
+- 新一轮完整回归持续疑似检测、深度几何路径、激光支持与自动真值核验；接口测试不能替代整机验证。
+- C1仍有起点占据、定位激活和预算耗尽的失败记录。当前考虑实时/停车车身，不提供联合轨迹、通道预约或多机全局最优。
+- 对相同场景、任务阶段做性能对照；调试构建、传感器和时钟开销属于不同因素，尚不能把倍率下降归因于单一改动。
+- 独立Part2、统一13分钟计时、起点扰动与重复成功率仍需验证。`--duration`不是比赛全程计时器。
+- 18 m²为已知栅格面积门槛，包含空闲与占据，不等于5×5 m场地的严格覆盖率。
+- DWB对照的倒车下限-0.3 m/s与公共平滑器-0.2 m/s仍不一致，原矩形验证对此报错；本轮未改动该对照参数。
+- 标记中心按用户要求为0.15 m；应在现场确认高度及原文建议的区别。
 
-## 整理与验证边界
+本轮整理保留用户运行中的仿真、原始比赛文档及本机证据，不把编辑器个人配置提交。旧设计、故障回放与迁移记录移至[历史目录](history/README.md)。当前说明从[文档索引](README.md)进入。
 
-保留此前任务树、地图锚定、C1生命周期就绪修复；本轮额外补齐第一任务全目标搜寻门控。
-删除已被协调器取代、无调用引用的探索完成监听脚本；过时长篇说明归档，原比赛文档与本机运行证据保留。
-不修改本轮导航速度、代价或控制参数。验证使用构建、配置及隔离ROS接口测试；本轮不启动Gazebo/RViz，完整仿真由用户执行。
+## 本轮判定问题复查
 
-## 提交前验证
+`025754`的S1真值核验最初误把157.5–158.0秒的转向纳入停留。任务窗口应为158.16–168.16秒，而旧实现取157.5–167.5秒。修正后回放通过：真值距离约0.384 m、朝向误差约0.9°；距离估计误差+0.021 m，目标定位误差0.055 m。新增回归覆盖停留前转向不应污染窗口。
 
-- 五包构建通过：mission、navigation、perception、exploration、simulation。
-- 任务调度/真实任务树20个场景通过（18项整套通过，另2项修正任务筛选断言后定向复测通过）。
-- 真实Action→XML→Python单位服务4项通过，包含第一任务已有S1、缺失C1的补搜。
-- 单位适配17项、任务配置2项、救援策略10项、单机ROS12项、协作ROS12项、日志7项通过。
-- 布局/Python/Shell检查、中期场地几何和15个PowerShell入口语法通过；当前指南本地链接有效。
-- 矩形车身验证仍在DWB/速度平滑器倒车下限相等断言处失败，未修改这组对照参数。
-- 本轮未启动图形仿真；上述接口测试使用非运动测试后端，不能替代用户完整仿真验收。
+同轮C1单位记录有802次有效检查、68次WAITING_DATA；有效检查均达距离/朝向/停车/定位要求，但每次等待都立即清零，无法累计10秒。已改为在原0.5秒数据时效内保留最近有效区间，等待不计时；真实断流、时钟回退或物理条件不合格仍重置。TF失败不再提前消费采样戳，允许同一时刻数据补齐后重查。旧日志未区分TF等待与时钟先后，新增原因字段供下一轮确认。
+
+## 整理提交前检查
+
+- 在独立缓存顺序构建7个包通过，包含任务协调器、规划/车身插件和RViz面板；没有替换运行中仿真的二进制。
+- 本轮改动相关16组配置/算法测试共96项、13组隔离ROS测试共74项通过。涵盖协调树29项、双机停留、前沿暂停计算、对方车身动态代价、定位过滤、多朝向、疑似感知、时钟和日志。
+- 额外真实任务Action→XML→单位服务4项、Linux入口5项通过；导航C++的3组测试通过。
+- Python/Shell布局检查、中期场地几何、15个PowerShell入口语法、当前及归档文档本地链接通过。暂存空白和凭据模式检查通过。
+- 初次独立构建遗漏description依赖、两组ROS测试缺少frontier接口环境、首次直接ctest未加载ROS Python环境；补齐依赖/环境后对应检查通过，未据此改动算法。
+- 既有矩形验证仍在DWB倒车限速一致性断言失败，原因和参数见上方剩余事项。未运行新的Gazebo运动序列；两处最新停留修复仍待用户完整回归。
+
+旧设计和诊断说明归档6份，删除无构建和调用引用的`lattice_rotation_shim.cpp`。源码、配置、验证用例及当前指南一起提交；个人编辑器配置、运行日志、截图和缓存不提交。

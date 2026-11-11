@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <array>
 #include <iostream>
@@ -20,8 +21,11 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "edgeai_mission/action/execute_task.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/int32.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -37,6 +41,13 @@ public:
   Json c;
   fs::path directory, config;
   bool exploration_done = false, cancel = false, seed_enabled = true;
+  double known_area = 0.0;
+  bool valid_map = false, mapping_accepted = false;
+  int mapping_supplements = 0;
+  std::optional<Clock::time_point> exploration_started;
+  Clock::time_point map_received{};
+  int available_frontiers = -1;
+  Clock::time_point frontier_received{};
   std::string reason, phase = "STARTING";
   Child observation;
   Child search_task_server, single_task_server, joint_task_server;
@@ -47,7 +58,12 @@ public:
   std::unique_ptr<tf2_ros::TransformListener> listener;
   std::unique_ptr<tf2_ros::TransformBroadcaster> broadcaster;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr observation_gate;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr target_subscription;
+  bool all_targets_located = false, observation_suppressed = false;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr completion;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr frontier_subscription;
   std::vector<rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> odoms;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service;
   rclcpp::TimerBase::SharedPtr seed_timer;
@@ -58,8 +74,47 @@ public:
     c = readJson(config); directory = c.at("directory").get<std::string>();
     fs::create_directories(directory);
     state = create_publisher<std_msgs::msg::String>("/mission/state", rclcpp::QoS(1).transient_local());
+    if (c.at("observation").get<bool>() && c.at("rescue_enabled").get<bool>()) {
+      observation_gate = create_publisher<std_msgs::msg::Bool>("/mission/observation_suppressed", rclcpp::QoS(1).transient_local());
+      target_subscription = create_subscription<std_msgs::msg::String>("/targets/estimates", rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::String::ConstSharedPtr m) {
+          if (observation_suppressed) {return;}
+          all_targets_located = false;
+          try {
+            const auto registry = Json::parse(m->data);
+            if (registry.at("frame_id") != "map") {return;}
+            const auto & required = c.at("required_targets");
+            const auto & estimates = registry.at("targets");
+            if (!required.is_array() || required.empty() || !estimates.is_array()) {return;}
+            const bool confirm = c.value("target_observation_require_confirmation", false);
+            const auto valid = [](const Json & row, const char * key) {
+              return row.contains(key) && row[key].is_number() && std::isfinite(row[key].get<double>());
+            };
+            all_targets_located = std::all_of(required.begin(), required.end(), [&](const auto & target) {
+              return std::any_of(estimates.begin(), estimates.end(), [&](const auto & row) {
+                return row.is_object() && row.contains("id") && row["id"] == target.at("id") &&
+                  row.contains("type") && row["type"] == target.at("type") &&
+                  valid(row, "x") && valid(row, "y") && valid(row, "yaw") &&
+                  (!confirm || (row.contains("confirmed") && row["confirmed"] == true));
+              });
+            });
+          } catch (const Json::exception &) {}  // No usable localization snapshot yet.
+        });
+    }
     completion = create_subscription<std_msgs::msg::Empty>("/exploration_complete", rclcpp::QoS(1).transient_local(),
       [this](std_msgs::msg::Empty::ConstSharedPtr) {exploration_done = true;});
+    map_subscription = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", rclcpp::QoS(1).transient_local(),
+      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr m) {
+        const double r = m->info.resolution;
+        valid_map = std::isfinite(r) && r > 0 && !m->data.empty() &&
+          m->data.size() == size_t(m->info.width)*m->info.height;
+        if (!valid_map) {return;}
+        size_t known = 0;
+        for (auto v : m->data) {if (v >= 0 && v <= 100) {++known;}}
+        known_area = known*r*r; map_received = Clock::now();
+      });
+    frontier_subscription = create_subscription<std_msgs::msg::Int32>("/explore/available_frontiers", 1,
+      [this](std_msgs::msg::Int32::ConstSharedPtr m) {available_frontiers=m->data;frontier_received=Clock::now();});
     stop_service = create_service<std_srvs::srv::Trigger>("/mission/stop",
       [this](std_srvs::srv::Trigger::Request::SharedPtr, std_srvs::srv::Trigger::Response::SharedPtr response) {
         cancel = true; response->success = true; response->message = "Cancellation requested; wait for mission result";
@@ -158,7 +213,7 @@ public:
   : StatefulActionNode(name, config), n(node) {}
   static BT::PortsList providedPorts() {return {};}
   BT::NodeStatus onStart() override
-  {launched = Clock::now(); n.event("WAITING_EXPLORATION"); return BT::NodeStatus::RUNNING;}
+  {ready = finishing = false; launched = Clock::now(); n.event("WAITING_EXPLORATION"); return BT::NodeStatus::RUNNING;}
   BT::NodeStatus onRunning() override
   {
     if (!ready) {
@@ -167,6 +222,7 @@ public:
         return BT::NodeStatus::RUNNING;
       }
       ready = true; started = Clock::now(); n.event("EXPLORING");
+      if (!n.exploration_started) {n.exploration_started = started;}
       if (n.c.at("observation").get<bool>()) {
         fs::path root = n.c.at("project_root").get<std::string>();
         n.observation.launch({"python3", "-u", (root/"src/edgeai_perception/scripts/observation_scan.py").string(),
@@ -181,12 +237,12 @@ public:
         n.reason = "Exploration exhausted attempted/blacklisted frontiers"; return BT::NodeStatus::FAILURE;
       }
     }
-    if (n.exploration_done) {
-      if (!finishing) {finishing = true; n.observation.requestStop(); n.event("EXPLORATION_COMPLETE");}
-      return n.observation.stopped() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::RUNNING;
-    }
-    if (std::chrono::duration<double>(Clock::now()-started).count() > n.c.at("exploration_timeout_s").get<double>()) {
+    if (std::chrono::duration<double>(Clock::now()-*n.exploration_started).count() > n.c.at("exploration_timeout_s").get<double>()) {
       n.reason = "Exploration time limit; not exploration success"; return BT::NodeStatus::FAILURE;
+    }
+    if (n.exploration_done) {
+      if (!finishing) {finishing = true; n.observation.requestStop(); n.event("FRONTIERS_EXHAUSTED");}
+      return n.observation.stopped() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::RUNNING;
     }
     if (n.c.at("observation").get<bool>() && n.observation.done()) {
       n.reason = "Observation scheduler exited unexpectedly"; return BT::NodeStatus::FAILURE;
@@ -208,7 +264,8 @@ public:
   BT::NodeStatus onStart() override
   {
     step = getInput<std::string>("step").value();
-    if (step != "quiesce" && step != "save_map") {throw std::runtime_error("Unregistered preparation step");}
+    if (step != "quiesce" && step != "save_map" && step != "supplement_mapping" && step != "resume_exploration") {throw std::runtime_error("Unregistered preparation step");}
+    if (step == "resume_exploration") {n.exploration_done = false;}
     // Never consume a result left by a previous attempt.
     fs::remove(n.directory/("stage-"+step+"-result.json"));
     n.event("STAGE_STARTED", {{"step", step}});
@@ -227,6 +284,32 @@ public:
     return okay ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
   }
   void onHalted() override {child.stop();}
+};
+
+// Task switching belongs to the coordinator tree, never the velocity/authority layer.
+class AwaitFrontier : public BT::StatefulActionNode
+{
+  Coordinator & n;
+  Clock::time_point started, last_valid;
+public:
+  AwaitFrontier(const std::string & name,const BT::NodeConfig & config,Coordinator & node)
+  : StatefulActionNode(name,config),n(node) {}
+  static BT::PortsList providedPorts() {return {};}
+  BT::NodeStatus onStart() override {started=last_valid=Clock::now();return onRunning();}
+  BT::NodeStatus onRunning() override
+  {
+    const bool fresh=n.frontier_received>=started && Clock::now()-n.frontier_received<std::chrono::milliseconds(1500);
+    if (fresh && n.available_frontiers>=0) {last_valid=Clock::now();}
+    if (fresh && n.available_frontiers>0) {
+      n.event("MAPPING_FRONTIER_AVAILABLE",{{"available_frontiers",n.available_frontiers}});
+      return BT::NodeStatus::SUCCESS;
+    }
+    if (Clock::now()-last_valid>std::chrono::seconds(5)) {
+      n.reason="Frontier monitoring unavailable during mapping supplement";return BT::NodeStatus::FAILURE;
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+  void onHalted() override {}
 };
 
 class ExecuteTask : public BT::StatefulActionNode
@@ -314,10 +397,44 @@ int main(int argc, char ** argv)
     BT::BehaviorTreeFactory f;
     f.registerBuilder<AwaitExploration>("AwaitExploration", [&n](auto & name, auto & config) {return std::make_unique<AwaitExploration>(name, config, *n);});
     f.registerBuilder<MissionStage>("MissionStage", [&n](auto & name, auto & config) {return std::make_unique<MissionStage>(name, config, *n);});
+    f.registerBuilder<AwaitFrontier>("AwaitFrontier", [&n](auto & name, auto & config) {return std::make_unique<AwaitFrontier>(name, config, *n);});
     f.registerBuilder<ExecuteTask>("ExecuteTask",[&n](const auto & name,const auto & config){return std::make_unique<ExecuteTask>(name,config,*n);});
     f.registerSimpleCondition("RescueEnabled", [&n](BT::TreeNode &) {return n->c.at("rescue_enabled").get<bool>() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;});
     f.registerSimpleCondition("CooperativeEnabled", [&n](BT::TreeNode &) {return n->c.at("cooperative").get<bool>() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;});
-    tree.emplace(f.createTreeFromFile(n->c.at("tree").get<std::string>()));
+    f.registerSimpleCondition("AllRequiredTargetsLocated", [&n](BT::TreeNode &) {
+      return n->all_targets_located ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    });
+    f.registerSimpleAction("SuppressObservation", [&n](BT::TreeNode &) {
+      if (!n->observation_suppressed) {
+        n->observation_suppressed = true;
+        std_msgs::msg::Bool message; message.data = true;
+        n->observation_gate->publish(message);
+        n->event("OBSERVATION_SUPPRESSED_TARGETS_LOCATED", {{"required_targets", n->c.at("required_targets")}});
+      }
+      return BT::NodeStatus::SUCCESS;
+    });
+    f.registerSimpleCondition("MapAreaSufficient", [&n](BT::TreeNode &) {
+      const double required = n->c.value("mapping", Json::object()).value("min_known_area_m2", 18.0);
+      const bool fresh = n->valid_map && Clock::now()-n->map_received < std::chrono::seconds(5);
+      const bool okay = fresh && n->known_area+1e-6 >= required;
+      n->mapping_accepted = okay;
+      n->event(okay ? "MAPPING_AREA_READY" : "MAPPING_AREA_INSUFFICIENT",
+        {{"known_area_m2", n->known_area}, {"required_area_m2", required}, {"map_fresh", fresh}, {"supplements", n->mapping_supplements}});
+      if (!okay) {n->reason = "Mapping incomplete: known area " + std::to_string(n->known_area) +
+        " m2 below required " + std::to_string(required) + " m2, or map unavailable/stale";}
+      else {n->reason.clear();}
+      return okay ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    });
+    f.registerSimpleAction("BeginMappingSupplement", [&n](BT::TreeNode &) {
+      if (n->mapping_supplements >= n->c.value("mapping", Json::object()).value("supplement_attempts", 3)) {return BT::NodeStatus::FAILURE;}
+      ++n->mapping_supplements;return BT::NodeStatus::SUCCESS;
+    });
+    f.registerSimpleCondition("MappingAccepted", [&n](BT::TreeNode &) {
+      return n->mapping_accepted ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    });
+    auto blackboard = BT::Blackboard::create();
+    blackboard->set("mapping_attempts", n->c.value("mapping", Json::object()).value("supplement_attempts", 3)+1);
+    tree.emplace(f.createTreeFromFile(n->c.at("tree").get<std::string>(), blackboard));
     auto begin = Clock::now();
     while (rclcpp::ok()) {
       rclcpp::spin_some(n);

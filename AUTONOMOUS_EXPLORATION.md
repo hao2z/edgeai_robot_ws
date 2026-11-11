@@ -1,7 +1,8 @@
 # 自主探索与救援入口
 
-当前基线（2026-11-10）为native ROS2 Jazzy、RPP/Rotation Shim、Smac Lattice、SLAM Toolbox和前沿探索。
+当前基线（2026-11-11）为native ROS2 Jazzy、RPP/Rotation Shim、Smac Lattice、SLAM Toolbox和前沿探索。
 默认任务：robot1建图并找到S1/C1 → S1 → 最终地图交接 → 两机AMCL → C1。
+建图至少达到18 m²已知面积；无前沿但未达标时有界换位补图。疑似目标独立持续感知，S1/C1成功后输出历史真值采样核验和误差。
 
 Windows运行 Start-Autonomous-Exploration.ps1；Linux运行：
 

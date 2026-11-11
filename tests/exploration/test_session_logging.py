@@ -8,19 +8,60 @@ import time
 import unittest
 import importlib.util
 
-spec = importlib.util.spec_from_file_location('session_logs', Path(__file__).resolve().parents[2]/'scripts/ros/stream_session_logs.py')
+ROS_SCRIPTS = Path(__file__).resolve().parents[2]/'scripts/ros'
+sys.path.insert(0, str(ROS_SCRIPTS))
+spec = importlib.util.spec_from_file_location('session_logs', ROS_SCRIPTS/'stream_session_logs.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
 class SessionLoggingTest(unittest.TestCase):
+    def test_truth_verification_is_visible_with_correct_severity(self):
+        records=[]
+        reducer=module.EventReducer(lambda *args,**kw:records.append(args))
+        reducer.consume('rescue','RESCUE_SUCCESS_POSE: S1 真值核验：通过')
+        reducer.consume('cooperative','COOPERATIVE_SUCCESS_POSE: {"summary":"C1 真值核验：未通过"}')
+        reducer.consume('rescue','RESCUE_SUCCESS_POSE: 真值核验：无法确认')
+        self.assertEqual([r[1] for r in records],['OK','ERROR','WARN'])
+
     def test_mission_stage_failure_is_visible_in_main_event_stream(self):
         records=[]
         reducer=module.EventReducer(lambda *args,**kw:records.append(args))
         reducer.consume('mission','[INFO] [1] [mission_coordinator]: MISSION_STAGE_FINISHED: {"step":"s1","success":false}')
         self.assertEqual(records[0][0],'mission')
         self.assertEqual(records[0][1],'ERROR')
-        self.assertIn('MISSION_STAGE_FINISHED',records[0][2])
+        self.assertEqual(records[0][2], 's1 · 失败')
+
+    def test_cooperative_navigation_events_belong_to_each_robot(self):
+        records = []
+        reducer = module.EventReducer(lambda *args, **kw: records.append((args, kw)))
+        for source, prefix in [('nav', ''), ('cooperative-nav', 'robot2.')]:
+            reducer.consume(source, f'[INFO] [1] [{prefix}bt_navigator]: Goal succeeded')
+        reducer.consume('cooperative-nav', '[WARN] [1] [amcl]: laser update delayed')
+        reducer.consume('cooperative-nav', '[INFO] [1] [robot2.navigation_authority]: '
+                        'RECOVERY_STARTED: 执行恢复动作; task=3; owner=MANUAL; phase=ACTIVE')
+        self.assertEqual([fields['robot'] for _, fields in records], ['robot1', 'robot2', 'robot1', 'robot2'])
+        self.assertEqual(reducer.robots['robot1']['arrivals'], 1)
+        self.assertEqual(reducer.robots['robot2']['arrivals'], 1)
+        self.assertEqual(reducer.robots['robot2']['recovery_attempts'], 1)
+
+    def test_mission_polling_is_quiet_but_long_phases_have_progress(self):
+        records, now = [], [0.]
+        reducer = module.EventReducer(lambda *args, **kw: records.append((args, kw)), lambda: now[0])
+        feedback = '[INFO] [1] [mission_coordinator]: MISSION_TASK_FEEDBACK: '
+        for _ in range(50):
+            reducer.consume('mission', feedback+'{"task":"c1","unit":"check_rescue","details":{"valid":true}}')
+        self.assertEqual(len(records), 1)
+        now[0] = 20
+        reducer.consume('cooperative', '[INFO] [1] [joint_rescue]: COOPERATIVE_JOINT_STATUS: '
+                        '{"valid":true,"distances_m":[0.41,0.62],"dwell_s":3.0}')
+        reducer.flush()
+        self.assertIn('机器人1 0.41 m / 机器人2 0.62 m', records[-1][0][2])
+        self.assertEqual(records[-1][1]['event'], 'MISSION_PROGRESS')
+        reducer.consume('mission', 'MISSION_RESULT: {"success":true}')
+        now[0] = 60
+        reducer.flush()
+        self.assertEqual(len(records), 3)
 
     def test_suspect_discovery_is_visible_in_live_monitor(self):
         records=[]
@@ -115,6 +156,9 @@ class SessionLoggingTest(unittest.TestCase):
                 with (directory / 'nav.log').open('a') as output:
                     output.write('Start occupied\nGoal succeeded\n')
                 wait_for(lambda: '已到达导航目标' in content('events.log'))
+                (directory / 'cooperative-nav.log').write_text(
+                    '[INFO] [1] [robot2.bt_navigator]: Goal succeeded\n', encoding='utf-8')
+                wait_for(lambda: '[机器人2]' in content('events.log'))
                 self.assertNotIn('探索器报告完成', content('events.log'))
                 self.assertNotIn('前沿候选均被抑制', content('events.log'))
                 self.assertIn('不等于已发生物理碰撞', content('events.log'))

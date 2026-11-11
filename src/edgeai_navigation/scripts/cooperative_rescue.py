@@ -26,8 +26,9 @@ from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin
 from tf2_ros import Buffer, TransformListener, TransformException, TransformBroadcaster
 import yaml
 
-from cooperative_policy import compose, relative, cell, parking_pairs, JointDwell
-from fleet_config import namespaced_config
+from cooperative_policy import (compose, relative, cell, parking_pairs, JointDwell,
+                                rescue_yaw_error, path_clear_of_peer)
+from fleet_config import namespaced_config, configure_peer_costmaps
 
 
 def pose_value(p):
@@ -51,6 +52,7 @@ class CooperativeRescue(Node):
         self.state_pub=self.create_publisher(String,'/cooperative_rescue/state',
             QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.initial_pubs={};self.nav={};self.plan={};self.spin={};self.manual={};self.stop={}
+        self.peer_poses_enabled=False;self.peer_pubs={}
         for ns in ('','robot2'):
             topic=lambda name:'/'+(ns+'/' if ns else '')+name
             self.create_subscription(Odometry,topic('odom'),lambda m,n=ns:self.receive_odom(n,m),qos_profile_sensor_data)
@@ -61,6 +63,8 @@ class CooperativeRescue(Node):
                 lambda m,n=ns:self.receive_state(n,m),
                 QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
             self.initial_pubs[ns]=self.create_publisher(PoseWithCovarianceStamped,topic('initialpose'),1)
+            if self.c.get('peer_costmap',{}).get('enabled',True):
+                self.peer_pubs[ns]=self.create_publisher(PoseStamped,'/cooperative_rescue/peer_pose/'+(ns or 'robot1'),1)
             self.nav[ns]=ActionClient(self,NavigateToPose,topic('navigation/rescue_to_pose'))
             self.plan[ns]=ActionClient(self,ComputePathToPose,topic('navigation_backend/compute_path_to_pose'))
             self.spin[ns]=ActionClient(self,Spin,topic('navigation_backend/spin'))
@@ -71,6 +75,26 @@ class CooperativeRescue(Node):
             QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_timer(.25,self.update_at_rest)
         self.create_timer(.2,self.publish_initial_estimate)
+        if self.peer_pubs:self.create_timer(.10,self.publish_peer_poses)
+
+    def publish_peer_poses(self):
+        if not self.peer_poses_enabled or self.closing:return
+        now=self.get_clock().now()
+        max_age=self.c.get('peer_costmap',{}).get('max_age_s',.5)
+        for ns,pub in self.peer_pubs.items():
+            sample=self.localization.get(ns)
+            if sample is None:continue
+            cov=sample.pose.covariance
+            if not (all(0<=cov[i]<=self.c['max_std_xy_m']**2 for i in (0,7)) and
+                    0<=cov[35]<=self.c['max_std_yaw_rad']**2):continue
+            try:tf=self.buffer.lookup_transform('map',(ns+'/' if ns else '')+'base_footprint',Time())
+            except TransformException:continue
+            stamp=Time.from_msg(tf.header.stamp)
+            if not -.25<=(now-stamp).nanoseconds/1e9<=max_age or not stamp.nanoseconds:continue
+            msg=PoseStamped();msg.header.frame_id='map';msg.header.stamp=min(stamp,now).to_msg()
+            t=tf.transform.translation
+            msg.pose.position.x,msg.pose.position.y,msg.pose.position.z=t.x,t.y,t.z
+            msg.pose.orientation=tf.transform.rotation;pub.publish(msg)
 
     def publish_initial_estimate(self):
         if not self.seed_enabled or len(self.initial_odom)!=2:return
@@ -351,7 +375,9 @@ class CooperativeRescue(Node):
     def start_localization(self,root_pose,second):
         folder=self.directory/'robot2';folder.mkdir(exist_ok=True)
         nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text())
-        (folder/'nav2-runtime.yaml').write_text(yaml.safe_dump(namespaced_config(nav,'robot2'),sort_keys=False))
+        nav2=namespaced_config(nav,'robot2')
+        configure_peer_costmaps(nav2,'robot2',self.c.get('peer_costmap',{}))
+        (folder/'nav2-runtime.yaml').write_text(yaml.safe_dump(nav2,sort_keys=False))
         self.log=(self.directory/'cooperative-nav.log').open('w')
         os.environ.setdefault('CYCLONEDDS_URI','<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>')
         self.process=subprocess.Popen(['ros2','launch','edgeai_navigation','cooperative_navigation.launch.py',
@@ -408,6 +434,7 @@ class CooperativeRescue(Node):
             for client in clients.values():self.destroy_client(client)
 
     def localize(self):
+        self.peer_poses_enabled=False
         self.event('LOCALIZING')
         stable=None;last=None;last_poses=None;begin=time.monotonic();next_motion=begin+5.
         while time.monotonic()-begin<self.c['localization_timeout_s']:
@@ -424,6 +451,7 @@ class CooperativeRescue(Node):
                 elif stable is None:stable=now
                 last=now;last_poses=poses
                 if stable is not None and now-stable>=self.c['localization_stable_s']:
+                    self.peer_poses_enabled=True;self.publish_peer_poses()
                     self.event('LOCALIZED',poses=poses,scan_match=[self.laser_match(n) for n in ('','robot2')]);return
             if time.monotonic()>=next_motion and not self.localized('robot2'):
                 next_motion=time.monotonic()+10.
@@ -483,8 +511,13 @@ class CooperativeRescue(Node):
         self.target=target;self.target_ready=True
         return changed
 
-    def select_parking_pair(self,locked=None,excluded=None):
+    def select_parking_pair(self,locked=None,excluded=None,settled=()):
         pairs=parking_pairs(self.map,self.target,self.footprint,self.c)
+        robots=('','robot2')
+        poses={ns:self.tf_pose((ns+'/' if ns else '')+'base_footprint') for ns in robots}
+        settled=set(settled)
+        # Candidate generation is unordered. Test both robot assignments.
+        pairs=[p for a,b in pairs for p in ((a,b),(b,a))]
         if excluded:
             pairs=[pair for pair in pairs if not any(
                 math.dist(pair[i][:2],old[:2])<.04
@@ -503,24 +536,34 @@ class CooperativeRescue(Node):
                     constrained.append(pair)
             pairs=constrained
         # Reachability is checked through each robot's native planner before dispatch.
-        pairs.sort(key=lambda pair:sum(math.dist(self.tf_pose('robot2/base_footprint' if ns else 'base_footprint')[:2],p[:2])
-                   for ns,p in zip(('','robot2'),pair)))
+        pairs.sort(key=lambda pair:sum(math.dist(poses[ns][:2],p[:2]) for ns,p in zip(robots,pair)))
         selected=None
-        for pair in pairs[:12]:
+        margin=float(self.c.get('parked_peer_clearance_m',.05))
+        if not math.isfinite(margin) or margin<0:raise ValueError('Invalid C1 parked-peer clearance')
+        plans={}
+        for pair in list({tuple(map(tuple,pair)):pair for pair in pairs}.values())[:12]:
             okay=True
-            for ns,p in zip(('','robot2'),pair):
-                plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedHeading'),15.)
-                if plan.status==6 and plan.result.error_code==ComputePathToPose.Result.START_OCCUPIED:
-                    # Preflight planning cannot move the robot. Let the same
-                    # native navigation tree as ordinary goals attempt escape.
-                    self.event('PLAN_START_OCCUPIED_NAV_RECOVERY',robot=ns or 'robot1',goal=p)
-                    continue
-                if plan.status!=4 or plan.result.error_code!=0:
-                    self.event('PLAN_REJECTED',robot=ns or 'robot1',start=self.tf_pose('robot2/base_footprint' if ns else 'base_footprint'),
-                               goal=p,error=plan.result.error_code,message=getattr(plan.result,'error_msg',''))
+            for i,(ns,p) in enumerate(zip(robots,pair)):
+                if ns in settled:continue
+                peer=robots[1-i];parked=poses[peer] if peer in settled else pair[1-i]
+                key=(ns,tuple(p))
+                if key not in plans:
+                    plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedHeading'),15.)
+                    result=plan.result
+                    if plan.status!=4 or result.error_code!=0 or not result.path.poses or result.path.header.frame_id!='map':
+                        self.event('PLAN_REJECTED',robot=ns or 'robot1',start=poses[ns],goal=p,error=result.error_code,
+                                   message=getattr(result,'error_msg','') or 'No usable path in map frame')
+                        plans[key]=None
+                    else:plans[key]=[pose_value(s.pose) for s in result.path.poses]
+                path=plans[key]
+                if path is None:
+                    okay=False;break
+                if not path_clear_of_peer([poses[ns],*path,p],parked,self.footprint,margin):
+                    self.event('PLAN_BLOCKED_BY_PARKED_PEER',robot=ns or 'robot1',goal=p,
+                               peer=peer or 'robot1',peer_pose=parked,clearance_m=margin)
                     okay=False;break
             if okay:selected=pair;break
-        if selected is None:raise RuntimeError('No jointly reachable C1 parking pair')
+        if selected is None:raise RuntimeError('No verified C1 parking pair with peer occupancy')
         self.event('PARKING_SELECTED',target_id=self.target['id'],goals=selected)
         return selected
 
@@ -549,48 +592,54 @@ class CooperativeRescue(Node):
                 for frame in ('base_footprint','robot2/base_footprint'):
                     stamp=min(stamp,Time.from_msg(self.buffer.lookup_transform('map',frame,Time()).header.stamp).nanoseconds)
             except TransformException as error:
-                dwell.update(now,[],False)
+                retained=dwell.awaiting_data(now,self.c['max_data_age_s'])
                 if now-last_event>=1.:
-                    last_event=now;self.event('JOINT_STATUS',valid=False,reason='TF unavailable: '+str(error),dwell_s=0.)
+                    last_event=now;self.event('JOINT_STATUS',valid=False,reason='TF unavailable: '+str(error),
+                        dwell_retained=retained,dwell_s=dwell.last-dwell.start if dwell.start is not None else 0.)
                 continue
             if not 0<=now-stamp/1e9<=self.c['max_data_age_s']:
-                dwell.update(stamp/1e9,[],False)
+                retained=dwell.awaiting_data(now,self.c['max_data_age_s'])
                 if now-last_event>=1.:
-                    last_event=now;self.event('JOINT_STATUS',valid=False,reason='Pose sample stale or from future',dwell_s=0.)
+                    last_event=now;self.event('JOINT_STATUS',valid=False,reason='Pose sample stale or from future',
+                        dwell_retained=retained,dwell_s=dwell.last-dwell.start if dwell.start is not None else 0.)
                 continue
             if last_sample==stamp:continue
-            last_sample=stamp
             if stamp/1e9<self.measurement_after:
                 dwell.update(stamp/1e9,[],False)
                 continue
-            reasons=[]
+            reasons=[];yaw_errors=[];heading_ok=[]
             try:
                 for ns in ('','robot2'):
                     p=self.tf_pose('robot2/base_footprint' if ns else 'base_footprint',Time(nanoseconds=stamp))
                     distances.append(math.dist(p[:2],[target['x'],target['y']]))
+                    yaw_errors.append(rescue_yaw_error(p,target))
+                    heading_ok.append(abs(yaw_errors[-1])<=self.c['yaw_tolerance_rad'])
                     v=self.odom[ns].twist.twist
                     if math.hypot(v.linear.x,v.linear.y)>=.02 or abs(v.angular.z)>=.05:
                         reasons.append((ns or 'robot1')+' moving')
                     if not self.localized(ns):reasons.append((ns or 'robot1')+' localization invalid')
                 if not self.target_ready:reasons.append('C1 estimate unavailable')
+                last_sample=stamp
                 valid=not reasons
             except TransformException:
-                valid=False;reasons.append('TF unavailable at common sample')
+                dwell.awaiting_data(now,self.c['max_data_age_s'])
+                continue
             if any(d>self.c['radius_m'] for d in distances):reasons.append('Outside rescue circle')
-            done=dwell.update(stamp/1e9,distances,valid)
+            if not all(heading_ok):reasons.append('Rescue heading outside tolerance')
+            done=dwell.update(stamp/1e9,distances,valid and len(heading_ok)==2 and all(heading_ok))
             if now-last_event>=1.:
-                last_event=now;self.event('JOINT_STATUS',distances_m=distances,valid=valid,
+                last_event=now;self.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,
                     radius_m=self.c['radius_m'],required_dwell_s=self.c['dwell_s'],
                     in_range=[d<=self.c['radius_m'] for d in distances],target_ready=self.target_ready,
                     reasons=reasons,
                     dwell_s=stamp/1e9-dwell.start if dwell.start is not None else 0.)
-            if done:return dict(success=True,target_id=target['id'],distances_m=distances,dwell_s=self.c['dwell_s'],goals=selected)
-            if valid and len(distances)==2 and any(d>self.c['radius_m'] for d in distances):
+            if done:return dict(success=True,target_id=target['id'],distances_m=distances,yaw_errors_rad=yaw_errors,dwell_s=self.c['dwell_s'],goals=selected)
+            if valid and len(distances)==2 and (any(d>self.c['radius_m'] for d in distances) or not all(heading_ok)):
                 if repairs>=self.c.get('rescue_repair_rounds',3):
-                    raise RuntimeError('C1 remains outside rescue radius after correction rounds')
+                    raise RuntimeError('C1 rescue distance or heading remains invalid after correction rounds')
                 repairs+=1
                 self.event('RESCUE_REPAIR',attempt=repairs,distances_m=distances,
-                           radius_m=self.c['radius_m'],reason='Outside rescue circle; reselect parking pair')
+                           radius_m=self.c['radius_m'],yaw_errors_rad=yaw_errors,reason='Rescue distance or heading invalid; reselect parking pair')
                 selected=self.select_parking_pair()
                 self.navigate_pair(selected)
                 self.refresh_target(force=True)

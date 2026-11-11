@@ -174,6 +174,7 @@ class Units:
             updated=n.latest_goal(self.goal)
             if n.goal_changed(self.goal,updated):self.reset_dwell()
             self.goal.update(updated);stamp,last=n.fresh_measurement(now,self.goal);self.last=last
+            self.last['sample_time_s']=stamp
             if stamp<self.navigation_after:return dict(complete=False,needs_correction=False)
             from rescue_alignment import correction
             correction_needed=n.c.get('alignment_enabled',False) and correction(n.c,self.goal,last) is not None
@@ -185,35 +186,53 @@ class Units:
         except (TransformException,ValueError) as error:
             self.reset_dwell();return dict(complete=False,needs_correction=False,state='WAITING_DATA',reason=str(error))
 
+    def wait_joint_data(self,now,reason,**details):
+        retained=self.dwell.awaiting_data(now,self.node.c['max_data_age_s'])
+        self.condition_complete=False
+        if not retained:self.last_sample=None
+        elapsed=self.dwell.last-self.dwell.start if self.dwell.start is not None else 0.
+        return dict(complete=False,state='WAITING_DATA',reason=reason,
+                    dwell_retained=retained,dwell_s=elapsed,**details)
+
     def check_joint(self):
+        from cooperative_policy import rescue_yaw_error
         n=self.node;self.check_owner();now=n.now()
         if n.refresh_target():self.reset_dwell()
         try:
             stamp=min(Time.from_msg(m.header.stamp).nanoseconds for m in n.odom.values())
             for frame in ('base_footprint','robot2/base_footprint'):
                 stamp=min(stamp,Time.from_msg(n.buffer.lookup_transform('map',frame,Time()).header.stamp).nanoseconds)
-            if not 0<=now-stamp/1e9<=n.c['max_data_age_s'] or stamp/1e9<self.navigation_after:
-                self.reset_dwell();return dict(complete=False,state='WAITING_DATA')
+            age=now-stamp/1e9
+            if not 0<=age<=n.c['max_data_age_s'] or stamp/1e9<self.navigation_after:
+                return self.wait_joint_data(now,'Pose sample ahead of clock' if age<0 else 'Pose sample stale or before navigation completion',
+                                            sample_time_s=stamp/1e9,sample_age_s=age)
             if stamp==self.last_sample:return dict(complete=False)
-            self.last_sample=stamp;distances=[];valid=n.target_ready
+            distances=[];yaw_errors=[];poses=[];valid=n.target_ready
             for ns in ('','robot2'):
                 p=n.tf_pose('robot2/base_footprint' if ns else 'base_footprint',Time(nanoseconds=stamp))
+                poses.append(list(p))
                 distances.append(math.hypot(p[0]-n.target['x'],p[1]-n.target['y']))
+                yaw_errors.append(rescue_yaw_error(p,n.target))
                 v=n.odom[ns].twist.twist
                 valid=valid and math.hypot(v.linear.x,v.linear.y)<.02 and abs(v.angular.z)<.05 and n.localized(ns)
-            done=self.dwell.update(stamp/1e9,distances,valid);self.last=dict(distances_m=distances,dwell_s=n.c['dwell_s'])
+            heading_ok=[abs(e)<=n.c['yaw_tolerance_rad'] for e in yaw_errors]
+            self.last_sample=stamp
+            done=self.dwell.update(stamp/1e9,distances,valid and all(heading_ok))
+            self.last=dict(distances_m=distances,yaw_errors_rad=yaw_errors,dwell_s=n.c['dwell_s'],
+                           poses=poses,sample_time_s=stamp/1e9)
             self.condition_complete=done
             if now-self.last_event>=1.:
-                self.last_event=now;n.event('JOINT_STATUS',distances_m=distances,valid=valid,in_range=[d<=n.c['radius_m'] for d in distances],dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
-            if valid and any(d>n.c['radius_m'] for d in distances):
-                self.arrived={ns for ns,d in zip(('','robot2'),distances) if d<=n.c['radius_m']}
-                for ns,pose in zip(('','robot2'),self.selected):
-                    if ns not in self.arrived:self.failed_parking.setdefault(ns,[]).append(pose)
-                raise UnitFailure('Outside rescue circle; reselect parking','outside')
-            return dict(complete=done,distances_m=distances,radius_m=n.c['radius_m'],valid=valid,
+                self.last_event=now;n.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,in_range=[d<=n.c['radius_m'] for d in distances],dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
+            if valid and (any(d>n.c['radius_m'] for d in distances) or not all(heading_ok)):
+                self.arrived={ns for ns,d,h in zip(('','robot2'),distances,heading_ok) if d<=n.c['radius_m'] and h}
+                for ns,pose,distance in zip(('','robot2'),self.selected,distances):
+                    if distance>n.c['radius_m']:self.failed_parking.setdefault(ns,[]).append(pose)
+                reason='Outside rescue circle; reselect parking' if any(d>n.c['radius_m'] for d in distances) else 'Rescue heading outside tolerance; retry parking alignment'
+                raise UnitFailure(reason,'outside' if all(heading_ok) else 'heading')
+            return dict(complete=done,distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,radius_m=n.c['radius_m'],valid=valid,
                         dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
-        except (TransformException,ValueError):
-            self.reset_dwell();return dict(complete=False,state='WAITING_DATA')
+        except (TransformException,ValueError) as error:
+            return self.wait_joint_data(now,str(error))
 
     def check_owner(self):
         try:self.node.check_owner()
@@ -287,7 +306,8 @@ class Units:
             nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text());n.footprint=json.loads(nav['local_costmap']['local_costmap']['ros__parameters']['footprint'])
         elif op in ('select_parking','select_parking_locked'):
             locked={ns:self.selected[i] for i,ns in enumerate(('','robot2')) if self.selected and (ns in self.pending or ns in self.arrived)} if op.endswith('locked') else {}
-            self.selected=n.select_parking_pair(locked=locked,excluded=self.failed_parking)
+            self.selected=n.select_parking_pair(locked=locked,excluded=self.failed_parking,
+                                               settled=self.arrived.intersection(locked))
         elif op=='record_success':self.record_success()
         else:raise UnitFailure('Unregistered unit: '+op)
         return {}
@@ -300,7 +320,27 @@ class Units:
             result=dict(success=True,required_targets=self.required_targets,search_attempts=n.search_attempts)
         elif self.task=='s1':
             result=dict(success=True,goal=self.goal,measurement=self.last,dwell_s=n.c['dwell_s'],target_id=self.goal['target_id'],task_state='completed',judge='estimated map pose',navigation_attempts=n.navigation_attempts,alignment_attempts=n.alignment_attempts)
-        else:result=dict(success=True,target_id=n.target['id'],distances_m=self.last['distances_m'],dwell_s=n.c['dwell_s'],goals=self.selected)
+        else:result=dict(success=True,target_id=n.target['id'],distances_m=self.last['distances_m'],yaw_errors_rad=self.last['yaw_errors_rad'],dwell_s=n.c['dwell_s'],goals=self.selected)
+        if self.task in ('s1','c1'):
+            from rescue_success_log import success_evidence
+            if self.task=='s1':
+                m=self.last;g=self.goal
+                offset=g.get('approach_distance_m',n.c['normal_offset_m'])
+                target_pose=([g['x']+offset*math.cos(g['yaw']),g['y']+offset*math.sin(g['yaw']),g['yaw']]
+                             if n.c.get('goal_source')=='detected_target' else [g['x'],g['y'],g['yaw']])
+                poses=[[m['x'],m['y'],m['yaw']]];distances=[m['rescue_distance_m']];errors=[m['yaw_error_rad']]
+                radius=m['rescue_position_limit_m'];stamp=m['sample_time_s']
+            else:
+                target_pose=[n.target['x'],n.target['y'],n.target['yaw']]
+                poses=self.last['poses'];distances=self.last['distances_m'];errors=self.last['yaw_errors_rad']
+                radius=n.c['radius_m'];stamp=self.last['sample_time_s']
+            evidence,messages=success_evidence(self.directory,self.task,result['target_id'],target_pose,poses,distances,errors,
+                                              radius,n.c['yaw_tolerance_rad'],n.c['dwell_s'],stamp,
+                                              n.c.get('stopped_linear_mps',.02),n.c.get('stopped_angular_rps',.05),wait_s=3.)
+            result['success_evidence']=evidence
+            for message in messages:
+                if self.task=='s1':n.event('SUCCESS_POSE',message)
+                else:n.event('SUCCESS_POSE',summary=message)
         path=self.directory/('target-search-result.json' if self.task=='find_targets' else 'rescue-result.json' if self.task=='s1' else 'cooperative-result.json');tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2));tmp.replace(path)
         self.success=True
 

@@ -14,7 +14,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, qos_profile_sensor_data
-from std_msgs.msg import String, Bool
+from std_msgs.msg import String
 from sensor_msgs.msg import CameraInfo
 from std_srvs.srv import SetBool, Trigger
 from nav_msgs.msg import Odometry, OccupancyGrid
@@ -43,7 +43,6 @@ class Rescue(Node):
         self.search_map = None
         self.search_camera_info = None
         self.search_suspects = None
-        self.search_active = False
         self.rescue_goal = None
         self.target_registry = None
         self.target_received = self.registry_warning_at = 0.0
@@ -61,8 +60,6 @@ class Rescue(Node):
                                      qos_profile_sensor_data)
         self.create_subscription(String, '/targets/estimates', self.targets_received, qos)
         self.create_subscription(String, '/targets/suspected', self.suspects_received, qos)
-        self.search_activation = self.create_publisher(Bool, '/target_search/active', 1)
-        self.create_timer(.5, lambda:self.search_activation.publish(Bool(data=self.search_active)))
         self.client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
         self.heading_client = ActionClient(self, NavigateToPose, '/navigation/heading_to_pose')
         self.rescue_client = ActionClient(self, NavigateToPose, '/navigation/rescue_to_pose')
@@ -396,13 +393,7 @@ class Rescue(Node):
                         not self.c.get('search_enabled', False)):
                     raise
                 from target_research import search_target
-                self.search_active = self.c.get('search_suspects',{}).get('enabled',False)
-                self.search_activation.publish(Bool(data=self.search_active))
-                try:
-                    goal = search_target(self)
-                finally:
-                    self.search_active = False
-                    self.search_activation.publish(Bool(data=False))
+                goal = search_target(self)
         self.rescue_goal = goal
         return goal
 
@@ -495,8 +486,6 @@ class Rescue(Node):
         raise RuntimeError('Wall timeout during dwell')
 
     def finish(self):
-        self.search_active = False
-        self.search_activation.publish(Bool(data=False))
         if self.goal_handle and self.goal_handle.accepted:
             future = self.goal_handle.cancel_goal_async()
             try:

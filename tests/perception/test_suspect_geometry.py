@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_perception/scripts'))
-from suspect_geometry import panels, prefer_surface_normal
+from suspect_geometry import panels, prefer_surface_normal, laser_support
 
 
 def scene(width=80,black=True):
@@ -52,8 +52,25 @@ class Panels(unittest.TestCase):
         self.assertFalse(panels(*args))
         args=list(scene());args[1][:]=4.
         self.assertFalse(panels(*args)) # Outside bounded search range.
-        args=list(scene());args[0][:]=240
+        args=list(scene());args[0][:]=240;args[1][:]=1.
         self.assertFalse(panels(*args)) # Large white wall.
+
+    def test_dark_board_in_front_of_wall_uses_depth_without_white(self):
+        args=list(scene());args[0][:]=35
+        args[1][~np.isfinite(args[1])]=2.
+        self.assertFalse(panels(*args,depth_geometry=False))
+        found=panels(*args)
+        self.assertEqual(len(found),1)
+        self.assertEqual(found[0]['source'],'depth')
+        self.assertAlmostEqual(found[0]['position'][0],1.,places=2)
+
+    def test_modalities_do_not_double_count_one_frame(self):
+        found=panels(*scene())
+        self.assertEqual(len(found),1)
+        self.assertTrue(laser_support(found[0],[[1.,0.,.25]]))
+        self.assertFalse(laser_support(found[0],[[1.,0.,0.]])) # Scan below board.
+        self.assertFalse(laser_support(found[0],[[2.,0.,.25]])) # Background wall.
+        self.assertFalse(laser_support(found[0],[]))
 
     def test_oblique_plane_is_not_rejected_as_depth_jump(self):
         rgb,depth,k,r,t=scene(52)

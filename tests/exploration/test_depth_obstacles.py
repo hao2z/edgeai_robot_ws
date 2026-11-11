@@ -80,13 +80,16 @@ class DepthObstacles(unittest.TestCase):
                                         str(output),'false',controller,str(nav)],input=code,text=True,check=True,
                                        env=dict(os.environ,EDGEAI_COOPERATIVE_RESCUE=str(fleet).lower()))
                         displays = yaml.safe_load(output.read_text())['Visualization Manager']['Displays']
-                        clouds = [d for d in displays if d['Class']=='rviz_default_plugins/PointCloud2']
-                        self.assertEqual(len(clouds),2 if fleet else 1)
+                        def flatten(items):
+                            for item in items:
+                                yield item
+                                yield from flatten(item.get('Displays', []))
+                        clouds = [d for d in flatten(displays) if d['Class']=='rviz_default_plugins/PointCloud2']
+                        self.assertEqual(len(clouds),1)  # Only robot1 has an RGB-D sensor.
                         for cloud in clouds:
                             self.assertEqual(cloud['Enabled'],enabled)
                             self.assertEqual(cloud['Topic']['Reliability Policy'],'Best Effort')
-                        if fleet:
-                            self.assertEqual(clouds[1]['Topic']['Value'],'/robot2/camera/obstacle_points')
+                        self.assertEqual(clouds[0]['Topic']['Value'],'/camera/obstacle_points')
 
     def test_byte_layout_padding_endian_and_nan(self):
         from sensor_msgs.msg import PointCloud2, PointField

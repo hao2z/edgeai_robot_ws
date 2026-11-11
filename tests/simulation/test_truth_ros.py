@@ -73,6 +73,8 @@ class TruthTest(unittest.TestCase):
         self.node.sim_time = 2.6
         row = self.read()
         self.assertEqual(row['status'], 'unavailable')
+        self.assertTrue(row['truth_valid'])
+        self.assertEqual(row['robot_world'][:2],[10.,20.])
         self.assertNotIn('world_from_reference', row)
         self.assertEqual([m.action for m in self.node.markers.publish.call_args.args[0].markers],
                          [Marker.DELETEALL])
@@ -82,6 +84,15 @@ class TruthTest(unittest.TestCase):
         self.assertEqual(self.read()['status'], 'ok')
         self.node.truth_received = time.monotonic()-4
         self.assertIn('stream stopped', self.read()['reason'])
+        self.assertFalse(self.read()['truth_valid'])
+
+    def test_truth_remains_available_without_navigation_tf(self):
+        self.populate()
+        self.node.nav_received=time.monotonic()-4
+        row=self.read()
+        self.assertEqual(row['status'],'unavailable')
+        self.assertTrue(row['truth_valid'])
+        self.assertEqual(row['robot_world'][:2],[10.,20.])
 
 
 if __name__ == '__main__':

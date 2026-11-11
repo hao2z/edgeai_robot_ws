@@ -35,6 +35,12 @@ def main():
     # Include the recent map/odom recovery-frame fix in older runtime snapshots.
     nav['behavior_server']['ros__parameters']['local_frame']=nav['local_costmap']['local_costmap']['ros__parameters']['global_frame']
     nav['behavior_server']['ros__parameters']['global_frame']=nav['global_costmap']['global_costmap']['ros__parameters']['global_frame']
+    if not args.filter_check:
+        navigation=ROOT/'src/edgeai_navigation'
+        sys.path.insert(0,str(navigation/'scripts'))
+        from fleet_config import configure_peer_costmaps
+        coop=yaml.safe_load((navigation/'config/cooperative_rescue.yaml').read_text())
+        configure_peer_costmaps(nav,'',coop.get('peer_costmap',{}))
     (directory/'nav2-runtime.yaml').write_text(yaml.safe_dump(nav,sort_keys=False))
     share=ROOT/'src/edgeai_simulation';targets=share/'config/targets_midterm.yaml'
     world=directory/'truth-world.sdf';make_world(share,targets,world,share/'worlds/midterm.sdf')

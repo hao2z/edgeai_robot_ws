@@ -10,5 +10,9 @@
 - [11月7日协作实施](cooperative-rescue-2026-11-07.md)
 - [任务树迁移前的普通救援说明](normal-rescue-before-task-trees.md)
 - [11月4日中期待办](midterm-checklist-2026-11-04.md)
+- [11月10日状态](project-status-2026-11-10.md)
+- [任务树设计草案](mission-behavior-tree-design-2026-11-10.md)、[初期迁移记录](mission-refactor-status-2026-11-10.md)
+- [目标感知初始方案](target-perception-plan-2026-10-29.md)
+- [11月6日终点朝向回放](navigation-heading-diagnosis-2026-11-06.md)、[10月28日掉头诊断](navigation-turn-diagnosis-2026-10-28.md)
 
 docs目录中带日期的诊断报告也保留为对应日期的证据，不作为当前默认参数入口。

@@ -3,6 +3,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace as NS
 import sys
+import math
 import time
 import unittest
 from unittest.mock import patch
@@ -38,6 +39,74 @@ class Client:
 
 
 class TaskUnits(unittest.TestCase):
+    def timed_joint(self):
+        from rclpy.time import Time
+        from cooperative_policy import JointDwell
+        u=self.joint();n=u.node;clock=[1.]
+        n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25)
+        n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
+        n.now=lambda:clock[0];n.refresh_target=lambda:False;n.localized=lambda ns:True
+        n.tf_pose=lambda *a:[.5,0.,math.pi]
+        u.dwell=JointDwell(.7,1.);u.navigation_after=0.;u.last_sample=None;u.last_event=-100.
+        def sample(now,stamp=None):
+            clock[0]=now
+            msg=Time(nanoseconds=round((now if stamp is None else stamp)*1e9)).to_msg()
+            n.odom={ns:NS(header=NS(stamp=msg),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('','robot2')}
+            n.buffer=NS(lookup_transform=lambda *a:NS(header=NS(stamp=msg)))
+            return u.check_joint()
+        return u,n,sample,clock
+
+    def test_c1_callback_skew_does_not_restart_confirmed_dwell(self):
+        u,n,sample,_=self.timed_joint()
+        self.assertFalse(sample(1.)['complete'])
+        for i in range(1,11):
+            now=1.+i*.1
+            pending=sample(now,now+.02) # Odometry callback precedes /clock.
+            self.assertTrue(pending['dwell_retained'])
+            self.assertEqual(u.dwell.start,1.)
+            done=sample(now)
+        self.assertTrue(done['complete'])
+
+    def test_c1_tf_wait_retries_same_sample_and_long_outage_resets(self):
+        from tf2_ros import TransformException
+        u,n,sample,clock=self.timed_joint()
+        sample(1.);sample(1.1)
+        pose=n.tf_pose
+        def missing(*a):raise TransformException('TF callback pending')
+        n.tf_pose=missing
+        pending=sample(1.2)
+        self.assertTrue(pending['dwell_retained'])
+        self.assertAlmostEqual(u.last_sample/1e9,1.1)
+        n.tf_pose=pose
+        self.assertFalse(sample(1.2)['complete'])
+        self.assertAlmostEqual(u.last_sample/1e9,1.2)
+        clock[0]=1.8
+        self.assertFalse(u.wait_joint_data(1.8,'no new data')['dwell_retained'])
+        self.assertIsNone(u.dwell.start)
+        self.assertFalse(sample(1.8)['complete'])
+        self.assertEqual(u.dwell.start,1.8)
+
+    def test_c1_heading_failure_resets_dwell_and_keeps_healthy_robot(self):
+        from rclpy.time import Time
+        from cooperative_policy import JointDwell
+        u=self.joint();n=u.node
+        n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25)
+        n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
+        n.now=lambda:2.;n.refresh_target=lambda:False;n.localized=lambda ns:True
+        stamp=Time(nanoseconds=2_000_000_000).to_msg()
+        n.odom={ns:NS(header=NS(stamp=stamp),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('','robot2')}
+        n.buffer=NS(lookup_transform=lambda *a:NS(header=NS(stamp=stamp)))
+        poses={'base_footprint':[.5,0.,math.pi],'robot2/base_footprint':[0.,.5,0.]}
+        n.tf_pose=lambda frame,*a:poses[frame]
+        u.dwell=JointDwell(.7,1.);u.dwell.start=1.
+        u.navigation_after=0.;u.last_sample=None;u.last_event=-100.;u.arrived={'','robot2'}
+        with self.assertRaisesRegex(UnitFailure,'heading outside tolerance'):u.check_joint()
+        self.assertEqual(u.arrived,{''});self.assertFalse(u.failed_parking)
+        self.assertIsNone(u.dwell.start);self.assertFalse(u.condition_complete)
+        self.assertAlmostEqual(abs(u.last['yaw_errors_rad'][1]),math.pi)
+        poses['robot2/base_footprint'][2]=math.pi;u.last_sample=None
+        self.assertFalse(u.check_joint()['complete']);self.assertEqual(u.dwell.start,2.)
+
     def test_stop_request_is_handled_before_entering_ros_spin(self):
         import rclpy
         from cooperative_rescue import CooperativeRescue
@@ -171,7 +240,7 @@ class TaskUnits(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'cancel confirmation'):u.close()
         self.assertEqual(closed,['shutdown','destroy'])
 
-    def test_start_occupied_preflight_reaches_native_navigation_recovery(self):
+    def test_start_occupied_without_path_cannot_pass_peer_check(self):
         from cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
         n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
@@ -180,18 +249,40 @@ class TaskUnits(unittest.TestCase):
         n.action=lambda *a:NS(status=6,result=NS(error_code=ComputePathToPose.Result.START_OCCUPIED))
         pair=([.5,0.,0.],[0.,.5,0.])
         with patch('cooperative_rescue.parking_pairs',return_value=[pair]):
-            self.assertEqual(n.select_parking_pair(),pair)
-        self.assertEqual(events.count('PLAN_START_OCCUPIED_NAV_RECOVERY'),2)
+            with self.assertRaisesRegex(RuntimeError,'No verified C1 parking pair'):n.select_parking_pair()
+        self.assertEqual(events.count('PLAN_REJECTED'),2)
 
     def test_reselect_parking_excludes_failed_goal_history(self):
         from cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
         n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
         n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped();n.event=lambda *a,**kw:None
-        n.action=lambda *a:NS(status=4,result=NS(error_code=0))
+        n.action=lambda *a:NS(status=4,result=NS(error_code=0,path=NS(header=NS(frame_id='map'),poses=[PoseStamped()])))
         failed=([.5,0.,0.],[0.,.5,0.]);next_pair=([.6,0.,0.],[0.,.5,0.])
-        with patch('cooperative_rescue.parking_pairs',return_value=[failed,next_pair]):
-            self.assertEqual(n.select_parking_pair(excluded={'':[failed[0]]}),next_pair)
+        with patch('cooperative_rescue.parking_pairs',return_value=[failed,next_pair]),patch('cooperative_rescue.path_clear_of_peer',return_value=True):
+            self.assertNotEqual(n.select_parking_pair(excluded={'':[failed[0]]})[0],failed[0])
+
+    def test_rejects_native_path_that_crosses_parked_peer(self):
+        from cooperative_rescue import CooperativeRescue
+        n=CooperativeRescue.__new__(CooperativeRescue)
+        n.map=None;n.target={'id':2};n.c={};n.plan={'':'root','robot2':'second'}
+        n.footprint=[(.15,.15),(-.15,.15),(-.15,-.15),(.15,-.15)]
+        n.tf_pose=lambda frame:[-2.,0.,0.] if frame=='base_footprint' else [0.,2.,0.]
+        def pose(p):
+            msg=PoseStamped();msg.pose.position.x,msg.pose.position.y=p[:2];msg.pose.orientation.w=1.
+            return msg
+        n.goal_pose=pose
+        events=[];n.event=lambda name,**kw:events.append((name,kw))
+        def plan(client,request,timeout):
+            waypoints=[request.goal]
+            if client=='root' and request.goal.pose.position.x==-1.:
+                waypoints=[pose((0.,0.)),request.goal]
+            return NS(status=4,result=NS(error_code=0,path=NS(header=NS(frame_id='map'),poses=waypoints)))
+        n.action=plan
+        blocked=([-1.,0.,0.],[0.,0.,0.]);clear=([-1.,1.,0.],[0.,0.,0.])
+        with patch('cooperative_rescue.parking_pairs',return_value=[blocked,clear]):
+            self.assertCountEqual(n.select_parking_pair(),clear)
+        self.assertTrue(any(name=='PLAN_BLOCKED_BY_PARKED_PEER' and row['robot']=='robot1' for name,row in events))
 
 
 if __name__=='__main__':unittest.main()

@@ -18,17 +18,21 @@ GridBased:
 
   # ── 按需调整：复杂路线规划预算 ──
   max_planning_time: 5.0  # s；单次搜索预算，增大更易找到复杂路线但更慢
-  # 普通点先选终点车身净空合适的朝向，每次只做一次原生搜索；重试交给行为树。
+  # 位置目标比较多朝向原生路径，按路径距离/代价/旋转/倒车评分选最低者。
+  goal_heading_mode: ALL_DIRECTION  # ALL_DIRECTION全部原语朝向；BIDIRECTIONAL前后两向；DEFAULT输入方向。
+  goal_heading_count: 4  # 仅ALL_DIRECTION生效：全周分散采样并对齐原语方向；0用全部（当前16），常用4/8；不自动扩增。
+  heading_search_budget_s: 2.0  # 一次请求所有候选共享墙钟预算；不能按每个方向重复给5秒。
+  heading_reuse: true  # 同一目标优先复用已成功朝向，失败再比较其余方向，减少路径抖动。
 
   # ── 支撑配置：通常不动 ──
-  plugin: edgeai_navigation::XYLatticePlanner  # 普通位置目标自动选终点朝向；内部使用Smac Lattice
+  plugin: edgeai_navigation::XYLatticePlanner  # Jazzy多候选朝向适配；每条返回路径均由原生Smac Lattice生成。
   tolerance: 0.1  # m；增大允许路径结束在目标附近，独立于到点容差
   allow_unknown: true  # 允许穿过未知栅格
   lattice_filepath: nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json  # 5cm栅格差速原语；0.5m是曲线半径，仍含原地转向
 
   max_iterations: 1000000  # 总迭代上限；仍受时间预算限制
   max_on_approach_iterations: 1000  # 进入位置容差后，继续搜索精确终点的迭代数
-  terminal_checking_interval: 5000  # 每多少次迭代检查超时/取消；减小响应更快
+  terminal_checking_interval: 500  # 每多少次迭代检查超时/取消；保证候选共享预算及时响应。
 
   # 搜索加速与后处理：通常保持
   cache_obstacle_heuristic: false  # 同目标重复规划可提速；建图变化时慎用缓存

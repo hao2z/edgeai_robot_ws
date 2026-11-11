@@ -68,6 +68,8 @@ if [[ ! -f "$cache/frontier-install/local_setup.bash" ]]; then
     exit 1
 fi
 export EDGEAI_GUI=true EDGEAI_RVIZ=true
+export EDGEAI_CAMERA_RATE=${EDGEAI_CAMERA_RATE:-30}
+export EDGEAI_RVIZ_FPS=${EDGEAI_RVIZ_FPS:-30}
 export EDGEAI_ROS_DOMAIN=$domain
 controller=${EDGEAI_CONTROLLER:-rpp}
 export EDGEAI_GLOBAL_PLANNER=${EDGEAI_GLOBAL_PLANNER:-lattice}

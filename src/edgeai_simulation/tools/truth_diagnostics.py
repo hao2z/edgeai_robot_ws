@@ -51,6 +51,12 @@ class TruthDiagnostics(Node):
             name = 'truth.jsonl' if not p('frame_prefix') else self.entity+'-truth.jsonl'
             self.audit = (self.directory/name).open('a', buffering=1)
         self.targets = yaml.safe_load(Path(p('targets_file')).read_text())['targets']
+        if self.directory and not p('frame_prefix'):
+            snapshot=self.directory/'truth-targets.json'
+            temporary=snapshot.with_suffix('.tmp')
+            temporary.write_text(json.dumps(dict(source=p('targets_file'),targets_world=[
+                dict(id=t['id'],pose=[t['pose'][0],t['pose'][1],t['pose'][5]]) for t in self.targets])))
+            temporary.replace(snapshot)
         self.scene = self.load_scene(p('world_file'))
         self.truth = self.goal = None
         self.sim_time = self.nav_received = self.truth_received = 0.0
@@ -148,20 +154,25 @@ class TruthDiagnostics(Node):
         try:
             if self.truth is None:
                 raise ValueError('No Gazebo world pose received')
-            if time.monotonic()-self.truth_received > 3 or time.monotonic()-self.nav_received > 2:
-                raise ValueError('Truth or navigation TF stream stopped')
             stamp = Time.from_msg(self.truth.header.stamp)
+            world_base = planar(self.truth.transform.translation, self.truth.transform.rotation)
+            # Rescue verification needs Gazebo poses even if map/odom TF fails.
+            row.update(sample_time=stamp.nanoseconds/1e9, robot_world=world_base,
+                       truth_valid=time.monotonic()-self.truth_received<=3,
+                       targets_world=[dict(id=t['id'], pose=[t['pose'][0], t['pose'][1], t['pose'][5]]) for t in self.targets])
+            if not row['truth_valid'] or time.monotonic()-self.nav_received > 2:
+                raise ValueError('Truth or navigation TF stream stopped')
             age = now-stamp.nanoseconds/1e9
             row.update(sample_time=stamp.nanoseconds/1e9, pose_age_s=age)
             if not 0 <= age <= .75:
                 raise ValueError('Gazebo world pose stale or from future')
             # Never fall back to latest TF: both robot poses refer to this stamp.
             tf = self.buffer.lookup_transform(self.map_frame, self.base_frame, stamp).transform
-            world_base = planar(self.truth.transform.translation, self.truth.transform.rotation)
             map_base = planar(tf.translation, tf.rotation)
             world_map = compose(world_base, inverse(map_base))
             map_world = inverse(world_map)
-            row.update(status='ok', robot_world=world_base, robot_estimated=map_base, world_from_reference=world_map)
+            row.update(status='ok', robot_world=world_base, robot_estimated=map_base, world_from_reference=world_map,
+                       targets_world=[dict(id=t['id'], pose=[t['pose'][0], t['pose'][1], t['pose'][5]]) for t in self.targets])
             overlay = copy.deepcopy(self.scene)
             for m in overlay:
                 pose = compose(map_world, planar(m.pose.position, m.pose.orientation))

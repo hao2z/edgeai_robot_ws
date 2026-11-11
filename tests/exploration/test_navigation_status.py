@@ -19,6 +19,23 @@ def sample():
 
 
 class NavigationStatus(unittest.TestCase):
+    def test_standby_and_missing_follower_camera_are_explicit(self):
+        state = dict(standby=True, camera_available=False, settings=dict(depth_enabled=True))
+        result = render(state)
+        self.assertEqual(result['heading'], '待命：导航尚未启动')
+        self.assertEqual(result['warnings'], [])
+        self.assertIn('本仿真未启用 RGB-D', result['body'])
+        for label in ('目标：', '恢复：', '到点'):
+            self.assertIn(label, result['summary'])
+
+    def test_frontier_uses_xy_arrival_and_heading_planner(self):
+        state=sample();state['authority']['arrival_policy']='frontier'
+        state['settings']['planners']={'GridBased':{'plugin':'edgeai_navigation::XYLatticePlanner'}}
+        result=render(state)
+        self.assertIn('前沿位置到点',result['body'])
+        self.assertIn('XYLatticePlanner',result['body'])
+        self.assertIn('FollowPath',result['body'])
+
     def test_active_and_missing_inputs(self):
         state = sample()
         result = render(state)

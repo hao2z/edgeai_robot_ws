@@ -1,8 +1,13 @@
 suspect_targets:
   ros__parameters:
     use_sim_time: true
-    processing_hz: 2.0
-    detect_during_mapping: true
+    processing_hz: 5.0  # 仿真时间Hz；提高短暂入镜时的采样与多帧确认机会。
+    enabled: true  # 独立持续感知，不受探索暂停、转圈或任务阶段影响。
+    depth_geometry_enabled: true  # 深度突变分割提供不依赖白色外观的候选。
+    laser_enabled: true  # 激光命中加分；未命中不否定，扫描面可能低于目标。
+    laser_topic: /scan
+    laser_sync_slop_s: 0.15
+    laser_support_radius_m: 0.10
     max_candidates: 24
     fusion_window: 20
     panel_size_m: 0.20

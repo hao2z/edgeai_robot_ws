@@ -25,6 +25,8 @@ class MissionConfig(unittest.TestCase):
             self.assertEqual(c['initial_relative_pose'],[0.,-.6,0.])
             self.assertEqual(scan['output_directory'],str(d))
             self.assertEqual(c['required_targets'],[dict(id=1,type='normal'),dict(id=2,type='cooperative')])
+            self.assertEqual(c['mapping'],yaml.safe_load((ROOT/'src/edgeai_mission/config/mapping.yaml').read_text()))
+            self.assertEqual(c['mapping']['min_known_area_m2'],18.)
             self.assertIn('find_targets',c['task_trees'])
             self.assertTrue(c['cooperative']);self.assertTrue(c['rescue_enabled'])
             self.assertEqual(c['task_attempts'],dict(s1=3,c1=4))

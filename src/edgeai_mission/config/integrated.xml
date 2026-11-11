@@ -2,7 +2,7 @@
   <!-- Fixed scheduling rules; each task owns its unit-behavior tree. -->
   <BehaviorTree ID="IntegratedMission">
     <Sequence>
-      <SubTree ID="MappingAndTargetSearch"/>
+      <SubTree ID="MappingAndTargetSearch" mapping_attempts="{mapping_attempts}"/>
       <Fallback>
         <Inverter><RescueEnabled/></Inverter>
         <Sequence>
@@ -18,7 +18,32 @@
   <!-- First task: mapping and visual localization of every required rescue target. -->
   <BehaviorTree ID="MappingAndTargetSearch">
     <Sequence>
-      <AwaitExploration/>
+      <Repeat num_cycles="{mapping_attempts}">
+        <Fallback>
+          <MappingAccepted/>
+          <Sequence>
+            <ReactiveSequence name="ExploreWithTargetObservationGate">
+              <Fallback>
+                <Sequence><AllRequiredTargetsLocated/><SuppressObservation/></Sequence>
+                <AlwaysSuccess/>
+              </Fallback>
+              <AwaitExploration/>
+            </ReactiveSequence>
+            <Fallback>
+              <MapAreaSufficient/>
+              <Sequence>
+                <BeginMappingSupplement/>
+                <MissionStage step="quiesce"/>
+                <Parallel success_count="1" failure_count="1">
+                  <AwaitFrontier/>
+                  <MissionStage step="supplement_mapping"/>
+                </Parallel>
+                <MissionStage step="resume_exploration"/>
+              </Sequence>
+            </Fallback>
+          </Sequence>
+        </Fallback>
+      </Repeat>
       <MissionStage step="quiesce"/>
       <Fallback>
         <Inverter><RescueEnabled/></Inverter>

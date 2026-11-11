@@ -2,9 +2,11 @@
 
 人读日志 `rescue.log`、`events.log` 明确标出“疑似目标候选”“视锥候选”“空间分散候选”，区分疑似物位置与实际导航观察位，map坐标保留两位小数。`rescue-events.jsonl` 保存事件的原始结构化数据，`rescue-result.json` 保留完整导航尝试精度；感知原始候选继续保存在 `suspect-diagnostics.jsonl`、`suspect-candidates.json`。`suspects.log` 仅显示简短摘要，候选较多时显示前3个，完整列表见结构化记录。
 
-`edgeai_perception/scripts/suspect_targets.py` 独立感知，不读取真值、不分配 ArUco ID、不控制运动。在导航仲裁状态为 AUTO、探索未暂停且状态新鲜时，或搜寻器 `/target_search/active` 心跳有效时，按 2 Hz 解码 RGB/深度。其他阶段不解码图像，保留候选并继续用当前 map→odom 发布位置；探索状态失联两秒、搜寻心跳失联三秒后不再依赖该来源启用检测。输入为现有对齐 RGB、深度、CameraInfo 和图像时刻 TF，不处理完整点云。
+`edgeai_perception/scripts/suspect_targets.py` 独立持续感知，不读取真值、不分配 ArUco ID、不控制运动，也不订阅探索/导航权限或搜寻启用状态。探索暂停、转圈、手动导航及救援期间均继续检测，任务树仅决定何时消费候选。默认按 5 Hz（仿真时间）处理新鲜且配对的 RGB/深度；没有新图像时不重复检测，输入失效时跳过。`suspect_targets.yaml` 的 `enabled` 是节点自身的配置开关。输入还包括 CameraInfo、图像时刻 TF 以及可选 `/scan`，不处理完整点云。
 
-候选依据白色区域、黑色印刷比例、三维尺寸和竖直平面生成。20 cm 面板允许高度 13–27 cm、可见宽度 0.6–27 cm；深度范围 0.2–3 m、平面残差不超过 1.2 cm。至少两帧在 odom 中相距 15 cm 以内才发布。窄面宽度小于面板边长 35% 时保留方向歧义。评分为启发式，白色背面/侧面可以入选，家具也可能误检，必须经后续 ArUco 定位确认。
+候选有两条来源：原有白色 RGB 区域，以及不依赖颜色的深度突变分割（相邻采样点相差超过5 cm则断开）。两条路径均检查三维尺寸和竖直平面；同帧相距8 cm内的结果合并，避免被误算为多帧确认。20 cm 面板允许高度 13–27 cm、可见宽度 0.6–27 cm；深度范围 0.2–3 m、中心高度 0.12–0.75 m、平面残差不超过 1.2 cm。至少两帧在 odom 中相距 15 cm 以内才发布。窄面宽度小于面板边长 35% 时保留方向歧义。黑色印刷比例仅影响置信度。家具也可能误检，必须经后续 ArUco 定位确认。
+
+激光使用自身扫描时刻的 TF 转到 odom，与图像时间差加扫描时长不超过 `laser_sync_slop_s`（默认0.15秒）时，检查候选附近 `laser_support_radius_m`（默认10 cm）内、面板高度范围内是否有回波。命中使置信度增加0.10，并记录 `laser_supported`；未命中、无雷达、过期或缺TF均不否定RGB-D候选，因为扫描平面可能错过面板。`depth_geometry_enabled`、`laser_enabled` 可分别关闭新增路径。激光目前只提供位置支持，候选法线仍由深度平面估计，不使用单条光束推断法线。
 
 多次观测以 odom 为参考，位置取最近最多20次观测的均值，记录首次/末次观测、累计次数及位置离散程度。只有一帧的候选8秒后过期；达到多帧门槛后在当前会话保留，即使离开相机视野也不清空。最多24个候选；满额时优先淘汰未确认的旧单帧候选，不挤掉已保留候选。节点重启后不自动加载旧会话记录。
 
@@ -24,6 +26,6 @@
 
 配置：感知频率、面板尺寸、同步/确认条件在 `src/edgeai_perception/config/suspect_targets.yaml`；调度、距离、图像边距、排除距离在 `midterm_single_rescue.yaml` 的 `search_suspects`。中期默认启用，通用场景关闭；非中期场景需按面板尺寸配置。
 
-`/targets/suspected` 以 transient-local QoS 发布 map 坐标候选，供建图后启动的搜寻器立即取得；会话 `suspects.log`、`suspect-diagnostics.jsonl` 每五秒记录候选和平均处理耗时，`suspect-candidates.json` 保存最新诊断时的候选快照。`rescue.log`、`search_attempts` 记录实际观察位、投影宽高、距离和动作结果。完整侧视仍可能没有足够 RGB-D 像素，本实现尚未标定实际发现率。
+`/targets/suspected` 以 transient-local QoS 发布 map 坐标候选，供建图后启动的搜寻器立即取得；会话 `suspects.log`、`suspect-diagnostics.jsonl` 每五秒记录候选和平均处理耗时，新增 `accepted_rgbd` / `accepted_depth`、`reject_*`、`laser_supported` / `laser_missing` / `laser_unsynced` / `laser_tf_missing` 累计计数。候选字段 `source` 标明首次或最近匹配来源，`laser_supported` 标明本次观测是否获激光支持。`suspect-candidates.json` 保存最新诊断时的候选快照。`rescue.log`、`search_attempts` 记录实际观察位、投影宽高、距离和动作结果。完整侧视仍可能没有足够 RGB-D 像素，本实现尚未标定实际发现率。
 
 中期默认预算：疑似观察位全局最多6个，与视锥合计最多10个位置，共享180仿真秒搜寻时间及任务600墙钟秒上限。每位置导航最多16仿真秒/次，失败额外重试2次（合计最多3次），成功到位后连续转圈最多8仿真秒；发现S1立即交接救援。失败或超时的位置也计入点数；时间预算可提前终止，6个疑似点并非每个目标各6个，也不保证全部走完。

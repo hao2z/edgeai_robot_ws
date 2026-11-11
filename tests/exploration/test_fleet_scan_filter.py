@@ -6,10 +6,20 @@ import unittest
 from sensor_msgs.msg import LaserScan
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from fleet_scan_filter import mask_scan
+from fleet_scan_filter import mask_scan, covariance_reliable
 
 
 class FilterTests(unittest.TestCase):
+    def test_covariance_requires_valid_bounded_uncertainty(self):
+        c=[0.]*36;c[0]=c[7]=.01;c[35]=.01
+        self.assertTrue(covariance_reliable(c,.15,.2))
+        c[1]=c[6]=.02
+        self.assertFalse(covariance_reliable(c,.15,.2))
+        c[1]=c[6]=0.;c[35]=float('nan')
+        self.assertFalse(covariance_reliable(c,.15,.2))
+        c[35]=-.01
+        self.assertFalse(covariance_reliable(c,.15,.2))
+
     def test_only_points_inside_follower_are_removed_without_mutating_input(self):
         scan=LaserScan();scan.range_min=.05;scan.range_max=10.
         scan.angle_min=0.;scan.angle_increment=math.pi/2;scan.ranges=[.6,2.,float('inf'),float('nan')]

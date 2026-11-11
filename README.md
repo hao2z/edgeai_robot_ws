@@ -9,7 +9,7 @@ The canonical development workspace is this repository, on branch
 | `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
 | `src/edgeai_navigation/` | Shared Nav2 configuration, independent controller tuning and control authority |
 | `src/edgeai_mission/` | Fixed-rule coordinator, S1/C1 task Actions and behavior trees |
-| `src/edgeai_perception/` | ArUco detection and target localization during mapping |
+| `src/edgeai_perception/` | Continuous ArUco, RGB-D/laser hints and target localization |
 | `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
 | `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
 | `tests/` | Simulation and exploration checks, observation documentation |
@@ -19,7 +19,7 @@ The canonical development workspace is this repository, on branch
 
 当前已跑通单机建图、目标定位、S1 单救援与 C1 双机器人协作救援。
 默认 Windows 入口使用 native Jazzy + RPP + Smac Lattice；当前进度、成功轮次证据、限制和启动方式见
-[项目状态（2026-11-10）](docs/project-status.md)及[双机协作救援](docs/cooperative-rescue.md)。
+[项目状态（2026-11-11）](docs/project-status.md)、[文档索引](docs/README.md)及[双机协作救援](docs/cooperative-rescue.md)。
 
 历史建图＋目标寻找版本的结果、截图和限制见
 [2026-10-30 开发基线](docs/mapping-target-search-baseline-2026-10-30.md)。
@@ -73,7 +73,7 @@ RViz also shows global/local costs and paths, same-time footprint comparisons,
 SLAM correction and message ages; see [visualization and time alignment](docs/rviz-navigation-observability.md).
 Large heading changes use Nav2 Rotation Shim before RPP tracking; ordinary
 exploration gain updates no longer repeatedly cancel the active goal. See
-[turning and goal coordination diagnosis](docs/navigation-turn-diagnosis.md).
+[turning and goal coordination diagnosis](docs/history/navigation-turn-diagnosis-2026-10-28.md).
 
 A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
 

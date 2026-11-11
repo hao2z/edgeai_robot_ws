@@ -8,8 +8,8 @@ RPP派生三个固定控制器，统一使用原生 `RotationShimController` + R
 
 | 入口 | 该点到达要求 | 规划器 |
 |---|---|---|
-| `/exploration/navigate_to_pose` | 自动探索，仅 XY | `GridBased`，路径末段朝向 |
-| `/navigate_to_pose` | 手动普通点，仅 XY | `GridBased`，路径末段朝向 |
+| `/exploration/navigate_to_pose` | 自动探索，仅 XY | `GridBased`，多朝向选路；输入yaw仅作偏好 |
+| `/navigate_to_pose` | 手动普通点，仅 XY | `GridBased`，多朝向选路 |
 | `/navigation/heading_to_pose` | 手动指定朝向点，XY 和 yaw | `GridBasedHeading`，目标 yaw |
 | `/navigation/rescue_to_pose` | 救援，XY、yaw 和停车 | `GridBasedHeading`，目标 yaw |
 
@@ -27,6 +27,6 @@ future = client.send_goal_async(NavigateToPose.Goal(pose=pose))
 
 两个入口发送的都是普通导航点，不会触发救援任务或连续停留。最终救援执行器单独选择救援入口，并在导航成功后验证停留。普通指定朝向点的位置容差沿用普通导航配置，角度容差沿用救援配置的 `yaw_tolerance_rad`；救援使用其自身位置及停车容差。
 
-`navigation_authority.py` 在接收请求时保存 `arrival_policy`，排队、目标替换、恢复期间不会改变。实际派发时使用启动时生成的固定行为树（会话目录 `goal-policy-trees/`），绑定规划器、控制器和终点检查器 ID，保留原恢复逻辑。`goal_policy.py` 负责生成这些树及控制器配置；运行时增加独立 `GridBasedHeading` NavFn 实例，两规划器共用已有全局代价地图，不新增定时规划任务。
+`navigation_requests.py`接入请求，路由及策略在`goal_policy.py`中定义；`navigation_authority.py`保存请求策略并负责排队、取消和交接，恢复期间不会改变策略。实际派发时使用生成的固定行为树（会话目录`goal-policy-trees/`），绑定规划器、控制器和终点检查器ID，保留原恢复逻辑。默认Jazzy Lattice配置中，`GridBased`在共享预算内比较多个原语朝向的原生Smac路径，`GridBasedHeading`保留原生固定朝向；两者共用已有全局代价地图。NavFn对照配置中，普通点仍使用路径末段朝向。多朝向预算及模式见`smac_lattice.yaml`，实现边界及验证见[任务流程](task-workflow.md)。
 
 原 `/goal_checker_selector`、`/planner_selector`、`/controller_selector` 话题不能覆盖这些受管理任务的逐点规则。客户端不能用任意 `behavior_tree` 绕开统一管理。`GOAL_RESERVED` 和 `BACKEND_ACCEPTED` 事件记录 `arrival_policy`，后者还记录实际控制器、检查器和行为树路径。

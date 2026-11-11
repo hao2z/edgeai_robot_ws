@@ -29,6 +29,8 @@ def configure_lattice(config, resource_dir, smac_share):
     # Ordinary position goals choose a reachable heading; explicit yaw goals
     # use the unmodified native planner and the requested goal orientation.
     planners['GridBasedHeading']=deepcopy(planner)
+    for option in ('goal_heading_mode','goal_heading_count','heading_search_budget_s','heading_reuse'):
+        planners['GridBasedHeading'].pop(option,None)
     planners['GridBasedHeading']['plugin']='nav2_smac_planner::SmacPlannerLattice'
     planners['GridBasedHeading']['allow_reverse_expansion']=False
     follow=config['controller_server']['ros__parameters']['FollowPath']

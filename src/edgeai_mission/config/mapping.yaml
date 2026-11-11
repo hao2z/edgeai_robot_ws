@@ -1,0 +1,5 @@
+# 协调器建图完成门槛；按原始 /map 的已知栅格统计，不使用地图外接矩形面积。
+min_known_area_m2: 18.0
+# 无前沿且面积不足时，最多换位补充探索 3 次，然后报告建图不完整。
+supplement_attempts: 3
+reposition_timeout_s: 60.0

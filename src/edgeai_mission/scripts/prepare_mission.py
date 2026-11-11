@@ -26,11 +26,16 @@ def prepare(root, directory, rescue, map_basename, duration, cooperative, observ
     coop = yaml.safe_load((root/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
     trees=directory/'mission-trees';trees.mkdir(exist_ok=True)
     source=root/'src/edgeai_mission/config'
+    mapping=yaml.safe_load((source/'mapping.yaml').read_text())
+    if (not math.isfinite(mapping['min_known_area_m2']) or mapping['min_known_area_m2'] <= 0
+            or mapping['supplement_attempts'] < 0 or mapping['reposition_timeout_s'] <= 0):
+        raise ValueError('Invalid mapping completion settings')
     for name in ('find_targets','s1','c1'):shutil.copyfile(source/'tasks'/f'{name}.xml',trees/f'{name}.xml')
     shutil.copyfile(source/'integrated.xml',trees/'integrated.xml')
     settings = dict(project_root=str(root), directory=str(directory), map_basename=str(Path(map_basename).resolve()),
                     exploration_timeout_s=float(duration), rescue_enabled=rescue_enabled and bool(c.get('enabled')),
                     cooperative=cooperative, observation=observation, backend=backend,
+                    mapping=mapping,
                     initial_relative_pose=coop['initial_relative_pose'],
                     # Preserve existing stage budgets in this migration. A competition-wide timer is still pending.
                     wall_timeout_s=float(duration)+2*float(c['wall_timeout_s'])+(float(coop['wall_timeout_s']) if cooperative else 0.),
@@ -40,6 +45,7 @@ def prepare(root, directory, rescue, map_basename, duration, cooperative, observ
                     worker_script=str(root/'src/edgeai_mission/scripts/mission_stage.py'),
                     unit_worker_script=str(root/'src/edgeai_mission/scripts/task_units.py'),
                     required_targets=[dict(id=c['target_id'],type='normal')]+([dict(id=coop['target_id'],type='cooperative')] if cooperative else []),
+                    target_observation_require_confirmation=c.get('require_confirmation',False),
                     task_trees={task:str(trees/f'{task}.xml') for task in ('find_targets','s1','c1')},
                     tree=str(trees/'integrated.xml'))
     (directory/'mission-runtime.json').write_text(json.dumps(settings, indent=2))

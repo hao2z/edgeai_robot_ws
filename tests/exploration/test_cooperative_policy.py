@@ -8,12 +8,39 @@ import yaml
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
-from cooperative_policy import compose, relative, JointDwell, parking_pairs
+from cooperative_policy import compose, relative, JointDwell, parking_pairs, rescue_yaw_error, path_clear_of_peer
 from fleet_config import namespaced_config
 from goal_policy import managed_trees
 
 
 class CooperativePolicy(unittest.TestCase):
+    def test_peer_blocks_path_between_clear_waypoints_and_during_rotation(self):
+        body=[(.4,.1),(-.4,.1),(-.4,-.1),(.4,-.1)]
+        self.assertFalse(path_clear_of_peer([(-2,0,0),(2,0,0)],(0,0,0),body))
+        self.assertTrue(path_clear_of_peer([(-2,1,0),(2,1,0)],(0,0,0),body))
+        self.assertFalse(path_clear_of_peer([(0,0,-math.pi/4),(0,0,math.pi/4)],(.76,0,0),body))
+
+    def test_rescue_heading_uses_surface_normal_and_wraps(self):
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi],dict(yaw=0.)),0.)
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi+.3],dict(yaw=0.)),.3)
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi/2],dict(yaw=math.pi/2)),0.)
+
+    def test_configured_wider_parking_pair_retains_rescue_margin(self):
+        info=Obj(resolution=.05,width=120,height=120,origin=Obj(position=Obj(x=0.,y=0.),orientation=Obj(x=0.,y=0.,z=0.,w=1.)))
+        grid=Obj(info=info,data=[0]*14400)
+        config=yaml.safe_load((ROOT/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
+        footprint=[[.1125,.165],[-.3125,.165],[-.3125,-.165],[.1125,-.165]]
+        pairs=parking_pairs(grid,dict(x=3.,y=3.,yaw=0.),footprint,config)
+        self.assertTrue(pairs)
+        for a,b in pairs:
+            self.assertGreaterEqual(math.dist(a[:2],b[:2]),config['min_separation_m'])
+            for p in (a,b):self.assertLessEqual(math.dist(p[:2],[3.,3.]),.550001)
+        config['parking_radii_m']=[.4]
+        config['min_separation_m']=.65
+        pairs=parking_pairs(grid,dict(x=3.,y=3.,yaw=0.),footprint,config)
+        self.assertTrue(pairs)
+        self.assertTrue(all(abs(math.dist(p[:2],[3.,3.])-.4)<1e-6 for pair in pairs for p in pair))
+
     def test_relative_initialization_uses_starting_robot_frame(self):
         pose=compose([.45,.55,math.pi/2],[0.,-.60,0.])
         self.assertAlmostEqual(pose[0],1.05)

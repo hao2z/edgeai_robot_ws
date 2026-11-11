@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import xml.etree.ElementTree as ET
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -46,12 +47,22 @@ def setup(context):
     navigation_test = LaunchConfiguration('navigation_test').perform(context).lower() == 'true'
     if navigation_test and (not truth or LaunchConfiguration('slam').perform(context).lower()=='true'):
         raise ValueError('Truth navigation requires truth:=true and slam:=false')
+    clock_rate = float(LaunchConfiguration('clock_rate').perform(context))
+    if not math.isfinite(clock_rate) or (clock_rate != 0 and not 20 <= clock_rate <= 1000):
+        raise ValueError('clock_rate must be 0 (unthrottled) or 20..1000 wall Hz')
     actions = [IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(gz_share / 'launch/gz_sim.launch.py')),
         launch_arguments={'gz_args': f'-r {"" if gui else "-s "}{world_path}'}.items()),
         Node(package='ros_gz_bridge', executable='parameter_bridge', name='clock_bridge',
              arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
-             parameters=[{'use_sim_time': True}])]
+             remappings=[('/clock', '/simulation/clock_raw')] if clock_rate else [],
+             parameters=[{'use_sim_time': False}])]
+    if clock_rate:
+        # One C++ relay bounds clock fan-out to every Python/Nav2 node. Forward
+        # original timestamps; wall-clock throttling must not depend on its own output.
+        actions.append(Node(package='topic_tools', executable='throttle', name='simulation_clock',
+            arguments=['messages', '/simulation/clock_raw', str(clock_rate), '/clock'],
+            parameters=[{'use_sim_time': False, 'use_wall_clock': True, 'lazy': False}]))
     if navigation_test:
         map_file=LaunchConfiguration('map_file').perform(context)
         if not Path(map_file).is_file():raise ValueError('Truth navigation map_file missing')
@@ -63,6 +74,13 @@ def setup(context):
             ExecuteProcess(cmd=['python3','-u',str(share/'tools/navigation_truth_localization.py'),
                                 '--ros-args','-p','use_sim_time:=true'],output='screen')])
     raw_xml = xacro.process_file(str(description_share / 'urdf/edgeai_robot_real.urdf.xacro')).toxml()
+    camera_rate = os.environ.get('EDGEAI_CAMERA_RATE', '30')
+    try:
+        camera_rate = str(max(5.0, min(30.0, float(camera_rate))))
+    except ValueError:
+        camera_rate = '30'
+    raw_xml = re.sub(r'(<sensor name="rgbd_camera"[^>]*>.*?<update_rate>)[^<]+(</update_rate>)',
+                     rf'\g<1>{camera_rate}\g<2>', raw_xml, count=1, flags=re.S)
     # Diagnostic switches are environment-only so the normal competition
     # configuration remains unchanged.  Removing the sensor from the model
     # also avoids creating its rendering/update thread in Gazebo.
@@ -134,6 +152,18 @@ def setup(context):
             bridge_types.pop('scan', None)
         if 'imu_sensor' in disabled_sensors:
             bridge_types.pop('imu/data_raw', None)
+        bridge_parameters = {'use_sim_time': True}
+        if os.environ.get('EDGEAI_EAGER_POINT_CLOUD', 'false').lower() != 'true' and 'camera/points' in bridge_types:
+            # The depth filter normally projects sampled depth pixels itself.
+            # Subscribe to the costly Gazebo cloud only while a ROS client needs it.
+            ros_type, gz_type = bridge_types.pop('camera/points')
+            cloud_topic = topic('camera/points')
+            cloud_config = world_dir / (entity + '-cloud-bridge.yaml')
+            cloud_config.write_text(yaml.safe_dump([dict(
+                ros_topic_name=cloud_topic, gz_topic_name=cloud_topic,
+                ros_type_name=ros_type, gz_type_name=gz_type,
+                direction='GZ_TO_ROS', lazy=True)]))
+            bridge_parameters['config_file'] = str(cloud_config)
         arguments = [f'{topic(name)}@{ros}[{gz}' for name, (ros, gz) in bridge_types.items()]
         arguments.append(f'{topic("cmd_vel")}@geometry_msgs/msg/Twist]gz.msgs.Twist')
         remaps = [(topic('tf'), '/tf')] if multi else []
@@ -143,7 +173,7 @@ def setup(context):
             remaps.append((gz_pose, topic('truth/poses')))
         actions.append(Node(package='ros_gz_bridge', executable='parameter_bridge', namespace=ns,
                             name='ros_gz_bridge', arguments=arguments, remappings=remaps,
-                            parameters=[{'use_sim_time': True}], output='screen'))
+                            parameters=[bridge_parameters], output='screen'))
         if truth:
             actions.append(ExecuteProcess(cmd=[
                 'python3', '-u', str(share / 'tools/truth_diagnostics.py'), '--ros-args',
@@ -162,11 +192,11 @@ def setup(context):
             if primary_unscoped and multi and count==2:
                 nav_share=Path(get_package_share_directory('edgeai_navigation'))
                 filtered=support.load_yaml(nav_share/'config/fleet_scan_filter.yaml')
+                filtered.pop('localization',None)
                 # One source for the initial relative pose used by filter and localization.
                 filtered['relative_pose']=support.load_yaml(nav_share/'config/cooperative_rescue.yaml')['initial_relative_pose']
                 args=['python3','-u',str(nav_share/'scripts/fleet_scan_filter.py'),'--ros-args','-p','use_sim_time:=true']
                 args.extend(['-r','robot2/odom:=/'+fleet[1]['name']+'/odom'])
-                import yaml
                 filter_file=world_dir/'fleet-filter.yaml'
                 filter_file.write_text(yaml.safe_dump({'fleet_scan_filter':{'ros__parameters':filtered}}))
                 args.extend(['--params-file',str(filter_file)])
@@ -216,5 +246,6 @@ def generate_launch_description():
         DeclareLaunchArgument('truth', default_value='true'),
         DeclareLaunchArgument('navigation_test', default_value='false'),
         DeclareLaunchArgument('map_file', default_value=''),
+        DeclareLaunchArgument('clock_rate', default_value=os.environ.get('EDGEAI_CLOCK_RATE', '100')),
         OpaqueFunction(function=setup),
     ])

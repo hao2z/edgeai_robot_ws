@@ -12,9 +12,16 @@ min_scan_match_ratio: 0.55
 max_data_age_s: 0.5
 navigation_timeout_s: 180.0  # 每次导航的墙钟预算
 navigation_retries: 2
-rescue_repair_rounds: 3  # 导航成功但救援距离不达标：按最新目标重选停车位的上限
+rescue_repair_rounds: 3  # 导航成功但救援距离或朝向不达标：重新停车的重试上限
 radius_m: 0.70
-dwell_s: 10.0  # 两机同时满足半径条件的连续仿真时间
+dwell_s: 10.0  # 两机同时满足距离、朝向和停车条件的连续仿真时间
+yaw_tolerance_rad: 0.25  # 两机均须朝向目标法线反方向；超差清零共同停留并重试导航
+parking_radii_m: [0.50, 0.55, 0.60]  # 两停车点距目标的候选距离；仍受radius_m-position_margin_m约束
 position_margin_m: 0.15  # 停车点距圆边界的余量；覆盖0.10m导航容差并保留净余量
-min_separation_m: 0.65
+min_separation_m: 0.7  # 两停车点间的最小距离；还需通过完整车身分离检查
+parked_peer_clearance_m: 0.02  # 进场路径上的车身与对方停车车身之间的净空
+peer_costmap:
+  enabled: true  # C1定位就绪后，在双方全局和局部代价地图标记对方车身
+  padding_m: 0.02
+  max_age_s: 0.5  # 位姿过期后撤下车身标记，雷达障碍层照常工作
 wall_timeout_s: 600.0  # S1成功后的总墙钟预算

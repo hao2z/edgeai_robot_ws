@@ -36,6 +36,7 @@ public:
       if (!families.empty()) {setFont(QFont(families.first(), 10));}
     }
     auto *layout = new QVBoxLayout(this);
+    layout->addWidget(new QLabel(QString::fromUtf8("机器人 1 控制"), this));
     auto *controls = new QHBoxLayout();
     for (const auto &item : {std::make_pair("自动探索", false), std::make_pair("手动接管", true)}) {
       auto *button = new QPushButton(QString::fromUtf8(item.first), this);
@@ -70,7 +71,7 @@ public:
     view_->setOpenExternalLinks(false);
     view_->setStyleSheet("QTextBrowser {background:#f5f7fa;color:#172536;}");
     view_->setMinimumWidth(300);
-    auto *detailsToggle = new QCheckBox(QString::fromUtf8("数据时序与TF细节"), this);
+    auto *detailsToggle = new QCheckBox(QString::fromUtf8("展开导航、数据时序与 TF 详情"), this);
     details_ = new QTextBrowser(this);
     details_->setOpenExternalLinks(false);
     details_->hide();

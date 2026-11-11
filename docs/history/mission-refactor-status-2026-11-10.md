@@ -1,3 +1,5 @@
+> 历史快照：本文描述当时版本；当前实现见 [项目状态](../project-status.md) 与 [任务流程](../task-workflow.md)。
+
 # 任务行为树重构记录
 
 ## 当前实现：独立任务Action与任务树
@@ -104,7 +106,7 @@ ros2 service call /mission/stop std_srvs/srv/Trigger '{}'
 - 协调器失联后的机器人本地租约停止、强类型ExecuteBehavior接口、跨机让行预约，以及失败后保留AMCL/TF供长时间核验，仍需下一阶段实施。
 - 其他候选模块的路径长度/可见性排序保留；它们不是本次删除的“任务调度打分”。
 
-设计与异常矩阵见 [重构设计](mission-behavior-tree-design.md)。本阶段先验证固定顺序、失败传播、取消、命名空间参考交接及无冗余Shell决策，再继续拆单位行为。
+设计与异常矩阵见 [重构设计](mission-behavior-tree-design-2026-11-10.md)。本阶段先验证固定顺序、失败传播、取消、命名空间参考交接及无冗余Shell决策，再继续拆单位行为。
 
 ### 验证记录
 

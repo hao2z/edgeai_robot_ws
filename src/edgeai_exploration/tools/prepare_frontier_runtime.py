@@ -94,6 +94,8 @@ def prepare(source, output):
 '''
     from prepare_repeat_guard import apply
     apply(output, replace_once)
+    from prepare_frontier_monitor import apply as apply_monitor
+    apply_monitor(output, replace_once)
 
     anchor = 'TEST(FrontierSuppressionCoreTests, NoProgressTimeoutCanceledGoalCreatesSuppressedRegion)'
     replace_once(output, 'test/test_frontier_suppression.cpp', anchor, test + anchor)

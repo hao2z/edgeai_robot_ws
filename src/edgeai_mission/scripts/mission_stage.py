@@ -41,6 +41,10 @@ def run(step, c):
     root=Path(c['project_root']);directory=Path(c['directory'])
     sys.path.insert(0,str(root/'src/edgeai_navigation/scripts'))
     if step=='quiesce':quiesce();return
+    if step in ('supplement_mapping','resume_exploration'):
+        from mapping_supplement import run as mapping_run
+        mapping_run(step,c)
+        return
     if step=='save_map':
         dest=Path(c['map_basename']);dest.parent.mkdir(parents=True,exist_ok=True)
         subprocess.run(['ros2','run','nav2_map_server','map_saver_cli','-f',str(dest),
@@ -53,7 +57,7 @@ def run(step, c):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--step',choices=('quiesce','save_map'),required=True)
+    p.add_argument('--step',choices=('quiesce','save_map','supplement_mapping','resume_exploration'),required=True)
     p.add_argument('--config',type=Path,required=True)
     a=p.parse_args();c=json.loads(a.config.read_text())
     signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(KeyboardInterrupt()))

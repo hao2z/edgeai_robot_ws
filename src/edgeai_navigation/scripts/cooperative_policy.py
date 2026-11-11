@@ -23,7 +23,7 @@ def cell(grid,x,y):
     return grid.data[v*info.width+u]
 
 
-def footprint_clear(grid,pose,footprint,pad=.04):
+def footprint_clear(grid,pose,footprint,pad=.005):
     # Sample the entire padded rectangular envelope, including its boundary.
     xs,ys=zip(*footprint);xmin,xmax=min(xs)-pad,max(xs)+pad;ymin,ymax=min(ys)-pad,max(ys)+pad
     nx=max(1,math.ceil((xmax-xmin)/(grid.info.resolution/2)))
@@ -48,10 +48,35 @@ def separated(a,b,footprint,pad=.04):
     return False
 
 
+def path_clear_of_peer(poses,parked,footprint,margin=.05):
+    """Check the interpolated rectangular sweep, including rotation in place."""
+    if not poses or not all(math.isfinite(v) for p in (*poses,parked) for v in p):return False
+    radius=max(math.hypot(x,y) for x,y in footprint)
+    if not separated(poses[0],parked,footprint,margin/2):return False
+    for a,b in zip(poses,poses[1:]):
+        turn=math.remainder(b[2]-a[2],2*math.pi)
+        travel=math.dist(a[:2],b[:2])+radius*abs(turn)
+        steps=max(1,math.ceil(travel/.04))
+        # Half a sample's maximum corner motion covers the interpolated segment.
+        pad=margin/2+travel/(2*steps)
+        for i in range(steps):
+            t=(i+.5)/steps
+            sample=[a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1]),a[2]+t*turn]
+            if not separated(sample,parked,footprint,pad):return False
+    return separated(poses[-1],parked,footprint,margin/2)
+
+
+def rescue_yaw_error(pose,target):
+    """Match S1's heading: face opposite the current target surface normal."""
+    desired=target['yaw']+math.pi
+    return math.atan2(math.sin(pose[2]-desired),math.cos(pose[2]-desired))
+
+
 def parking_pairs(grid,target,footprint,config):
     if target.get('yaw') is None:raise ValueError('C1 normal not available')
     candidates=[]
-    for radius in (.50,.55,.60):
+    for radius in config.get('parking_radii_m',[.50,.55,.60]):
+        if not math.isfinite(radius) or radius<=0:raise ValueError('Invalid C1 parking radius')
         if radius>config['radius_m']-config['position_margin_m']+1e-6:continue
         for degrees in (0,25,-25,45,-45,65,-65):
             yaw=target['yaw']+math.radians(degrees)
@@ -68,6 +93,12 @@ def parking_pairs(grid,target,footprint,config):
 class JointDwell:
     def __init__(self,radius,duration):
         self.radius,self.duration=radius,duration;self.start=None;self.last=None
+
+    def awaiting_data(self,now,max_gap=.5):
+        """Hold recent confirmed evidence during callback skew; never advance it."""
+        keep=self.last is not None and 0<=now-self.last<=max_gap
+        if not keep:self.start=self.last=None
+        return keep
 
     def update(self,stamp,distances,valid=True):
         if (not valid or len(distances)!=2 or not all(math.isfinite(d) and d<=self.radius for d in distances)

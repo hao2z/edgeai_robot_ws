@@ -12,7 +12,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger, SetBool
 from nav_msgs.msg import OccupancyGrid, Odometry
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -40,12 +40,15 @@ class ObservationScan(Node):
         self.child = None; self.child_log = None; self.holding = None
         self.held_sequence = None; self.hold_wall = None
         self.hold_point = None
+        self.suppressed = False
         self.buffer = Buffer(); self.listener = TransformListener(self.buffer,self)
         self.hold = self.create_client(Trigger,'/navigation_authority/observation_hold')
         self.resume = self.create_client(SetBool,'/navigation_authority/set_manual')
         self.output = Path(self.p['output_directory']) if self.p['output_directory'] else Path('/tmp/edgeai-observation-scan')
         self.output.mkdir(parents=True,exist_ok=True)
         self.create_subscription(String,'/navigation_authority/state',self.authority,
+                                 QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.create_subscription(Bool,'/mission/observation_suppressed',self.suppress,
                                  QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_subscription(OccupancyGrid,'/local_costmap/costmap',self.costmap,10)
         self.create_subscription(Odometry,'/odom',self.motion,qos_profile_sensor_data)
@@ -54,6 +57,10 @@ class ObservationScan(Node):
 
     def authority(self,msg):
         self.state=json.loads(msg.data);self.state_at=time.monotonic()
+    def suppress(self,msg):
+        if msg.data and not self.suppressed:
+            self.suppressed=True
+            self.get_logger().info('OBSERVATION_SUPPRESSED: 必需目标已定位，不再启动观测转圈')
     def costmap(self,msg):
         self.grid=msg
     def motion(self,msg):
@@ -124,6 +131,8 @@ class ObservationScan(Node):
             if self.state.get('phase')!='IDLE' or not self.state.get('explorer_paused'):
                 if time.monotonic()-self.hold_wall>8:self.release_if_owned()
                 return
+            if self.suppressed:
+                self.release_if_owned();return
             point=self.candidate()  # recheck geometry after acquiring control
             if point is None:
                 self.retry_after=now+5;self.release_if_owned();return
@@ -135,7 +144,7 @@ class ObservationScan(Node):
                 stdout=self.child_log,stderr=subprocess.STDOUT)
             self.get_logger().info(f'OBSERVATION_STARTED: 开阔位置{point}执行第{index}次360度观察')
             return
-        if (not self.p['enabled'] or len(self.history)>=self.p['max_scans'] or now<self.retry_after
+        if (self.suppressed or not self.p['enabled'] or len(self.history)>=self.p['max_scans'] or now<self.retry_after
                 or now-self.last_scan<self.p['min_scan_interval_s'] or time.monotonic()-self.state_at>2):return
         if (self.state.get('mode')!='AUTO' or self.state.get('phase')!='IDLE'
                 or self.state.get('completed_goals',0)<self.p['minimum_completed_goals']):return

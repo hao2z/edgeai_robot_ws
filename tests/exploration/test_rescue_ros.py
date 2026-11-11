@@ -376,7 +376,7 @@ class RescueROS(unittest.TestCase):
                     self.assertEqual([a['candidate']['strategy'] for a in node.search_attempts],
                                      ['suspected_panel','suspected_panel'])
                     self.assertEqual(fake.arrival_policies,['heading','heading','rescue'])
-                    self.assertFalse(node.search_active)
+                    self.assertFalse(any(p.topic_name=='/target_search/active' for p in node.publishers))
                 finally:
                     node.finish();node.destroy_node()
         finally:

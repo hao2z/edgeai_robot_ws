@@ -25,6 +25,9 @@ if ! grep -q '^ros-jazzy-navigation2[[:space:]]*=' "$cache/env/pixi.toml"; then
 else
     "$pixi" install --manifest-path "$cache/env/pixi.toml" --locked
 fi
+if ! grep -q '^ros-jazzy-topic-tools[[:space:]]*=' "$cache/env/pixi.toml"; then
+    "$pixi" add --manifest-path "$cache/env/pixi.toml" ros-jazzy-topic-tools
+fi
 if [[ ! -d "$cache/upstream/.git" ]]; then
     git clone https://github.com/robo-friends/m-explore-ros2.git "$cache/upstream"
 fi

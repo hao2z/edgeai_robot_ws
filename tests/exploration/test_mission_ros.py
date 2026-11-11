@@ -10,8 +10,8 @@ import unittest
 import rclpy
 from ament_index_python.packages import get_package_prefix
 from geometry_msgs.msg import TransformStamped
-from nav_msgs.msg import Odometry
-from std_msgs.msg import Empty
+from nav_msgs.msg import Odometry, OccupancyGrid
+from std_msgs.msg import Empty, Int32, String
 from std_srvs.srv import Trigger
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from tf2_ros import StaticTransformBroadcaster
@@ -92,9 +92,16 @@ raise SystemExit(0 if okay or c.get('false_zero_exit') else 1)
 
 
 class MissionROS(unittest.TestCase):
-    def exercise(self, *, cooperative=False, rescue=True, fail=None, block=None, timeout=5., complete=True, dead_process=False, omit_result=None, false_zero_exit=False, owned_navigation=False, scenario=None, kill_task_server=False):
+    def exercise(self, *, cooperative=False, rescue=True, fail=None, block=None, timeout=5., complete=True, dead_process=False, omit_result=None, false_zero_exit=False, owned_navigation=False, scenario=None, kill_task_server=False, known_cells=100, grow_map=False, publish_map=True):
         rclpy.init();peer=rclpy.create_node('mission_test_peer')
         publisher=peer.create_publisher(Empty,'/exploration_complete',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        maps=peer.create_publisher(OccupancyGrid,'/map',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        monitor=peer.create_publisher(Int32,'/explore/available_frontiers',1)
+        observation_test=scenario=='observation_target_gate'
+        if observation_test:
+            targets=peer.create_publisher(String,'/targets/estimates',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            estimates=[dict(id=1,type='normal',x=1.,y=1.,yaw=0.),dict(id=2,type='cooperative',x=2.,y=2.,yaw=None)]
+            observation_started=None
         pub1=peer.create_publisher(Odometry,'/odom',10);pub2=peer.create_publisher(Odometry,'/robot2/odom',10)
         broadcaster=StaticTransformBroadcaster(peer)
         tf=TransformStamped();tf.header.frame_id='map';tf.child_frame_id='odom';tf.transform.rotation.w=1.
@@ -110,12 +117,17 @@ class MissionROS(unittest.TestCase):
                 d=Path(temporary);worker=d/'worker.py';worker.write_text(WORKER)
                 units=d/'units.py';units.write_text(UNITS)
                 c=dict(directory=str(d),project_root=str(ROOT),cooperative=cooperative,rescue_enabled=rescue,
-                    observation=False,backend='frontier',initial_relative_pose=[0.,-.6,0.],
+                    observation=observation_test,backend='frontier',initial_relative_pose=[0.,-.6,0.],
+                    required_targets=[dict(id=1,type='normal')]+([dict(id=2,type='cooperative')] if cooperative else []),
                     worker_script=str(worker),tree=str(ROOT/'src/edgeai_mission/config/integrated.xml'),
                     unit_worker_script=str(units),task_trees={t:str(ROOT/'src/edgeai_mission/config/tasks'/f'{t}.xml') for t in ('find_targets','s1','c1')},
-                    exploration_timeout_s=timeout,wall_timeout_s=25.,fail_step=fail,block_step=block,
+                    exploration_timeout_s=timeout,wall_timeout_s=25.,fail_step=fail,
+                    block_step=block or ('supplement_mapping' if scenario in ('frontier_during_supplement','monitor_missing') else None),
+                    mapping=dict(min_known_area_m2=18.,supplement_attempts=3,reposition_timeout_s=60.),
                     omit_result=omit_result,false_zero_exit=false_zero_exit,owned_navigation=owned_navigation,scenario=scenario)
                 config=d/'config.json';config.write_text(json.dumps(c));(d/'ready').touch()
+                if observation_test:
+                    (d/'observation-scan-runtime.yaml').write_text('observation_scan:\n  ros__parameters:\n    use_sim_time: false\n')
                 identity=Path('/proc/self/stat').read_text().split()[21]
                 (d/'mission-processes.json').write_text(json.dumps(dict(test_peer=dict(
                     pid=99999999 if dead_process else os.getpid(),start_ticks=identity))))
@@ -128,7 +140,27 @@ class MissionROS(unittest.TestCase):
                     odom=Odometry();odom.header.stamp=peer.get_clock().now().to_msg();odom.pose.pose.orientation.w=1.
                     pub1.publish(odom);pub2.publish(odom)
                     events=(d/'mission-events.jsonl').read_text() if (d/'mission-events.jsonl').exists() else ''
-                    if complete and 'EXPLORING' in events and (not cooperative or (d/'mission-reference.json').exists()):publisher.publish(Empty())
+                    called=(d/'calls.jsonl').read_text() if (d/'calls.jsonl').exists() else ''
+                    if scenario!='monitor_missing':
+                        monitor.publish(Int32(data=1 if scenario=='frontier_during_supplement' and 'supplement_mapping' in called else 0))
+                    if publish_map:
+                        count=100 if grow_map and 'step":"supplement_mapping"' in events else known_cells
+                        grid=OccupancyGrid();grid.header.frame_id='map';grid.info.width=grid.info.height=10
+                        grid.info.resolution=.5;grid.info.origin.orientation.w=1.
+                        grid.data=([0,100,50]*34)[:count]+[-1]*(100-count)
+                        maps.publish(grid)
+                    can_complete=True
+                    if observation_test:
+                        obs_log=d/'observation.log'
+                        text=obs_log.read_text() if obs_log.exists() else ''
+                        if observation_started is None and 'OBSERVATION_READY' in text:observation_started=time.monotonic()
+                        if observation_started is not None:
+                            if time.monotonic()-observation_started<.4:
+                                self.assertNotIn('OBSERVATION_SUPPRESSED_TARGETS_LOCATED',events)
+                            else:estimates[1]['yaw']=0.
+                            targets.publish(String(data=json.dumps(dict(frame_id='map',targets=estimates))))
+                        can_complete='OBSERVATION_SUPPRESSED:' in text
+                    if complete and can_complete and 'EXPLORING' in events and (not cooperative or (d/'mission-reference.json').exists()):publisher.publish(Empty())
                     if block and (d/'calls.jsonl').exists() and block in (d/'calls.jsonl').read_text() and cancel_sent is None:
                         if kill_task_server:
                             record=json.loads((d/f'task-{block}-worker-process.json').read_text())
@@ -164,6 +196,59 @@ class MissionROS(unittest.TestCase):
     def test_fixed_single_robot_order(self):
         result,calls,_=self.exercise()
         self.assertTrue(result['success']);self.assertEqual(calls,['quiesce','find_targets','save_map','s1'])
+
+    def test_suppresses_observation_only_after_both_targets_are_localized(self):
+        result,calls,events=self.exercise(cooperative=True,scenario='observation_target_gate',timeout=15.)
+        self.assertTrue(result['success'],result)
+        phases=[e['phase'] for e in events]
+        gate='OBSERVATION_SUPPRESSED_TARGETS_LOCATED'
+        self.assertEqual(phases.count(gate),1)
+        self.assertLess(phases.index(gate),phases.index('FRONTIERS_EXHAUSTED'))
+        self.assertEqual(calls,['quiesce','find_targets','save_map','s1','c1'])
+
+    def test_mapping_at_18_m2_accepts_free_and_occupied_cells(self):
+        result,calls,events=self.exercise(known_cells=72)
+        self.assertTrue(result['success']);self.assertNotIn('supplement_mapping',calls)
+        area=next(e for e in events if e['phase']=='MAPPING_AREA_READY')
+        self.assertEqual(area['known_area_m2'],18.)
+
+    def test_insufficient_mapping_repositions_and_rechecks_before_tasks(self):
+        result,calls,events=self.exercise(known_cells=20,grow_map=True,timeout=20.)
+        self.assertTrue(result['success'])
+        self.assertEqual(calls,['quiesce','supplement_mapping','resume_exploration','quiesce','find_targets','save_map','s1'])
+        self.assertTrue(any(e['phase']=='MAPPING_AREA_INSUFFICIENT' for e in events))
+
+    def test_mapping_below_threshold_exhausts_without_dispatching_rescue(self):
+        result,calls,_=self.exercise(known_cells=71,timeout=20.)
+        self.assertFalse(result['success']);self.assertIn('Mapping incomplete',result['reason'])
+        self.assertEqual(calls.count('supplement_mapping'),3)
+        self.assertNotIn('find_targets',calls);self.assertNotIn('save_map',calls);self.assertNotIn('s1',calls)
+
+    def test_missing_map_cannot_complete_mapping(self):
+        result,calls,_=self.exercise(publish_map=False,timeout=20.)
+        self.assertFalse(result['success']);self.assertNotIn('save_map',calls)
+
+    def test_failed_supplement_does_not_reacquire_control_or_resume(self):
+        result,calls,_=self.exercise(known_cells=20,fail='supplement_mapping',timeout=20.)
+        self.assertFalse(result['success'])
+        self.assertEqual(calls,['quiesce','supplement_mapping'])
+
+    def test_tree_halts_supplement_on_new_frontier_before_resuming(self):
+        result,calls,events=self.exercise(known_cells=20,grow_map=True,timeout=20.,scenario='frontier_during_supplement')
+        self.assertTrue(result['success'])
+        self.assertEqual(calls,['quiesce','supplement_mapping','resume_exploration','quiesce','find_targets','save_map','s1'])
+        self.assertTrue(any(e['phase']=='MAPPING_FRONTIER_AVAILABLE' for e in events))
+        self.assertFalse(any(e['phase']=='STAGE_FINISHED' and e.get('step')=='supplement_mapping' for e in events))
+
+    def test_missing_monitor_halts_supplement_without_auto_resume(self):
+        result,calls,_=self.exercise(known_cells=20,timeout=20.,scenario='monitor_missing')
+        self.assertFalse(result['success']);self.assertIn('Frontier monitoring unavailable',result['reason'])
+        self.assertEqual(calls,['quiesce','supplement_mapping'])
+
+    def test_cancel_supplement_does_not_resume_exploration(self):
+        result,calls,_=self.exercise(known_cells=20,block='supplement_mapping',timeout=20.)
+        self.assertFalse(result['success']);self.assertEqual(result['reason'],'Mission canceled')
+        self.assertEqual(calls,['quiesce','supplement_mapping'])
 
     def test_cooperative_follows_s1_without_task_scoring(self):
         result,calls,events=self.exercise(cooperative=True)

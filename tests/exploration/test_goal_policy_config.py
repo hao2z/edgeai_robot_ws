@@ -10,7 +10,7 @@ from itertools import product
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
-from goal_policy import configure_controllers
+from goal_policy import configure_controllers,CONTROLLERS
 from navigation_config import load_navigation
 
 
@@ -28,6 +28,8 @@ class GoalPolicyConfig(unittest.TestCase):
             self.assertTrue(control[name]['use_path_orientations'])
             self.assertFalse(control[name]['allow_reversing'])
         self.assertFalse(control['FollowPath']['rotate_to_goal_heading'])
+        self.assertEqual(CONTROLLERS['frontier'],'FollowPath')
+        self.assertEqual(len(control['controller_plugins']),3)
         self.assertEqual(config['local_costmap']['local_costmap']['ros__parameters']['global_frame'],
                          config['global_costmap']['global_costmap']['ros__parameters']['global_frame'])
         self.assertEqual(config['behavior_server']['ros__parameters']['local_frame'],'map')

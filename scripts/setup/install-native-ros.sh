@@ -31,7 +31,7 @@ PY
 fi
 apt-get update
 apt-get install -y --no-install-recommends \
-    ros-jazzy-desktop ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
+    ros-jazzy-desktop ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-topic-tools \
     ros-jazzy-nav2-minimal-tb3-sim ros-jazzy-ros-gz ros-jazzy-slam-toolbox \
     ros-jazzy-cv-bridge ros-jazzy-rmw-cyclonedds-cpp ros-jazzy-xacro ros-jazzy-joint-state-publisher \
     python3-colcon-common-extensions python3-rosdep python3-yaml python3-opencv \

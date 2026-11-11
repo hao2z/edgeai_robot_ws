@@ -1,5 +1,5 @@
 <library path="xy_lattice_planner">
   <class type="edgeai_navigation::XYLatticePlanner" base_class_type="nav2_core::GlobalPlanner">
-    <description>Use NavFn only to suggest arrival heading; Smac Lattice validates and generates every returned path.</description>
+    <description>Jazzy bounded multi-heading selection: compare native Smac Lattice paths; preserve successful heading on replans.</description>
   </class>
 </library>

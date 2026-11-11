@@ -9,15 +9,30 @@ POLICIES = {
     'position': ('general_goal_checker', 'GridBased'),
     'heading': ('heading_goal_checker', 'GridBasedHeading'),
     'rescue': ('rescue_goal_checker', 'GridBasedHeading'),
+    # Input yaw is a tie/order preference among feasible terminal headings.
+    'frontier': ('general_goal_checker', 'GridBased'),
 }
-CONTROLLERS = {'position':'FollowPath','heading':'FollowPathHeading','rescue':'FollowPathRescue'}
+CONTROLLERS = {'position':'FollowPath','heading':'FollowPathHeading','rescue':'FollowPathRescue',
+               'frontier':'FollowPath'}
+
+# Task/request adapters own policy selection; the authority only arbitrates execution.
+ACTION_ROUTES = (
+    ('exploration/navigate_to_pose', 'AUTO', 'frontier'),
+    ('navigate_to_pose', 'MANUAL', 'position'),
+    ('navigation/heading_to_pose', 'MANUAL', 'heading'),
+    ('navigation/rescue_to_pose', 'MANUAL', 'rescue'),
+)
 
 
 def configure_controllers(config):
     """Separate XY-only tracking from yaw alignment using the same base tuning."""
     control=config['controller_server']['ros__parameters']
     base=deepcopy(control['FollowPath'])
+    configured=set()
     for policy,(checker,_) in POLICIES.items():
+        controller=CONTROLLERS[policy]
+        if controller in configured:continue
+        configured.add(controller)
         follow=deepcopy(base)
         primary=follow.get('primary_controller',follow['plugin'])
         if primary=='dwb_core::DWBLocalPlanner':

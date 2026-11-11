@@ -17,6 +17,11 @@ class LatticeProfile(unittest.TestCase):
         self.assertEqual(planners['GridBased']['plugin'],'edgeai_navigation::XYLatticePlanner')
         self.assertNotIn('heading_search_time',planners['GridBased'])
         self.assertEqual(planners['GridBasedHeading']['plugin'],'nav2_smac_planner::SmacPlannerLattice')
+        self.assertEqual(planners['GridBased']['goal_heading_mode'],'ALL_DIRECTION')
+        self.assertEqual(planners['GridBased']['goal_heading_count'],4)
+        self.assertNotIn('goal_heading_count',planners['GridBasedHeading'])
+        self.assertEqual(planners['GridBased']['heading_search_budget_s'],2.)
+        self.assertNotIn('goal_heading_mode',planners['GridBasedHeading'])
         metadata=json.loads(Path(planners['GridBased']['lattice_filepath']).read_text())['lattice_metadata']
         self.assertEqual(metadata['motion_model'],'diff')
         self.assertEqual(metadata['grid_resolution'],.05)

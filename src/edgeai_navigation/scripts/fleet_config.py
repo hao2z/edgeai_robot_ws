@@ -1,5 +1,22 @@
 """Derive a robot's runtime config without duplicating controller tuning."""
 from copy import deepcopy
+import json
+
+
+def configure_peer_costmaps(config, namespace, settings):
+    """Subscribe only to the other robot's C1 pose, before inflation."""
+    if not settings.get('enabled',True):return
+    global_map=config['global_costmap']['global_costmap']['ros__parameters']
+    xs,ys=zip(*json.loads(global_map['footprint']))
+    for key in ('global_costmap','local_costmap'):
+        costmap=config[key][key]['ros__parameters']
+        plugins=costmap['plugins']
+        if 'peer_footprint' not in plugins:
+            plugins.insert(plugins.index('inflation_layer'), 'peer_footprint')
+        costmap['peer_footprint']=dict(plugin='edgeai_navigation::PeerFootprintLayer',
+            pose_topic='/cooperative_rescue/peer_pose/'+('robot1' if namespace else 'robot2'),
+            bounds=[min(xs),max(xs),min(ys),max(ys)],padding_m=float(settings.get('padding_m',.03)),
+            max_age_s=float(settings.get('max_age_s',.5)))
 
 
 def namespaced_config(config, namespace):

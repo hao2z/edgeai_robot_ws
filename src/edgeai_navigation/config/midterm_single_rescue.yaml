@@ -5,7 +5,7 @@ goal_source: detected_target
 target_id: 1
 search_enabled: true  # 未定位S1时，在已知空闲区域补充相机观察。
 alignment_enabled: true  # 优先由Shim完成位姿；导航成功后独立检查，不达标才进行末端修正。
-alignment_step_m: 0.03  # 每步最多前进3cm；仅朝缩小位置误差的方向前进。
+alignment_step_m: 0.06  # 每步最多前进6cm；仅朝缩小位置误差的方向前进。
 alignment_speed_mps: 0.03
 alignment_max_actions: 20  # 旋转和前进合计上限。
 alignment_timeout_s: 60.0  # 共用任务总预算，修正阶段另限60仿真秒。
@@ -24,8 +24,8 @@ search_suspects:
   max_age_s: 8.0  # 实时候选年龄；建图保留的多帧候选不受此上限淘汰。
   min_confidence: 0.5
   known_target_radius_m: 0.30
-search_timeout_s: 180.0  # 搜寻仿真时间上限；同时受总墙钟预算限制。
-search_max_positions: 10
+search_timeout_s: 240.0  # 搜寻仿真时间上限；同时受总墙钟预算限制。
+search_max_positions: 12
 search_spacing_m: 1.0
 search_clearance_m: 0.40  # 启动器至少采用车身外接半径加0.05米。
 search_navigation_timeout_s: 16.0  # 单次观察位姿导航的仿真秒。

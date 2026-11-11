@@ -341,13 +341,13 @@ class CooperativeROS(unittest.TestCase):
                 def shift_target(ns):
                     if len(fleet.calls)==2:
                         (Path(directory)/'targets.json').write_text(json.dumps(dict(frame_id='map',stamp_ns=123,
-                            targets=[dict(id=2,x=4.,y=3.,yaw=math.pi/2,confirmed=True,last_observed_ns=123)])))
+                            targets=[dict(id=2,x=3.,y=4.,yaw=math.pi/2,confirmed=True,last_observed_ns=123)])))
                 fleet.on_arrival=shift_target
                 try:
                     with patch.object(node,'handover',handover),patch.object(node,'wait_navigation_active'),patch.object(node,'laser_match',return_value=1.):
                         result=node.execute()
                     self.assertTrue(result['success']);self.assertEqual(len(fleet.calls),4)
-                    self.assertTrue(all(math.dist(p[:2],[4.,3.])<=.7 for p in fleet.poses.values()))
+                    self.assertTrue(all(math.dist(p[:2],[3.,4.])<=.7 for p in fleet.poses.values()))
                     events=[json.loads(line) for line in (Path(directory)/'cooperative-events.jsonl').read_text().splitlines()]
                     self.assertTrue(any(e['phase']=='TARGET_UPDATED' for e in events))
                     self.assertEqual(sum(e['phase']=='RESCUE_REPAIR' for e in events),1)
