@@ -30,8 +30,23 @@ class LatticeProfile(unittest.TestCase):
         local=config['local_costmap']['local_costmap']['ros__parameters']
         glob=config['global_costmap']['global_costmap']['ros__parameters']
         self.assertEqual(local['footprint'],glob['footprint'])
-        self.assertGreater(glob['footprint_padding'],local['footprint_padding'])
+        self.assertEqual(glob['footprint_padding'],local['footprint_padding'])
+        self.assertEqual(glob['footprint_padding'],.01)
         self.assertFalse(config['controller_server']['ros__parameters']['FollowPath']['use_path_orientations'])
+
+    def test_peer_and_parking_checks_derive_runtime_padding(self):
+        from edgeai_nav.fleet_config import configure_peer_costmaps,parking_geometry
+        config=load_navigation(ROOT/'src/edgeai_navigation/config')
+        grid=config['global_costmap']['global_costmap']['ros__parameters']
+        grid['footprint_padding']=.017
+        configure_peer_costmaps(config,'',{})
+        settings={'parked_peer_clearance_m':.02}
+        parking_geometry(config,settings)
+        self.assertEqual(settings['footprint_padding_m'],.017)
+        self.assertAlmostEqual(settings['parking_peer_clearance_m'],.034+2**-.5*.05)
+        for name in ('local_costmap','global_costmap'):
+            layer=config[name][name]['ros__parameters']['peer_footprint']
+            self.assertEqual(layer['padding_m'],.017)
 
     def test_resolution_mismatch_fails_before_startup(self):
         resource=ROOT/'src/edgeai_navigation/config'
@@ -45,11 +60,17 @@ class LatticeProfile(unittest.TestCase):
         for enabled in (True,False):
             config=load_navigation(resource,'rpp')
             control=config['controller_server']['ros__parameters']
-            control['FollowPath']['allow_reversing']=enabled
             control['heading_goal_checker']=dict(control['general_goal_checker'])
             control['rescue_goal_checker']=dict(control['general_goal_checker'])
             configure_lattice(config,resource,get_package_share_directory('nav2_smac_planner'))
-            configure_controllers(config)
+            import tempfile,shutil,yaml
+            with tempfile.TemporaryDirectory() as directory:
+                profiles=Path(directory)/'tasks'
+                shutil.copytree(resource/'navigation_tasks',profiles)
+                for name in ('position','frontier'):
+                    p=profiles/(name+'.yaml');settings=yaml.safe_load(p.read_text())
+                    settings['allow_reverse']=enabled;p.write_text(yaml.safe_dump(settings))
+                configure_controllers(config,profiles)
             planners=config['planner_server']['ros__parameters']
             self.assertEqual(planners['GridBased']['allow_reverse_expansion'],enabled)
             self.assertEqual(control['FollowPath']['allow_reversing'],enabled)

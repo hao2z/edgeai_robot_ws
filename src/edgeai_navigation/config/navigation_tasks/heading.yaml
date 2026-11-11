@@ -1,0 +1,6 @@
+# 指定朝向的普通导航点。
+require_heading: true
+allow_reverse: false
+controller: {}
+planner: {}
+goal_checker: {}

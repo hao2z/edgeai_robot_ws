@@ -20,6 +20,26 @@ from test_landmark_anchors import graph,node
 
 
 class LandmarkAnchorsROS(unittest.TestCase):
+    def test_reobservation_can_replace_biased_history_and_attach_again(self):
+        rclpy.init();target=Targets()
+        try:
+            stamp=target.get_clock().now().nanoseconds
+            for i in range(3):
+                target.accept(1,stamp+i*10_000_000,
+                              dict(kind='map',point=np.array([1.,2.,.15]),rotation=np.eye(3)),{})
+            for i in range(3):
+                target.accept(1,stamp+(i+3)*10_000_000,
+                              dict(kind='map',point=np.array([1.6,2.,.15]),rotation=np.eye(3),
+                                   pending_anchor=True,robot_map=np.array([1.,2.])),{})
+                if i<2:self.assertAlmostEqual(target.records[1][-1][1]['point'][0],1.)
+            self.assertEqual(len(target.records[1]),3)
+            self.assertAlmostEqual(target.records[1][-1][1]['point'][0],1.6)
+            self.assertEqual(target.records[1][-1][0],stamp+50_000_000)
+            target.graph_received(String(data=json.dumps(graph([node(5,[0.,0.,0.],[1.,2.,0.],stamp)]))))
+            self.assertTrue(all(item[1]['node_id']==5 for item in target.records[1]))
+            np.testing.assert_allclose(target.graph.project(target.records[1][-1][1])[0],[1.6,2.,.15])
+        finally:target.destroy_node();rclpy.shutdown()
+
     def test_delayed_observation_preserves_latest_timestamp(self):
         rclpy.init();target=Targets()
         try:
@@ -35,6 +55,9 @@ class LandmarkAnchorsROS(unittest.TestCase):
     def setup_target(self,target):
         info=CameraInfo(width=640,height=480);info.k=[600.,0.,320.,0.,600.,240.,0.,0.,1.];info.d=[0.]*5
         target.camera(info)
+        correction=TransformStamped();correction.header.frame_id='map';correction.child_frame_id='odom'
+        correction.transform.rotation.w=1.;correction.transform.translation.x=-1.;correction.transform.translation.y=2.
+        target.buffer.set_transform_static(correction,'test')
         for child,x,y in [('base_footprint',2.,0.),('camera_optical_frame',3.,.5)]:
             tf=TransformStamped();tf.header.frame_id='odom';tf.child_frame_id=child
             tf.transform.rotation.w=1.;tf.transform.translation.x=x;tf.transform.translation.y=y
@@ -48,13 +71,23 @@ class LandmarkAnchorsROS(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 target.output=Path(tmp);self.setup_target(target)
-                self.assertFalse(target.records);self.assertEqual(len(target.pending),3)
+                target.publish()
+                initial=json.loads((target.output/'targets.json').read_text())['targets'][0]
+                self.assertTrue(initial['confirmed'])
+                self.assertEqual(initial['coordinate_source'],'map_observation')
+                self.assertEqual(initial['pending_anchor_observations'],3)
+                self.assertEqual(initial['anchor_nodes'],[])
+                np.testing.assert_allclose(initial['position'],[2.,2.5,1.],atol=.03)
                 stamp=target.get_clock().now().nanoseconds
                 a=node(5,[2.,0.,0.],[1.,2.,0.],stamp)
                 target.graph_received(String(data=json.dumps(graph([a]))));target.publish()
                 result=json.loads((target.output/'targets.json').read_text())['targets'][0]
                 np.testing.assert_allclose(result['position'],[2.,2.5,1.],atol=.03)
                 self.assertEqual(result['anchor_nodes'],[5]);self.assertTrue(result['confirmed'])
+                self.assertEqual(result['observations'],3)
+                self.assertEqual(result['pending_anchor_observations'],0)
+                self.assertEqual(target.stats['position_accepted'],3)
+                self.assertEqual(target.stats['anchor_attached'],3)
                 # A current robot TF jump must not move historical landmarks.
                 tf=TransformStamped();tf.header.frame_id='map';tf.child_frame_id='odom'
                 tf.transform.rotation.w=1.;tf.transform.translation.x=20.

@@ -14,7 +14,7 @@ if [[ $EDGEAI_ROS_BACKEND == native ]]; then
         colcon --log-base "$cache/mppi-log" build --base-paths "$source_path" \
         --build-base "$cache/mppi-fixed-build" --install-base "$cache/mppi-install" \
         --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
-        "-DEDGEAI_BACKPORT_TEST_SOURCE=$PROJECT_ROOT/tests/exploration/mppi_backport_check.cpp"
+        "-DEDGEAI_BACKPORT_TEST_SOURCE=$PROJECT_ROOT/tests/manual/mppi/mppi_backport_check.cpp"
     bash "$PROJECT_ROOT/scripts/ros/with-ros-env.sh" bash -c \
         'source "$1/local_setup.bash"; exec "$2"' -- "$cache/mppi-install" \
         "$cache/mppi-fixed-build/nav2_mppi_controller/edgeai_mppi_backport_check"
@@ -46,7 +46,7 @@ python3 "$PROJECT_ROOT/scripts/setup/prepare-mppi-backport.py" \
     "$cache/nav2-primitives/nav2_mppi_controller" "$source_path"
 build_path="$cache/mppi-fixed-build"
 if [[ ${EDGEAI_MPPI_SCORE_PROBE_BUILD:-false} == true ]]; then
-    python3 "$PROJECT_ROOT/tests/exploration/prepare-mppi-score-probe.py" \
+    python3 "$PROJECT_ROOT/tests/manual/mppi/prepare-mppi-score-probe.py" \
         "$source_path" "$cache/mppi-probe-source"
     source_path="$cache/mppi-probe-source"
     build_path="$cache/mppi-probe-build"
@@ -55,7 +55,7 @@ pixi run --manifest-path "$EDGEAI_ENV_MANIFEST" env ROS_DISTRO=jazzy MAKEFLAGS='
     colcon --log-base "$cache/mppi-log" build --base-paths "$source_path" \
     --build-base "$build_path" --install-base "$cache/mppi-install" \
     --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
-    "-DEDGEAI_BACKPORT_TEST_SOURCE=$PROJECT_ROOT/tests/exploration/mppi_backport_check.cpp" \
+    "-DEDGEAI_BACKPORT_TEST_SOURCE=$PROJECT_ROOT/tests/manual/mppi/mppi_backport_check.cpp" \
     "-DCMAKE_PREFIX_PATH=$deps/install" "-DCMAKE_CXX_FLAGS=-I$deps/install/include"
 pixi run --manifest-path "$EDGEAI_ENV_MANIFEST" "$build_path/nav2_mppi_controller/edgeai_mppi_backport_check"
 printf '%s\n' "$revision" > "$cache/mppi-install/edgeai-mppi-revision"

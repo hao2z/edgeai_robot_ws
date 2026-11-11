@@ -41,7 +41,7 @@ class Client:
 class TaskUnits(unittest.TestCase):
     def timed_joint(self):
         from rclpy.time import Time
-        from cooperative_policy import JointDwell
+        from edgeai_tasks.cooperative_policy import JointDwell
         u=self.joint();n=u.node;clock=[1.]
         n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25)
         n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
@@ -88,9 +88,9 @@ class TaskUnits(unittest.TestCase):
 
     def test_c1_heading_failure_resets_dwell_and_keeps_healthy_robot(self):
         from rclpy.time import Time
-        from cooperative_policy import JointDwell
+        from edgeai_tasks.cooperative_policy import JointDwell
         u=self.joint();n=u.node
-        n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25)
+        n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25,alignment_enabled=False)
         n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
         n.now=lambda:2.;n.refresh_target=lambda:False;n.localized=lambda ns:True
         stamp=Time(nanoseconds=2_000_000_000).to_msg()
@@ -103,14 +103,52 @@ class TaskUnits(unittest.TestCase):
         with self.assertRaisesRegex(UnitFailure,'heading outside tolerance'):u.check_joint()
         self.assertEqual(u.arrived,{''});self.assertFalse(u.failed_parking)
         self.assertIsNone(u.dwell.start);self.assertFalse(u.condition_complete)
-        self.assertAlmostEqual(abs(u.last['yaw_errors_rad'][1]),math.pi)
-        poses['robot2/base_footprint'][2]=math.pi;u.last_sample=None
+        self.assertAlmostEqual(abs(u.last['yaw_errors_rad'][1]),math.pi/2)
+        poses['robot2/base_footprint'][2]=-math.pi/2;u.last_sample=None
         self.assertFalse(u.check_joint()['complete']);self.assertEqual(u.dwell.start,2.)
+
+    def test_c1_heading_error_requests_local_correction(self):
+        u,n,sample,_=self.timed_joint()
+        n.tf_pose=lambda *a:[.5,0.,0.]
+        result=sample(1.)
+        self.assertTrue(result['needs_correction'])
+        self.assertFalse(result['complete'])
+        self.assertIsNone(u.dwell.start)
+
+    def test_c1_corrects_one_robot_with_shared_s1_geometry(self):
+        u,n,sample,_=self.timed_joint()
+        u.alignment_started=None
+        n.tf_pose=lambda *a:[.5,0.,0.]
+        sample(1.)
+        n.states={ns:dict(phase='IDLE') for ns in ('','robot2')}
+        n.spin={ns:object() for ns in ('','robot2')}
+        n.wait=lambda predicate,*a: self.assertTrue(predicate())
+        actions=[]
+        n.action=lambda client,request,*a:(actions.append(request) or NS(status=4,result=NS(error_code=0)))
+        result=u.correct_joint()
+        self.assertEqual(result['kind'],'spin')
+        self.assertEqual(len(actions),1)
+        self.assertAlmostEqual(abs(actions[0].target_yaw),.6)
+        self.assertIsNone(u.dwell.start)
+
+    def test_c1_outside_circle_uses_bounded_forward_step(self):
+        u,n,sample,_=self.timed_joint();u.alignment_started=None
+        n.tf_pose=lambda *a:[.75,0.,math.pi]
+        sample(1.)
+        n.states={ns:dict(phase='IDLE') for ns in ('','robot2')}
+        n.advance={ns:object() for ns in ('','robot2')}
+        n.wait=lambda predicate,*a:self.assertTrue(predicate())
+        actions=[]
+        n.action=lambda client,request,*a:(actions.append(request) or NS(status=4,result=NS(error_code=0)))
+        result=u.correct_joint()
+        self.assertEqual(result['kind'],'forward')
+        self.assertAlmostEqual(actions[0].target.x,.03)
+        self.assertAlmostEqual(actions[0].speed,.03)
 
     def test_stop_request_is_handled_before_entering_ros_spin(self):
         import rclpy
-        from cooperative_rescue import CooperativeRescue
-        from normal_rescue import Rescue
+        from edgeai_tasks.cooperative_rescue import CooperativeRescue
+        from edgeai_tasks.normal_rescue import Rescue
         for algorithm in (CooperativeRescue,Rescue):
             node=algorithm.__new__(algorithm)
             node.deadline=float('inf');node.stop_requested=True;node.closing=False
@@ -133,7 +171,7 @@ class TaskUnits(unittest.TestCase):
         return u
 
     def test_first_task_checks_both_types_and_reports_missing_c1(self):
-        from rescue_policy import select_goal
+        from edgeai_tasks.rescue_policy import select_goal
         u=self.joint();u.task='find_targets';u.target_index=0
         u.required_targets=[dict(id=1,type='normal'),dict(id=2,type='cooperative')]
         u.node.deadline=time.monotonic()+30
@@ -241,29 +279,77 @@ class TaskUnits(unittest.TestCase):
         self.assertEqual(closed,['shutdown','destroy'])
 
     def test_start_occupied_without_path_cannot_pass_peer_check(self):
-        from cooperative_rescue import CooperativeRescue
+        from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
         n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
         n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped()
         events=[];n.event=lambda name,**kw:events.append(name)
         n.action=lambda *a:NS(status=6,result=NS(error_code=ComputePathToPose.Result.START_OCCUPIED))
+        n.record_occupied_costmap=lambda *a:None
         pair=([.5,0.,0.],[0.,.5,0.])
-        with patch('cooperative_rescue.parking_pairs',return_value=[pair]):
-            with self.assertRaisesRegex(RuntimeError,'No verified C1 parking pair'):n.select_parking_pair()
-        self.assertEqual(events.count('PLAN_REJECTED'),2)
+        with patch('edgeai_tasks.cooperative_rescue.parking_pairs',return_value=[pair]):
+            with self.assertRaisesRegex(RuntimeError,'preplan start occupied'):n.select_parking_pair()
+        self.assertEqual(events.count('PLAN_REJECTED'),1)
+        self.assertEqual(set(n.preplan_blocked),{''})
+
+    def test_c1_extra_settle_time_survives_dwell_reset(self):
+        u=self.joint();u.node.c['settle_margin_s']=1.
+        u.reset_dwell()
+        self.assertEqual(u.dwell.duration,u.node.c['dwell_s']+1.)
+        self.assertFalse(u.dwell.update(0.,[.5,.5]))
+        for i in range(1,int(u.dwell.duration*10)):
+            self.assertFalse(u.dwell.update(i/10,[.5,.5]))
+        self.assertTrue(u.dwell.update(u.dwell.duration,[.5,.5]))
+
+    def preplan_recovery_node(self):
+        import yaml
+        from edgeai_tasks.cooperative_rescue import CooperativeRescue
+        n=CooperativeRescue.__new__(CooperativeRescue)
+        n.c=yaml.safe_load((ROOT/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
+        n.preplan_blocked={'robot2':{}};n.preplan_recovery_history={}
+        n.spin={'robot2':'spin'};n.backup={'robot2':'backup'}
+        n.escape={'robot2':'escape'};n.advance={'robot2':'forward'}
+        n.event=lambda *a,**kw:None
+        return n
+
+    def test_preplan_recovery_turns_and_retains_tried_motion_history(self):
+        n=self.preplan_recovery_node();pose=[0.,0.,0.];calls=[]
+        n.tf_pose=lambda *a:list(pose)
+        def action(client,request,timeout):
+            calls.append((client,request.target_yaw));pose[2]+=request.target_yaw
+            return NS(status=4,result=NS(error_code=0))
+        n.action=action;n.recover_preplan_start()
+        self.assertFalse(n.preplan_blocked)
+        n.preplan_blocked={'robot2':{}};n.recover_preplan_start()
+        self.assertEqual(calls,[('spin',.35),('spin',-.35)])
+        self.assertEqual(n.preplan_recovery_history['robot2'],[0,1])
+
+    def test_preplan_recovery_success_without_motion_is_not_accepted(self):
+        n=self.preplan_recovery_node();n.tf_pose=lambda *a:[0.,0.,0.]
+        n.action=lambda *a:NS(status=4,result=NS(error_code=0))
+        from edgeai_tasks.cooperative_rescue import PreplanStartOccupied
+        with self.assertRaises(PreplanStartOccupied):n.recover_preplan_start()
+        self.assertEqual(len(n.preplan_recovery_history['robot2']),len(n.c['preplan_recovery']['motions']))
+
+    def test_preplan_recovery_rejects_wrong_direction_configuration(self):
+        from edgeai_tasks.cooperative_rescue import validate_preplan_recovery
+        settings=self.preplan_recovery_node().c['preplan_recovery']
+        validate_preplan_recovery(settings)
+        settings['motions']=[dict(kind='backup',distance_m=.05)]
+        with self.assertRaises(ValueError):validate_preplan_recovery(settings)
 
     def test_reselect_parking_excludes_failed_goal_history(self):
-        from cooperative_rescue import CooperativeRescue
+        from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
         n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
         n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped();n.event=lambda *a,**kw:None
         n.action=lambda *a:NS(status=4,result=NS(error_code=0,path=NS(header=NS(frame_id='map'),poses=[PoseStamped()])))
         failed=([.5,0.,0.],[0.,.5,0.]);next_pair=([.6,0.,0.],[0.,.5,0.])
-        with patch('cooperative_rescue.parking_pairs',return_value=[failed,next_pair]),patch('cooperative_rescue.path_clear_of_peer',return_value=True):
+        with patch('edgeai_tasks.cooperative_rescue.parking_pairs',return_value=[failed,next_pair]),patch('edgeai_tasks.cooperative_rescue.path_clear_of_peer',return_value=True):
             self.assertNotEqual(n.select_parking_pair(excluded={'':[failed[0]]})[0],failed[0])
 
     def test_rejects_native_path_that_crosses_parked_peer(self):
-        from cooperative_rescue import CooperativeRescue
+        from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
         n.map=None;n.target={'id':2};n.c={};n.plan={'':'root','robot2':'second'}
         n.footprint=[(.15,.15),(-.15,.15),(-.15,-.15),(.15,-.15)]
@@ -280,7 +366,7 @@ class TaskUnits(unittest.TestCase):
             return NS(status=4,result=NS(error_code=0,path=NS(header=NS(frame_id='map'),poses=waypoints)))
         n.action=plan
         blocked=([-1.,0.,0.],[0.,0.,0.]);clear=([-1.,1.,0.],[0.,0.,0.])
-        with patch('cooperative_rescue.parking_pairs',return_value=[blocked,clear]):
+        with patch('edgeai_tasks.cooperative_rescue.parking_pairs',return_value=[blocked,clear]):
             self.assertCountEqual(n.select_parking_pair(),clear)
         self.assertTrue(any(name=='PLAN_BLOCKED_BY_PARKED_PEER' and row['robot']=='robot1' for name,row in events))
 

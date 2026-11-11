@@ -1,7 +1,7 @@
 # 中期检查仿真场景
 
 > 2026-11-10 更新：默认任务入口现为双机器人流程：robot1 探索/S1 → 共享地图与双 AMCL → C1。
-> 单机对照使用 `Start-Autonomous-Exploration.ps1 -SingleRobot`。
+> 单机对照使用 `Start-Autonomous-Mission.ps1 -SingleRobot`。
 > 当前结果、预算限制与入口见 [项目状态](../project-status.md)。
 
 场景依据 `KTH_EdgeAI_Midterm_Check_Task_Description.docx` 第 3 节和 Figure 1，使用文档原始的 0–5 米坐标。中期场景与原 `competition_rooms.sdf` 开发场景分开。
@@ -11,9 +11,8 @@
 Windows 从仓库根目录运行，默认在中期场景启动双机器人任务，先由 robot1 自主探索并完成 S1，再执行 C1：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1
-# 同一自主任务入口，可额外设置探索预算等参数。
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1
+# 可额外设置探索预算等参数：-Duration 3600。
 ```
 
 robot1 世界起点为 (0.45, 0.55)、朝北，保持根命名空间；robot2 等待并使用独立前缀。检测使用 0.16 m 尺寸和 `1:normal,2:cooperative` 映射。探索自然完成后，第一任务先检查S1/C1并对缺失目标执行有预算的补充搜寻，全部必需目标定位后才进入S1救援。超时或进程异常不算探索完成。S1 完成后保存最终地图和目标、停止 SLAM，并启动共享地图与两机 AMCL，随后执行 C1。单机对照加 `-SingleRobot`，仅完成 S1。
@@ -25,7 +24,7 @@ S1 参数在 `src/edgeai_navigation/config/midterm_single_rescue.yaml`，C1 参�
 仅查看双机环境、不开启任务时显式使用：
 
 ```powershell
-.\Start-Simulation.ps1 -SimulationOnly -Robots 2
+.\Start-Simulation.ps1 -Robots 2
 ```
 
 仅仿真模式需要独立 SLAM 时再添加 `-SLAM`。

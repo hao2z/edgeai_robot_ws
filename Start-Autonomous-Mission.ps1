@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateRange(30, 3600)][int]$Duration = 3600,
     [string]$Distro = 'Ubuntu-24.04',
     [ValidateSet('simple', 'competition', 'midterm')][string]$Arena = 'midterm',
@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 if ($LASTEXITCODE -ne 0) { throw "ROS backend '$Backend' failed its runtime check. Build this backend with scripts/setup/prepare-open-source.sh before starting a test." }
 if ($CheckOnly) { return }
 if (-not $InCurrentWindow) {
-    & (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro
+    & (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro
     $consoleArgs = @('-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass',
         '-File', "`"$PSCommandPath`"", '-InCurrentWindow', '-Duration', $Duration, '-Distro', "`"$Distro`"", '-Arena', $Arena, '-DomainId', $DomainId)
     $consoleArgs += @('-Controller', $Controller, '-Backend', $Backend)
@@ -86,7 +86,7 @@ if ($NavigationTest) {
     Write-Host 'The robot moves autonomously in Gazebo. Ctrl+C stops this session.'
 }
 # Also cover callers invoking the worker directly.
-& (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro -ProcessesOnly
+& (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro -ProcessesOnly
 $tag = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $runName = "$tag-domain$DomainId"
 if ($TurnTest) { $runName += '-turn' }

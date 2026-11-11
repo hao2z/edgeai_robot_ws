@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <string>
+#include <stdexcept>
 #include <nlohmann/json.hpp>
 #include <slam_toolbox/slam_toolbox_async.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -50,7 +51,9 @@ public:
   explicit AnchoredSlam(const rclcpp::NodeOptions & options):AsynchronousSlamToolbox(options)
   {
     graph_pub_=create_publisher<std_msgs::msg::String>("slam_toolbox/anchor_graph",rclcpp::QoS(1).transient_local());
-    timer_=create_wall_timer(std::chrono::seconds(1),[this] {
+    const double period=declare_parameter<double>("anchor_graph_publish_period_s",.5);
+    if(!std::isfinite(period) || period<=0.) {throw std::invalid_argument("Invalid anchor graph publish period");}
+    timer_=create_wall_timer(std::chrono::duration<double>(period),[this] {
       if(get_current_state().id()==lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE && smapper_) {
         publish(snapshot(finalized_));
       }

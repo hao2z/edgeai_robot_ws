@@ -5,7 +5,7 @@ import sys
 import unittest
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from frustum_search import Camera,FrustumPlanner,line_clear,settings
+from edgeai_search.frustum_search import Camera,FrustumPlanner,line_clear,settings
 
 FORWARD=(0,0,1,-1,0,0,0,-1,0)  # optical +Z = base +X
 

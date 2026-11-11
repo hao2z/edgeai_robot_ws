@@ -9,7 +9,7 @@ MPPI 是尚未通过起步方向验收的实验配置，须显式使用 `-Contro
 直接 WSL 入口用 `EDGEAI_CONTROLLER=mppi` 选择实验配置，默认 `dwb`。
 
 ```powershell
-.\Start-Autonomous-Exploration.ps1 -Controller mppi -Duration 300
+.\Start-Autonomous-Mission.ps1 -Controller mppi -Duration 300
 ```
 
 控制器参数在 `src/edgeai_navigation/config/mppi_controller.yaml`。

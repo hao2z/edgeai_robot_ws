@@ -1,0 +1,10 @@
+# C1救援导航；allow_reverse联动原生Lattice与RPP，不影响S1。
+# 本次先保留前进默认；需要倒车时改为true。
+require_heading: true
+allow_reverse: true
+# 示例：controller: {desired_linear_vel: 0.25, reverse_velocity_limit: 0.10}
+# 示例：planner: {rotation_penalty: 3.0}
+# 示例：goal_checker: {xy_goal_tolerance: 0.08, yaw_goal_tolerance: 0.20}
+controller: {}
+planner: {}
+goal_checker: {}

@@ -1,29 +1,21 @@
-﻿param(
+# Pure Gazebo/optional SLAM entry; never schedules rescue tasks.
+param(
     [ValidateSet('VcXsrv', 'WSLg')][string]$DisplayServer = 'WSLg',
     [ValidateRange(1, 4)][int]$Robots = 1,
     [ValidateSet('simple', 'midterm')][string]$Arena = 'midterm',
-    [switch]$SimulationOnly,
     [switch]$SLAM,
     [string]$Distro = 'Ubuntu-24.04',
     [switch]$InCurrentWindow
 )
 $ErrorActionPreference = 'Stop'
 if ($Arena -eq 'midterm' -and $Robots -gt 2) { throw 'Midterm supports one or two robots.' }
-if (-not $SimulationOnly) {
-    if ($Robots -ne 1) { throw 'Robots selects the simulation-only robot count. The default midterm mission already uses two robots; use Start-Autonomous-Exploration.ps1 -SingleRobot for a single-robot mission.' }
-    if ($DisplayServer -ne 'WSLg') { throw 'Autonomous startup uses WSLg. Use -SimulationOnly for VcXsrv.' }
-    $missionArgs = @{ Arena = $Arena; Distro = $Distro }
-    if ($InCurrentWindow) { $missionArgs.InCurrentWindow = $true }
-    & (Join-Path $PSScriptRoot 'Start-Autonomous-Exploration.ps1') @missionArgs
-    return
-}
 . (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
 $linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 if (-not $InCurrentWindow) {
-    & (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro
+    & (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro
     $consoleArgs = @('-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass',
-        '-File', "`"$PSCommandPath`"", '-InCurrentWindow', '-SimulationOnly',
+        '-File', "`"$PSCommandPath`"", '-InCurrentWindow',
         '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Arena', $Arena, '-Distro', "`"$Distro`"")
     if ($SLAM) { $consoleArgs += '-SLAM' }
     if ($windowsTerminal) {
@@ -36,7 +28,7 @@ if (-not $InCurrentWindow) {
     return
 }
 $Host.UI.RawUI.WindowTitle = "EdgeAI Simulation | $Distro | $Robots robot(s)"
-& (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro -ProcessesOnly
+& (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro -ProcessesOnly
 $tag = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $sessionDirectory = Join-Path $PSScriptRoot "tests/results/runs/$tag-simulation"
 [void][IO.Directory]::CreateDirectory($sessionDirectory)

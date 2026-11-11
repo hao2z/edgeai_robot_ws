@@ -28,7 +28,6 @@ class UnitFailure(RuntimeError):
 class Units:
     def __init__(self,task,c):
         self.task,self.c=task,c;self.directory=Path(c['directory']);root=Path(c['project_root'])
-        sys.path.insert(0,str(root/'src/edgeai_navigation/scripts'))
         self.pending={};self.arrived=set();self.selected=None;self.success=False;self.last=None
         self.failure_kind='initial';self.navigation_after=0.;self.last_sample=None;self.last_event=-100.
         self.alignment_started=None;self.last_target_poll=0.;self.last_nav_goal=None
@@ -36,28 +35,28 @@ class Units:
         self.failed_parking={}
         self.has_control=False
         if task!='c1':
-            from normal_rescue import Rescue
-            from rescue_policy import validate_config,Dwell
+            from edgeai_tasks.normal_rescue import Rescue
+            from edgeai_tasks.rescue_policy import validate_config,Dwell
             settings=yaml.safe_load((self.directory/'rescue-config.yaml').read_text());validate_config(settings)
             self.node=Rescue(settings,self.directory);self.dwell=Dwell(settings);self.goal=None
             self.target_index=0;self.required_targets=c.get('required_targets',[])
         else:
-            from cooperative_rescue import CooperativeRescue
-            from cooperative_policy import JointDwell
+            from edgeai_tasks.cooperative_rescue import CooperativeRescue
+            from edgeai_tasks.cooperative_policy import JointDwell
             settings=yaml.safe_load((root/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
             self.node=CooperativeRescue(self.directory,settings)
             self.node.static_test=bool(c.get('cooperative_static_test',False))
             self.node.seed_enabled=False;self.node.handover_reference=str(self.directory/'mission-reference.json')
-            self.dwell=JointDwell(settings['radius_m'],settings['dwell_s'])
+            self.dwell=JointDwell(settings['radius_m'],settings['dwell_s']+settings.get('settle_margin_s',0.))
 
     def reset_dwell(self):
         self.condition_complete=False
         if self.task!='c1':
-            from rescue_policy import Dwell
+            from edgeai_tasks.rescue_policy import Dwell
             self.dwell=Dwell(self.node.c)
         else:
-            from cooperative_policy import JointDwell
-            self.dwell=JointDwell(self.node.c['radius_m'],self.node.c['dwell_s'])
+            from edgeai_tasks.cooperative_policy import JointDwell
+            self.dwell=JointDwell(self.node.c['radius_m'],self.node.c['dwell_s']+self.node.c.get('settle_margin_s',0.))
         self.last_sample=None
 
     def joint_target(self, registry):
@@ -68,13 +67,14 @@ class Units:
             raise UnitFailure('C1 target not localized; camera search required')
         return target
 
-    def cancel_navigation(self,all_robots=False,shutting_down=False):
+    def cancel_navigation(self,all_robots=False,shutting_down=False,robots=None):
         n=self.node
         for ns,entry in list(self.pending.items()):
+            if robots is not None and ns not in robots:continue
             handle,future,goal=entry
             if future.done() and future.result().status==5 and not shutting_down:
                 raise UnitFailure('Navigation canceled externally','fatal')
-            if self.task=='c1' and not all_robots and not future.done():continue
+            if self.task=='c1' and not all_robots and robots is None and not future.done():continue
             if not future.done():
                 canceled=handle.cancel_goal_async()
                 n.wait(lambda:canceled.done() and future.done(),8.)
@@ -176,7 +176,7 @@ class Units:
             self.goal.update(updated);stamp,last=n.fresh_measurement(now,self.goal);self.last=last
             self.last['sample_time_s']=stamp
             if stamp<self.navigation_after:return dict(complete=False,needs_correction=False)
-            from rescue_alignment import correction
+            from edgeai_tasks.rescue_alignment import correction
             correction_needed=n.c.get('alignment_enabled',False) and correction(n.c,self.goal,last) is not None
             done=self.dwell.update(stamp,last['rescue_distance_m'],last['yaw_error_rad'],last['linear_mps'],last['angular_rps'],position_limit=last['rescue_position_limit_m'])
             self.condition_complete=done
@@ -191,11 +191,11 @@ class Units:
         self.condition_complete=False
         if not retained:self.last_sample=None
         elapsed=self.dwell.last-self.dwell.start if self.dwell.start is not None else 0.
-        return dict(complete=False,state='WAITING_DATA',reason=reason,
+        return dict(complete=False,needs_correction=False,state='WAITING_DATA',reason=reason,
                     dwell_retained=retained,dwell_s=elapsed,**details)
 
     def check_joint(self):
-        from cooperative_policy import rescue_yaw_error
+        from edgeai_tasks.cooperative_policy import rescue_yaw_error
         n=self.node;self.check_owner();now=n.now()
         if n.refresh_target():self.reset_dwell()
         try:
@@ -206,7 +206,7 @@ class Units:
             if not 0<=age<=n.c['max_data_age_s'] or stamp/1e9<self.navigation_after:
                 return self.wait_joint_data(now,'Pose sample ahead of clock' if age<0 else 'Pose sample stale or before navigation completion',
                                             sample_time_s=stamp/1e9,sample_age_s=age)
-            if stamp==self.last_sample:return dict(complete=False)
+            if stamp==self.last_sample:return dict(complete=False,needs_correction=False)
             distances=[];yaw_errors=[];poses=[];valid=n.target_ready
             for ns in ('','robot2'):
                 p=n.tf_pose('robot2/base_footprint' if ns else 'base_footprint',Time(nanoseconds=stamp))
@@ -224,12 +224,15 @@ class Units:
             if now-self.last_event>=1.:
                 self.last_event=now;n.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,in_range=[d<=n.c['radius_m'] for d in distances],dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
             if valid and (any(d>n.c['radius_m'] for d in distances) or not all(heading_ok)):
+                if n.c.get('alignment_enabled',True):
+                    return dict(complete=False,needs_correction=True,distances_m=distances,
+                                yaw_errors_rad=yaw_errors,heading_ok=heading_ok)
                 self.arrived={ns for ns,d,h in zip(('','robot2'),distances,heading_ok) if d<=n.c['radius_m'] and h}
                 for ns,pose,distance in zip(('','robot2'),self.selected,distances):
                     if distance>n.c['radius_m']:self.failed_parking.setdefault(ns,[]).append(pose)
                 reason='Outside rescue circle; reselect parking' if any(d>n.c['radius_m'] for d in distances) else 'Rescue heading outside tolerance; retry parking alignment'
                 raise UnitFailure(reason,'outside' if all(heading_ok) else 'heading')
-            return dict(complete=done,distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,radius_m=n.c['radius_m'],valid=valid,
+            return dict(complete=done,needs_correction=False,distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,radius_m=n.c['radius_m'],valid=valid,
                         dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
         except (TransformException,ValueError) as error:
             return self.wait_joint_data(now,str(error))
@@ -237,6 +240,10 @@ class Units:
     def check_owner(self):
         try:self.node.check_owner()
         except RuntimeError as error:raise UnitFailure(str(error),'fatal') from error
+
+    def correct_joint(self):
+        from edgeai_tasks.rescue_alignment import adjust_joint
+        return adjust_joint(self)
 
     def invoke(self,op):
         if self.fatal_reason:raise UnitFailure(self.fatal_reason,'fatal')
@@ -291,7 +298,8 @@ class Units:
             except (TransformException,ValueError) as error:raise UnitFailure(str(error),self.failure_kind) from error
         elif op=='check_rescue':return self.check_single() if self.task!='c1' else self.check_joint()
         elif op=='correct':
-            from rescue_alignment import adjust
+            if self.task=='c1':return self.correct_joint()
+            from edgeai_tasks.rescue_alignment import adjust
             now=n.get_clock().now().nanoseconds/1e9
             if self.alignment_started is None:self.alignment_started=now
             if now-self.alignment_started>n.c.get('alignment_timeout_s',60.) or len(n.alignment_attempts)>=n.c.get('alignment_max_actions',20):raise UnitFailure('Correction budget exhausted')
@@ -303,11 +311,17 @@ class Units:
             n.target=self.joint_target(n.targets)
             n.target_observation_floor=n.targets.get('stamp_ns',0);n.refresh_target()
             if not n.target_ready:raise UnitFailure('Target estimate unavailable')
-            nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text());n.footprint=json.loads(nav['local_costmap']['local_costmap']['ros__parameters']['footprint'])
+            from edgeai_nav.fleet_config import parking_geometry
+            nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text());n.footprint=parking_geometry(nav,n.c)
+        elif op=='recover_preplan_start':
+            if self.failure_kind!='start_occupied':raise UnitFailure('Not a preplan start occupancy failure',self.failure_kind)
+            self.cancel_navigation(robots=set(n.preplan_blocked))
+            n.recover_preplan_start()
         elif op in ('select_parking','select_parking_locked'):
             locked={ns:self.selected[i] for i,ns in enumerate(('','robot2')) if self.selected and (ns in self.pending or ns in self.arrived)} if op.endswith('locked') else {}
             self.selected=n.select_parking_pair(locked=locked,excluded=self.failed_parking,
                                                settled=self.arrived.intersection(locked))
+            self.alignment_started=None
         elif op=='record_success':self.record_success()
         else:raise UnitFailure('Unregistered unit: '+op)
         return {}
@@ -320,7 +334,7 @@ class Units:
             result=dict(success=True,required_targets=self.required_targets,search_attempts=n.search_attempts)
         elif self.task=='s1':
             result=dict(success=True,goal=self.goal,measurement=self.last,dwell_s=n.c['dwell_s'],target_id=self.goal['target_id'],task_state='completed',judge='estimated map pose',navigation_attempts=n.navigation_attempts,alignment_attempts=n.alignment_attempts)
-        else:result=dict(success=True,target_id=n.target['id'],distances_m=self.last['distances_m'],yaw_errors_rad=self.last['yaw_errors_rad'],dwell_s=n.c['dwell_s'],goals=self.selected)
+        else:result=dict(success=True,target_id=n.target['id'],distances_m=self.last['distances_m'],yaw_errors_rad=self.last['yaw_errors_rad'],dwell_s=n.c['dwell_s'],goals=self.selected,alignment_attempts=getattr(self,'joint_corrections',[]))
         if self.task in ('s1','c1'):
             from rescue_success_log import success_evidence
             if self.task=='s1':
@@ -370,7 +384,7 @@ def main():
         stopping[0]=True;units.node.stop_requested=True
     signal.signal(signal.SIGTERM,request_stop)
     common=['cancel_navigation','cancel_all_navigation','dispatch_navigation','poll_navigation','check_rescue','record_success']
-    operations=common+(['acquire','select_target','search_target','next_target','check_targets'] if a.task=='find_targets' else ['acquire','select_target','search_target','select_approach','inside_rescue_region','correct'] if a.task=='s1' else ['handover','wait_navigation_ready','localize','prepare_target','select_parking','select_parking_locked'])
+    operations=common+(['acquire','select_target','search_target','next_target','check_targets'] if a.task=='find_targets' else ['acquire','select_target','search_target','select_approach','inside_rescue_region','correct'] if a.task=='s1' else ['handover','wait_navigation_ready','localize','prepare_target','select_parking','select_parking_locked','recover_preplan_start','correct'])
     def handle(op,response):
         try:data=dict(success=True,**units.invoke(op))
         except Exception as error:data=dict(success=False,reason=str(error),category=getattr(error,'category','failure'))

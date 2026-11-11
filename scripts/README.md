@@ -15,7 +15,7 @@ derive workspace-relative resource paths from their own location. PID files
 and display authentication live in `../runtime/`.
 
 Current mission and evidence: [project status](../docs/project-status.md).
-`Start-Autonomous-Exploration.ps1` is the full midterm mission;
+`Start-Autonomous-Mission.ps1` is the full midterm mission;
 `Start-Navigation-Test.ps1` isolates navigation with simulation truth;
 `Start-Cooperative-Test.ps1` is a cooperative truth diagnostic, not an autonomous
 mapping acceptance run. Keep these distinct when interpreting success results.
@@ -30,6 +30,6 @@ Windows entry points load `ros/windows-host-tools.ps1` to resolve WSL,
 Windows PowerShell and Windows Terminal without relying on the terminal's PATH.
 Test-history retention runs with Ubuntu's `python3`; Windows Python is not
 required for the launch workflow. No system-wide PATH changes are made.
-`Start-Autonomous-Exploration.ps1` delegates test execution and retention to
+`Start-Autonomous-Mission.ps1` delegates test execution and retention to
 the same managed Linux entry used directly in WSL. It supplies a session path
 and Windows monitoring/capture helpers; no history scan blocks startup.

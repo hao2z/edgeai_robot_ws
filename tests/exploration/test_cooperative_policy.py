@@ -8,7 +8,7 @@ import yaml
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
-from cooperative_policy import compose, relative, JointDwell, parking_pairs, rescue_yaw_error, path_clear_of_peer
+from edgeai_tasks.cooperative_policy import compose, relative, JointDwell, parking_pairs, rescue_yaw_error, path_clear_of_peer
 from fleet_config import namespaced_config
 from goal_policy import managed_trees
 
@@ -20,10 +20,19 @@ class CooperativePolicy(unittest.TestCase):
         self.assertTrue(path_clear_of_peer([(-2,1,0),(2,1,0)],(0,0,0),body))
         self.assertFalse(path_clear_of_peer([(0,0,-math.pi/4),(0,0,math.pi/4)],(.76,0,0),body))
 
-    def test_rescue_heading_uses_surface_normal_and_wraps(self):
-        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi],dict(yaw=0.)),0.)
-        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi+.3],dict(yaw=0.)),.3)
-        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi/2],dict(yaw=math.pi/2)),0.)
+    def test_rescue_heading_uses_target_coordinates_and_wraps(self):
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi],dict(x=-1.,y=0.,yaw=1.)),0.)
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi+.3],dict(x=-1.,y=0.)),.3)
+        self.assertAlmostEqual(rescue_yaw_error([0,0,-math.pi/2],dict(x=0.,y=-1.)),0.)
+
+    def test_diagonal_parking_heading_faces_target_before_collision_checks(self):
+        from types import SimpleNamespace as NS
+        grid=NS(data=[0]*10000,info=NS(width=100,height=100,resolution=.05,origin=NS(position=NS(x=-2.,y=-2.),orientation=NS(x=0.,y=0.,z=0.,w=1.))))
+        target=dict(x=0.,y=0.,yaw=0.)
+        body=[(-.3125,-.165),(.1125,-.165),(.1125,.165),(-.3125,.165)]
+        pairs=parking_pairs(grid,target,body,dict(radius_m=.7,position_margin_m=.15,min_separation_m=.7))
+        for pair in pairs:
+            for pose in pair:self.assertAlmostEqual(rescue_yaw_error(pose,target),0.)
 
     def test_configured_wider_parking_pair_retains_rescue_margin(self):
         info=Obj(resolution=.05,width=120,height=120,origin=Obj(position=Obj(x=0.,y=0.),orientation=Obj(x=0.,y=0.,z=0.,w=1.)))

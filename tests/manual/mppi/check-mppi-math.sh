@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cache=${EDGEAI_NAV_CACHE:-$HOME/.cache/edgeai-open-source}
 out="$cache/mppi-math-check"
 mkdir -p "$out"
@@ -11,7 +11,7 @@ for compiler in /usr/bin/g++ "$cache/env/.pixi/envs/default/bin/c++"; do
         [[ $mode == scalar-fast ]] || flags+=(-DXTENSOR_USE_XSIMD -DXTENSOR_ENABLE_XSIMD)
         label=system
         [[ $compiler == /usr/bin/g++ ]] || label=conda
-        "$compiler" "${flags[@]}" "$root/tests/exploration/mppi_math_check.cpp" -o "$out/$label-$mode"
+        "$compiler" "${flags[@]}" "$root/tests/manual/mppi/mppi_math_check.cpp" -o "$out/$label-$mode"
         printf '%s %s: ' "$label" "$mode"
         "$out/$label-$mode" || true
     done

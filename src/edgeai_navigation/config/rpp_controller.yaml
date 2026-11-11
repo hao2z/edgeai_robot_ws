@@ -47,7 +47,7 @@ FollowPath:
   regulated_linear_scaling_min_speed: 0.05
   # Shim统一处理转向，避免RPP重复处理最终朝向。
   use_rotate_to_heading: false
-  # 普通点+Lattice允许倒车；朝向/救援点运行时强制关闭。
+  # 公共默认；各用途的倒车许可在navigation_tasks/*.yaml的allow_reverse独立配置。
   allow_reversing: true
   rotate_to_heading_min_angle: 0.785
   stateful: true

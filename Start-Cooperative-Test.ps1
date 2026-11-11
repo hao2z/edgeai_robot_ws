@@ -13,7 +13,7 @@ if (-not $ParamsFile) {
     $ParamsFile = Join-Path $previous 'nav2-runtime.yaml'
 }
 if (-not (Test-Path -LiteralPath $ParamsFile)) { throw "Missing runtime config: $ParamsFile" }
-& (Join-Path $PSScriptRoot 'Close-ROS-Terminals.ps1') -KeepProcessId $PID -Distro $Distro
+& (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro
 $directory = Join-Path $PSScriptRoot ('tests/results/runs/' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-cooperative-truth-test')
 [void][IO.Directory]::CreateDirectory($directory)
 Copy-Item -LiteralPath $ParamsFile -Destination (Join-Path $directory 'params-source.yaml')

@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from search_log import search_text
+from edgeai_tasks.search_log import search_text
 
 
 class SearchLog(unittest.TestCase):

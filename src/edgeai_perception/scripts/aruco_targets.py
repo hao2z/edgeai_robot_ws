@@ -28,13 +28,15 @@ class Targets(Node):
         super().__init__('aruco_targets',**kwargs)
         defaults = dict(image_topic='/camera/image', camera_info_topic='/camera/camera_info',
                         optical_frame='camera_optical_frame', dictionary='DICT_4X4_50',
-                        marker_size_m=.20, processing_hz=15.0, max_image_age_s=.5,
-                        min_marker_side_px=12.0, max_reprojection_error_px=2.5,
+                        marker_size_m=.20, processing_hz=30.0, max_image_age_s=.5,
+                        min_marker_side_px=6.0, max_reprojection_error_px=2.5,
                         min_distance_m=.15, max_distance_m=5.0, confirmation_observations=3,
                         fusion_window_s=20.0, max_observations_per_id=20,
+                        reobservation_window_s=1.0,
                         outlier_distance_m=.30, stale_after_s=10.0, output_directory='',
                         target_types='', min_marker_distance_rate=.02,
-                        map_anchoring='slam_graph',anchor_max_distance_m=1.0)
+                        map_anchoring='slam_graph',anchor_max_distance_m=3.0,
+                        anchor_processing_hz=5.0,target_publish_hz=5.0)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.p = {k: self.get_parameter(k).value for k in defaults}
@@ -51,13 +53,17 @@ class Targets(Node):
         self.stats = Counter()
         self.processing_ms = deque(maxlen=200)
         self.decoded_ids = set()
+        self.localization_waits=Counter();self.localization_notices={}
         self.stats_started = self.get_clock().now().nanoseconds
-        self.records = {}
+        self.records = {};self.reobservations={}
         if self.p['map_anchoring'] not in ('slam_graph','map'):raise ValueError('Invalid map_anchoring')
         if not np.isfinite(self.p['anchor_max_distance_m']) or self.p['anchor_max_distance_m']<=0:
             raise ValueError('anchor_max_distance_m must be positive and finite')
+        for name in ('anchor_processing_hz','target_publish_hz','reobservation_window_s'):
+            if not np.isfinite(self.p[name]) or self.p[name]<=0:
+                raise ValueError(name+' must be positive and finite')
         self.mapping=self.p['map_anchoring']=='slam_graph';self.frozen=False;self.finalizing=False
-        self.graph=AnchorGraph(max_distance=self.p['anchor_max_distance_m']);self.pending=deque(maxlen=100)
+        self.graph=AnchorGraph(max_distance=self.p['anchor_max_distance_m'])
         self.last_anchor_audit=None
         self.target_types = {}
         for item in str(self.p['target_types']).split(','):
@@ -82,7 +88,8 @@ class Targets(Node):
         self.finalize_client=self.create_client(Trigger,'/slam_toolbox/finalize_anchors',callback_group=self.finalize_group)
         self.finalize_service=self.create_service(Trigger,'targets/finalize_map',self.finalize_map,callback_group=self.finalize_group)
         self.create_timer(1/self.p['processing_hz'], self.process)
-        self.create_timer(1.0, self.publish)
+        self.create_timer(1/self.p['anchor_processing_hz'], self.update_anchors)
+        self.create_timer(1/self.p['target_publish_hz'], self.publish)
         self.create_timer(5.0, self.publish_diagnostics)
         self.get_logger().info('TARGET_SEARCH_READY: ArUco探测已启用；仅使用图像、内参和TF，不控制导航')
 
@@ -93,18 +100,29 @@ class Targets(Node):
 
     def update_graph(self,data):
         if self.graph.update(data):
-            self.records.clear();self.confirmed.clear();self.pending.clear()
+            self.records.clear();self.confirmed.clear();self.reobservations.clear()
             self.get_logger().warning('TARGET_MAP_RESET: SLAM图已更换，清除旧图目标')
-        self.drain_pending()
+        self.update_anchors()
 
-    def drain_pending(self):
-        waiting=deque(maxlen=100);now=self.get_clock().now().nanoseconds
-        for key,stamp,point,rotation,robot,row in self.pending:
-            if not 0<=now-stamp<=5e9:continue
-            try:binding=self.graph.bind(stamp,point,rotation,robot)
-            except ValueError:waiting.append((key,stamp,point,rotation,robot,row));continue
-            self.accept(key,stamp,binding,row)
-        self.pending=waiting
+    def localization_wait(self,key,reason,stamp,**details):
+        label=f'{key}:{reason}';self.localization_waits[label]+=1
+        now=time.monotonic()
+        if now-self.localization_notices.get(label,-100)<5.:return
+        self.localization_notices[label]=now
+        row=dict(id=int(key),reason=reason,stamp_ns=stamp,**details)
+        self.get_logger().info('TARGET_LOCALIZATION_WAIT: '+json.dumps(row))
+
+    def update_anchors(self):
+        if not self.mapping:return
+        for history in self.records.values():
+            for index,(stamp,binding) in enumerate(history):
+                if not binding.get('pending_anchor'):continue
+                try:
+                    anchored=self.graph.bind(stamp,binding['point'],binding['rotation'],
+                                             binding['robot_map'],frame='map')
+                except ValueError:continue
+                history[index]=(stamp,anchored)
+                self.stats['anchor_attached']+=1
 
     def accept(self,key,stamp,binding,row):
         point,_=self.graph.project(binding)
@@ -116,11 +134,28 @@ class Targets(Node):
         if len(history)>=self.p['confirmation_observations']:
             center=np.median([self.graph.project(h[1])[0] for h in history],axis=0)
             if np.linalg.norm(point-center)>self.p['outlier_distance_m']:
-                self.stats['position_outlier']+=1;self.warn(f'TARGET_OUTLIER: ID={key} 观测偏离历史，拒绝融合');return
-        first=not history
+                self.stats['position_outlier']+=1
+                candidates=self.reobservations.setdefault(key,deque(maxlen=self.p['confirmation_observations']))
+                if candidates and stamp<=candidates[-1][0]:return
+                cutoff=stamp-self.p['reobservation_window_s']*1e9
+                while candidates and candidates[0][0]<cutoff:candidates.popleft()
+                if candidates:
+                    candidate_center=np.median([self.graph.project(item[1])[0] for item in candidates],axis=0)
+                    if np.linalg.norm(point-candidate_center)>self.p['outlier_distance_m']:candidates.clear()
+                candidates.append((stamp,binding,row))
+                if len(candidates)<self.p['confirmation_observations']:
+                    self.warn(f'TARGET_OUTLIER: ID={key} 观测偏离历史，等待新位置多帧确认');return
+                replacement=list(candidates)
+                self.reobservations.pop(key,None);history.clear()
+                self.get_logger().info(f'TARGET_RELOCALIZED: ID={key} 新位置已通过多帧一致性检查，替换旧位置')
+                for new_stamp,new_binding,new_row in replacement:self.accept(key,new_stamp,new_binding,new_row)
+                return
+        self.reobservations.pop(key,None)
+        first=not history and key not in self.confirmed
         ordered=sorted([*history,(stamp,binding)],key=lambda item:item[0])
         history.clear();history.extend(ordered);self.stats['position_accepted']+=1
-        row.update(anchor_kind=binding['kind'],anchor_node_id=binding.get('node_id'),map_epoch=self.graph.epoch)
+        row.update(anchor_kind=binding['kind'],anchor_node_id=binding.get('node_id'),
+                   pending_anchor=binding.get('pending_anchor',False),map_epoch=self.graph.epoch)
         self.observations.publish(String(data=json.dumps(row)))
         if self.output:
             with (self.output/'target-observations.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
@@ -144,7 +179,7 @@ class Targets(Node):
                 self.update_graph(data)
                 frozen={key:deque(((stamp,self.graph.freeze(binding)) for stamp,binding in history),
                                   maxlen=history.maxlen) for key,history in self.records.items()}
-                self.records=frozen;self.pending.clear();self.mapping=False
+                self.records=frozen;self.reobservations.clear();self.mapping=False
             self.frozen=True;self.publish()
             response.success=True;response.message=json.dumps(self.map_binding())
             self.get_logger().info('TARGET_MAP_FINALIZED: 最终地图与关键帧目标已定稿；后续新观测直接绑定静态地图')
@@ -195,6 +230,7 @@ class Targets(Node):
             self.warn('TARGET_BAD_CALIBRATION: 暂不支持该畸变模型')
             return
         process_started = time.perf_counter()
+        ids=None
         try:
             image = self.bridge.imgmsg_to_cv2(msg, 'mono8')
             corners, ids, rejected = self.detect(image)
@@ -214,6 +250,8 @@ class Targets(Node):
             if self.mapping:
                 base=self.buffer.lookup_transform('odom','base_footprint',stamp).transform
                 robot=[base.translation.x,base.translation.y]
+                map_odom=self.buffer.lookup_transform('map','odom',stamp).transform
+                robot_map=transform_point(map_odom,[*robot,0.])[:2]
             else:map_camera=self.buffer.lookup_transform('map',self.p['optical_frame'],stamp).transform
             k = np.array(info.k, dtype=float).reshape(3, 3)
             d = np.array(info.d, dtype=float)
@@ -227,6 +265,10 @@ class Targets(Node):
                                   self.p['min_distance_m'], self.p['max_distance_m'], self.stats)
                 if result is None:
                     self.stats['position_rejected'] += 1
+                    c=np.asarray(corner).reshape(4,2)
+                    self.localization_wait(int(marker_id),'pnp_or_size_rejected',stamp.nanoseconds,
+                        shortest_side_px=float(np.min(np.linalg.norm(c-np.roll(c,-1,axis=0),axis=1))),
+                        minimum_side_px=self.p['min_marker_side_px'],maximum_reprojection_error_px=self.p['max_reprojection_error_px'])
                     continue
                 error, rvec, tvec = result
                 point = transform_point(tf.transform, tvec)
@@ -238,16 +280,21 @@ class Targets(Node):
                            camera_position=tvec.tolist(), camera_rvec=rvec.tolist(),
                            odom_position=point.tolist(), reprojection_error_px=error)
                 if self.mapping:
-                    try:binding=self.graph.bind(stamp.nanoseconds,point,marker_rotation,robot)
-                    except ValueError:
-                        self.pending.append((key,stamp.nanoseconds,point,marker_rotation,robot,row))
-                        self.stats['anchor_pending']+=1;continue
+                    # Correct this observation at its image time before attaching
+                    # it to an old node. Old odometry drift must not be reapplied.
+                    point_map=transform_point(map_odom,point)
+                    rotation_map=rotation_matrix(map_odom.rotation)@marker_rotation
+                    row['map_position_at_observation']=point_map.tolist()
+                    binding=dict(kind='map',point=point_map,rotation=rotation_map,
+                                 pending_anchor=True,robot_map=robot_map)
                 else:
                     binding=dict(kind='map',point=transform_point(map_camera,tvec),
                                  rotation=rotation_matrix(map_camera.rotation)@camera_marker)
                 self.accept(key,stamp.nanoseconds,binding,row)
         except TransformException:
             self.stats['observation_tf_unavailable'] += 1
+            if ids is not None:
+                for key in set(ids.flatten()):self.localization_wait(int(key),'image_time_tf_unavailable',stamp.nanoseconds)
             self.warn('TARGET_TF_UNAVAILABLE: 图像时刻的相机TF不可用，跳过定位')
         except (ValueError, RuntimeError, CvBridgeError, cv2.error) as exc:
             self.stats['processing_error'] += 1
@@ -259,6 +306,7 @@ class Targets(Node):
         elapsed_sim = (self.get_clock().now().nanoseconds-self.stats_started)/1e9
         elapsed_wall = time.monotonic()-self.started
         output = dict(counters=dict(self.stats), decoded_ids=sorted(self.decoded_ids),
+                      localization_waits=dict(self.localization_waits),
                       configured_hz=self.p['processing_hz'],
                       processed_hz_sim=self.stats['processed_frames']/max(elapsed_sim, 1e-6),
                       processed_hz_wall=self.stats['processed_frames']/max(elapsed_wall, 1e-6),
@@ -297,7 +345,9 @@ class Targets(Node):
                              observations=len(history), spread_m=spread,
                              anchor_nodes=sorted({h[1].get('node_id',h[1].get('source_node_id')) for h in history
                                                   if h[1].get('node_id',h[1].get('source_node_id')) is not None}),
-                             coordinate_source='slam_keyframes' if self.mapping else 'fixed_map'))
+                             pending_anchor_observations=sum(bool(h[1].get('pending_anchor')) for h in history),
+                             coordinate_source=('map_observation' if any(h[1].get('pending_anchor') for h in history)
+                                                else 'slam_keyframes' if self.mapping else 'fixed_map')))
             m = Marker()
             m.header.frame_id = 'map'; m.header.stamp = now.to_msg()
             m.ns = 'aruco_target'; m.id = key; m.type = Marker.SPHERE; m.action = Marker.ADD

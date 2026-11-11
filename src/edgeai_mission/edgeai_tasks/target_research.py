@@ -7,7 +7,7 @@ import time
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateToPose, Spin
 from tf2_ros import TransformException
-from search_candidates import make_candidates
+from edgeai_tasks.search_candidates import make_candidates
 
 
 def search_target(node):
@@ -42,7 +42,7 @@ def search_target(node):
         raise RuntimeError('Target search requires an axis-aligned map frame')
     candidates = make_candidates(node,grid,pose)
     if c.get('search_suspects',{}).get('enabled',False):
-        from suspect_search import ParallelCandidates
+        from edgeai_search.suspect_search import ParallelCandidates
         candidates=ParallelCandidates(candidates,node)
         node.event('SEARCH_SUSPECTS_ENABLED','优先完成当前疑似面板的可用观察方向，再继续视锥搜寻；共享导航槽和搜寻预算')
         # Receive retained mapping hints before choosing the first baseline view.

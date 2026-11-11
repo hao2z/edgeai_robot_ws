@@ -2,6 +2,14 @@
 
 更新：2026-11-11。分支：`codex/Junnan-dev`。
 
+## 联合建图前的版本基线
+
+当前仍是单机SLAM建图、共享地图双机定位导航；联合建图尚未接入。先保存本轮模块拆分、逐任务导航配置、C1末端修正和预规划起点占据恢复。统一车身padding为0.01 m，救援停留增加1秒稳定余量；目标立即按图像时刻发布地图定位，后台绑定关键帧，重新观测可更新估计。
+
+Windows主任务入口改为`Start-Autonomous-Mission.ps1`；`Start-Simulation.ps1`仅启动场景。人工导航入口、停止脚本及当前说明已同步，停止脚本仍识别旧会话名称以便清理。
+
+本次提交前：7包构建通过；算法/配置回归188项通过后，两条仍假定三控制器的旧断言已按五种任务配置修正，对应8项回归全部通过；目标绑定、真实SLAM包装和任务树隔离ROS回归36项通过；导航C++四组测试通过；布局、PowerShell语法和入口隔离测试通过。矩形验证仍因已有DWB倒车下限与平滑器不一致失败，本次不改变该对照参数。未启动新的Gazebo实测，最新定位精度和整轮救援仍待用户验证。
+
 ## 默认流程和本轮改动
 
 robot1在线建图并定位全部必需目标 → S1单机救援 → 冻结共享地图与目标 → 两机AMCL定位 → C1并发导航与共同停留。
@@ -31,8 +39,8 @@ robot1在线建图并定位全部必需目标 → S1单机救援 → 冻结共�
 ## 常用入口
 
 ~~~powershell
-.\Start-Autonomous-Exploration.ps1
-.\Start-Autonomous-Exploration.ps1 -SingleRobot
+.\Start-Autonomous-Mission.ps1
+.\Start-Autonomous-Mission.ps1 -SingleRobot
 .\Start-Navigation-Test.ps1 -Controller rpp -Planner lattice
 ~~~
 

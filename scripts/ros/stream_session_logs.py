@@ -194,7 +194,7 @@ class EventReducer:
             self.emit(source, 'WARN' if 'INCOMPLETE' in line or 'ERROR' in line else 'INFO',
                       line.split(']: ', 1)[-1], line)
             return
-        if source == 'perception' and ('TARGET_DECODED:' in line or 'TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line):
+        if source == 'perception' and ('TARGET_DECODED:' in line or 'TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line or 'TARGET_LOCALIZATION_WAIT:' in line):
             self.emit(source, 'INFO', line.split(']: ', 1)[-1], line)
             return
         if source in ('authority', 'cooperative-nav') and node.endswith('navigation_authority'):

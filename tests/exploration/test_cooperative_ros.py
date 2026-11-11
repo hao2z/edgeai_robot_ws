@@ -29,7 +29,7 @@ import yaml
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
-from cooperative_rescue import CooperativeRescue
+from edgeai_tasks.cooperative_rescue import CooperativeRescue
 
 
 class FakeFleet(Node):
@@ -44,7 +44,7 @@ class FakeFleet(Node):
             self.odom[ns]=self.create_publisher(Odometry,prefix+'odom',10)
             self.amcl[ns]=self.create_publisher(PoseWithCovarianceStamped,prefix+'amcl_pose',qos)
             self.state[ns]=self.create_publisher(String,prefix+'navigation_authority/state',qos)
-            self.servers.append(ActionServer(self,NavigateToPose,prefix+'navigation/rescue_to_pose',
+            self.servers.append(ActionServer(self,NavigateToPose,prefix+'navigation/cooperative_to_pose',
                 execute_callback=lambda h,n=ns:self.navigate(n,h)))
             self.servers.append(ActionServer(self,ComputePathToPose,prefix+'navigation_backend/compute_path_to_pose',
                 execute_callback=self.plan))
@@ -158,7 +158,7 @@ class CooperativeROS(unittest.TestCase):
                     with patch.object(node,'tf_pose',side_effect=[TransformException('TF still connecting'),[3.,1.,0.],[3.,1.,0.]]), \
                          patch.object(node,'stop_slam') as stop,patch.object(node,'start_localization') as start, \
                          patch.object(node,'finalize_targets'), \
-                         patch('cooperative_rescue.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout='saved')):
+                         patch('edgeai_tasks.cooperative_rescue.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout='saved')):
                         node.handover()
                     self.assertFalse((d/'rescue-result.json').exists())
                     self.assertEqual(node.mapping_start_pose,reference['mapping_start_pose'])

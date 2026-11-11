@@ -1,6 +1,6 @@
 # 测试运行与观察
 
-使用根目录 `Start-Autonomous-Exploration.ps1` 或 `Start-Simulation.ps1`。
+使用根目录 `Start-Autonomous-Mission.ps1` 或 `Start-Simulation.ps1`。
 重启前先等待本项目已登记的 Linux 进程退出，再关闭旧 PowerShell 和
 Windows Terminal 标签页。只包含项目标签页的窗口会关闭；共用窗口只关
 匹配的项目标签页，不终止共享 WindowsTerminal.exe。

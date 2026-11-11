@@ -1,0 +1,6 @@
+# 前沿：输入方向作规划偏好，到位只检查位置。
+require_heading: false
+allow_reverse: true
+controller: {}
+planner: {}
+goal_checker: {}

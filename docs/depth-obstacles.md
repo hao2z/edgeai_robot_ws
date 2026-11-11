@@ -4,9 +4,9 @@
 
 ```powershell
 # 雷达+深度，三个控制器均可使用
-.\Start-Autonomous-Exploration.ps1 -Controller rpp -DepthObstacles true
+.\Start-Autonomous-Mission.ps1 -Controller rpp -DepthObstacles true
 # 恢复原来的单雷达局部代价；保留视觉识别功能
-.\Start-Autonomous-Exploration.ps1 -Controller rpp -DepthObstacles false
+.\Start-Autonomous-Mission.ps1 -Controller rpp -DepthObstacles false
 ```
 
 ```bash

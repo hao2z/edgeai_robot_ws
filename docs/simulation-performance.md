@@ -13,7 +13,7 @@
 | `EDGEAI_CLOCK_RATE` | `100` | 时钟转发墙钟Hz；`0`恢复不限频，或设置20–1000用于对照 |
 | `EDGEAI_CAMERA_RATE` | `30` | RGB-D仿真Hz，已恢复原频率，保留640×480 |
 | `suspect_targets.yaml` → `processing_hz` | `5.0` | 疑似目标仿真Hz，由2提高；仍只处理最新可配对图像 |
-| `aruco_targets.yaml` → `processing_hz` | `15.0` | ArUco检测仿真Hz |
+| `aruco_targets.yaml` → `processing_hz` | `30.0` | ArUco检测仿真Hz；与默认相机频率对齐 |
 | `EDGEAI_RVIZ_FPS` | `30` | RViz显示帧率 |
 | `EDGEAI_EAGER_POINT_CLOUD` | `false` | 完整点云桥默认按需启用；深度避障继续使用深度图投影 |
 

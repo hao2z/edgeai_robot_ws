@@ -575,7 +575,7 @@ if [[ -n $map_basename && $navigation_test != true ]]; then
     mkdir -p "$(dirname "$map_basename")"
     if [[ ! -f "$temp_dir/task1-output.json" ]]; then
         timeout 25s ros2 run nav2_map_server map_saver_cli -f "$map_basename" --ros-args -p use_sim_time:=true >"$temp_dir/map-save.log" 2>&1
-        python3 "$PROJECT_ROOT/src/edgeai_navigation/scripts/export_handover.py" "$temp_dir" "$map_basename.yaml"
+        python3 "$PROJECT_ROOT/src/edgeai_mission/scripts/export_handover.py" "$temp_dir" "$map_basename.yaml"
     fi
     if [[ $arena == competition ]]; then
         python3 "$PROJECT_ROOT/tests/exploration/evaluate_arena_map.py" "$map_basename.yaml" "$sim_dir/worlds/competition_rooms.sdf" | tee "$temp_dir/evaluation.log"

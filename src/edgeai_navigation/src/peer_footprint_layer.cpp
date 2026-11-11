@@ -11,6 +11,7 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "peer_raster.hpp"
 
 namespace edgeai_navigation
 {
@@ -90,15 +91,13 @@ public:
     int x0, y0, x1, y1;
     grid.worldToMapEnforceBounds(b.x - b.reach, b.y - b.reach, x0, y0);
     grid.worldToMapEnforceBounds(b.x + b.reach, b.y + b.reach, x1, y1);
-    const double pad = padding_ + std::sqrt(.5) * grid.getResolution();
     for (int y = std::max(y0, min_j); y < std::min(y1 + 1, max_j); ++y) {
       for (int x = std::max(x0, min_i); x < std::min(x1 + 1, max_i); ++x) {
         double wx, wy;
         grid.mapToWorld(x, y, wx, wy);
         const double dx = wx - b.x, dy = wy - b.y;
-        const double u = b.c * dx + b.s * dy, v = -b.s * dx + b.c * dy;
-        if (bounds_[0] - pad <= u && u <= bounds_[1] + pad &&
-          bounds_[2] - pad <= v && v <= bounds_[3] + pad)
+        if (peerCellIntersects(dx, dy, b.c, b.s, bounds_[0], bounds_[1],
+          bounds_[2], bounds_[3], padding_, grid.getResolution()))
         {
           grid.setCost(x, y, nav2_costmap_2d::LETHAL_OBSTACLE);
         }

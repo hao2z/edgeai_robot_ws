@@ -17,14 +17,33 @@
               <TaskUnit operation="cancel_navigation"/>
               <Fallback>
                 <TaskUnit operation="select_parking_locked"/>
+                <!-- Preplanning has no Nav2 recovery tree. Recover the START,
+                     then require a verified path; never approve a missing path. -->
+                <Sequence>
+                  <TaskErrorIs category="start_occupied"/>
+                  <TaskUnit operation="recover_preplan_start"/>
+                  <TaskUnit operation="select_parking_locked"/>
+                </Sequence>
                 <!-- Retarget both only when no viable pair preserves the healthy robot. -->
-                <Sequence><TaskUnit operation="cancel_all_navigation"/><TaskUnit operation="select_parking"/></Sequence>
+                <Sequence>
+                  <Inverter><TaskErrorIs category="start_occupied"/></Inverter>
+                  <TaskUnit operation="cancel_all_navigation"/><TaskUnit operation="select_parking"/>
+                </Sequence>
               </Fallback>
               <TaskUnit operation="dispatch_navigation"/>
               <UntilDone><TaskUnit operation="poll_navigation"/></UntilDone>
             </Sequence>
           </RetryTask>
-          <UntilDone><TaskUnit operation="check_rescue"/></UntilDone>
+          <UntilDone>
+            <Sequence>
+              <TaskUnit operation="check_rescue"/>
+              <Fallback>
+                <TaskDone/>
+                <Sequence><CorrectionNeeded/><TaskUnit operation="correct"/></Sequence>
+                <AlwaysSuccess/>
+              </Fallback>
+            </Sequence>
+          </UntilDone>
         </Sequence>
       </RetryTask>
       <TaskUnit operation="record_success"/>

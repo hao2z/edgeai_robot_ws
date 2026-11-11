@@ -1,16 +1,10 @@
 """Small, ROS-independent geometry and joint rescue completion rules."""
 import math
+from edgeai_nav.geometry import compose, relative
 
 
-def compose(a,b):
-    c,s=math.cos(a[2]),math.sin(a[2])
-    return [a[0]+c*b[0]-s*b[1],a[1]+s*b[0]+c*b[1],
-            math.atan2(math.sin(a[2]+b[2]),math.cos(a[2]+b[2]))]
 
 
-def relative(a,b):
-    c,s=math.cos(a[2]),math.sin(a[2]);dx,dy=b[0]-a[0],b[1]-a[1]
-    return [c*dx+s*dy,-s*dx+c*dy,math.atan2(math.sin(b[2]-a[2]),math.cos(b[2]-a[2]))]
 
 
 def cell(grid,x,y):
@@ -67,8 +61,8 @@ def path_clear_of_peer(poses,parked,footprint,margin=.05):
 
 
 def rescue_yaw_error(pose,target):
-    """Match S1's heading: face opposite the current target surface normal."""
-    desired=target['yaw']+math.pi
+    """Face the target from the robot's actual position."""
+    desired=math.atan2(target['y']-pose[1],target['x']-pose[0])
     return math.atan2(math.sin(pose[2]-desired),math.cos(pose[2]-desired))
 
 
@@ -80,12 +74,12 @@ def parking_pairs(grid,target,footprint,config):
         if radius>config['radius_m']-config['position_margin_m']+1e-6:continue
         for degrees in (0,25,-25,45,-45,65,-65):
             yaw=target['yaw']+math.radians(degrees)
-            # Parallel bays fit rectangular bodies better than both pointing diagonally at the stand.
             pose=[target['x']+radius*math.cos(yaw),target['y']+radius*math.sin(yaw),
-                  math.atan2(-math.sin(target['yaw']),-math.cos(target['yaw']))]
-            if footprint_clear(grid,pose,footprint):candidates.append(pose)
+                  math.atan2(-math.sin(yaw),-math.cos(yaw))]
+            if footprint_clear(grid,pose,footprint,config.get('footprint_padding_m',.01)):candidates.append(pose)
     pairs=[(a,b) for i,a in enumerate(candidates) for b in candidates[i+1:]
-           if math.dist(a[:2],b[:2])>=config['min_separation_m'] and separated(a,b,footprint)]
+           if math.dist(a[:2],b[:2])>=config['min_separation_m'] and separated(
+               a,b,footprint,config.get('parking_peer_clearance_m',.08)/2)]
     if not pairs:raise ValueError('No clear, separated C1 parking pair')
     return pairs
 

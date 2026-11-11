@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(edgeai_exploration)
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(edgeai_search)
 install(DIRECTORY config rviz tools DESTINATION share/${PROJECT_NAME})
 ament_package()

@@ -4,7 +4,7 @@ import math
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import Spin, DriveOnHeading
 from tf2_ros import TransformException
-from rescue_policy import rescue_position, RescueAttemptFailed
+from edgeai_tasks.rescue_policy import rescue_position, RescueAttemptFailed
 
 
 def correction(config, goal, measurement):
@@ -98,3 +98,51 @@ def adjust(node, goal, measurement):
         raise RuntimeError(message)
     node.event('ALIGN_RESULT','修正动作完成，重新检查位姿和停车条件')
     return True
+
+
+def adjust_joint(units):
+    """One bounded S1-style correction, then recheck BOTH robots in the tree."""
+    from edgeai_tasks.cooperative_policy import rescue_yaw_error
+    from nav2_msgs.action import Spin,DriveOnHeading
+    from rclpy.time import Time
+    n=units.node;units.check_owner()
+    now=n.now()
+    if units.alignment_started is None:units.alignment_started=now
+    attempts=getattr(units,'joint_corrections',[])
+    if now-units.alignment_started>n.c.get('alignment_timeout_s',60.) or len(attempts)>=n.c.get('alignment_max_actions',40):
+        raise RescueAttemptFailed('Joint correction budget exhausted','correction')
+    for i,ns in enumerate(('','robot2')):
+        stamp=Time.from_msg(n.odom[ns].header.stamp)
+        if not 0<=now-stamp.nanoseconds/1e9<=n.c['max_data_age_s']:
+            return units.wait_joint_data(now,'Correction waiting for fresh odometry')
+        try:pose=n.tf_pose('robot2/base_footprint' if ns else 'base_footprint',stamp)
+        except TransformException as error:return units.wait_joint_data(now,str(error))
+        parking=units.selected[i]
+        yaw=math.atan2(n.target['y']-parking[1],n.target['x']-parking[0])
+        offset=math.dist(parking[:2],[n.target['x'],n.target['y']])
+        goal=dict(x=parking[0],y=parking[1],yaw=yaw,approach_distance_m=offset)
+        measurement=dict(x=pose[0],y=pose[1],yaw=pose[2],distance_m=math.dist(pose[:2],parking[:2]),
+                         yaw_error_rad=rescue_yaw_error(pose,n.target))
+        config=dict(n.c,goal_source='detected_target',target_radius_m=n.c['radius_m'],
+                    normal_offset_m=offset,position_tolerance_m=n.c.get('alignment_position_tolerance_m',.10))
+        step=correction(config,goal,measurement)
+        if step is None:continue
+        kind,amount=step
+        units.reset_dwell()
+        n.wait(lambda:n.states.get(ns,{}).get('phase')=='IDLE',5.,True)
+        if kind=='spin':client=n.spin[ns];request=Spin.Goal(target_yaw=amount)
+        else:
+            client=n.advance[ns];request=DriveOnHeading.Goal()
+            request.target.x=amount;request.speed=n.c.get('alignment_speed_mps',.03)
+        request.time_allowance.sec=6
+        record=dict(robot=ns or 'robot1',kind=kind,amount=amount,started_sim_s=now)
+        attempts.append(record);units.joint_corrections=attempts
+        n.event('ALIGN_ACTION',**record)
+        terminal=n.action(client,request,12.)
+        record.update(status=terminal.status,error_code=terminal.result.error_code)
+        if terminal.status!=4 or terminal.result.error_code:
+            raise RescueAttemptFailed('Joint correction action failed: '+str(record),'correction')
+        units.navigation_after=n.now()
+        n.event('ALIGN_RESULT',**record)
+        return dict(corrected=True,robot=record['robot'],kind=kind)
+    return dict(corrected=False)

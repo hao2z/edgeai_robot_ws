@@ -2,8 +2,8 @@
 import json
 import math
 import time
-from frustum_search import Camera, FrustumPlanner, settings
-from search_policy import observation_positions
+from edgeai_search.frustum_search import Camera, FrustumPlanner, settings
+from edgeai_search.search_policy import observation_positions
 
 
 def camera_model(node):

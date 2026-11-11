@@ -8,6 +8,6 @@ param(
     [switch]$InCurrentWindow
 )
 $ErrorActionPreference='Stop'
-& (Join-Path $PSScriptRoot 'Start-Autonomous-Exploration.ps1') -NavigationTest -Arena midterm `
+& (Join-Path $PSScriptRoot 'Start-Autonomous-Mission.ps1') -NavigationTest -Arena midterm `
     -Duration $Duration -Distro $Distro -DomainId $DomainId -Controller $Controller -Planner $Planner `
     -CheckOnly:$CheckOnly -InCurrentWindow:$InCurrentWindow

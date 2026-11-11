@@ -3,8 +3,8 @@ from types import SimpleNamespace as NS
 import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from suspect_search import normal_views,ParallelCandidates,without_known
-from frustum_search import Camera
+from edgeai_search.suspect_search import normal_views,ParallelCandidates,without_known
+from edgeai_search.frustum_search import Camera
 
 CAMERA=Camera(640,480,554.,554.,320.,240.,(.1,0.,.35),(0.,0.,1.,-1.,0.,0.,0.,-1.,0.))
 

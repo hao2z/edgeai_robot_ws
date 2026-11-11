@@ -8,8 +8,13 @@ def pose_text(pose):
     return f'({pose[0]:.3f}, {pose[1]:.3f}, {math.degrees(pose[2]):.1f}°)'
 
 
+def heading_error(pose,target,face_target=False):
+    desired=math.atan2(target[1]-pose[1],target[0]-pose[0]) if face_target else target[2]+math.pi
+    return math.atan2(math.sin(pose[2]-desired),math.cos(pose[2]-desired))
+
+
 def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dwell=10.,
-                   stopped_linear=.02, stopped_angular=.05):
+                   stopped_linear=.02, stopped_angular=.05,face_target=False):
     """Use only a fresh, synchronized truth record from this session."""
     path = directory/('truth.jsonl' if robot == 'robot1' else 'robot2-truth.jsonl')
     try:
@@ -64,8 +69,7 @@ def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dw
         pose = row['robot_world']
         distance = math.hypot(pose[0]-target['pose'][0], pose[1]-target['pose'][1])
         estimate = next((t for t in row.get('target_estimates', []) if t['id'] == target_id), {})
-        yaw_error=math.atan2(math.sin(pose[2]-target['pose'][2]-math.pi),
-                             math.cos(pose[2]-target['pose'][2]-math.pi))
+        yaw_error=heading_error(pose,target['pose'],face_target)
         position_ok=distance<=radius;heading_ok=abs(yaw_error)<=yaw_limit
         max_distance=distance;max_yaw=abs(yaw_error);max_linear=max_angular=0.
         for previous,current in zip(window,window[1:]):
@@ -74,14 +78,14 @@ def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dw
             p=current['robot_world'];q=previous['robot_world']
             actual=next(t['pose'] for t in current['targets_world'] if t['id']==target_id)
             max_distance=max(max_distance,math.dist(p[:2],actual[:2]))
-            max_yaw=max(max_yaw,abs(math.atan2(math.sin(p[2]-actual[2]-math.pi),math.cos(p[2]-actual[2]-math.pi))))
+            max_yaw=max(max_yaw,abs(heading_error(p,actual,face_target)))
             max_linear=max(max_linear,math.dist(p[:2],q[:2])/dt)
             max_angular=max(max_angular,abs(math.atan2(math.sin(p[2]-q[2]),math.cos(p[2]-q[2])))/dt)
         if window:
             first=window[0];actual=next(t['pose'] for t in first['targets_world'] if t['id']==target_id)
             p=first['robot_world']
             max_distance=max(max_distance,math.dist(p[:2],actual[:2]))
-            max_yaw=max(max_yaw,abs(math.atan2(math.sin(p[2]-actual[2]-math.pi),math.cos(p[2]-actual[2]-math.pi))))
+            max_yaw=max(max_yaw,abs(heading_error(p,actual,face_target)))
         passed=position_ok and heading_ok and max_distance<=radius and max_yaw<=yaw_limit and max_linear<stopped_linear and max_angular<stopped_angular
         status='failed' if not passed else 'passed' if complete else 'unavailable'
         return dict(available=True, sample_time_s=raw_stamp, pose_time_s=stamp if last else raw_stamp,
@@ -105,7 +109,7 @@ def success_evidence(directory, task, target_id, target_pose, poses, distances, 
     deadline=time.monotonic()+wait_s
     while True:
         snapshots=[truth_snapshot(directory,f'robot{i+1}',stamp,target_id,radius,yaw_limit,dwell,
-                                  stopped_linear,stopped_angular) for i in range(len(poses))]
+                                  stopped_linear,stopped_angular,face_target=task=='c1') for i in range(len(poses))]
         if not any(t.get('coverage_pending',False) for t in snapshots) or time.monotonic()>=deadline:break
         # Passive audit completion only: no navigation or sensor commands.
         time.sleep(.1)

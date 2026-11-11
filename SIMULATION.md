@@ -6,7 +6,7 @@ competition parameters. No target coordinates are published as detections.
 
 ## Start
 
-From a built Pixi workspace on Linux:
+From a built ROS workspace on Linux (see [setup](docs/linux-quickstart.md)):
 
 ```bash
 bash start_sim.sh
@@ -26,17 +26,17 @@ the packaged defaults. In multi-robot mode even a fleet of one robot uses its
 namespace. Legacy single mode uses the original spawn pose (-1.5,-1.5,0.01),
 heading 0; multi mode uses all six pose values from robots.yaml.
 
-Windows entry point (WSL Ubuntu-24.04, Linux copy built):
+Windows pure simulation entry (WSL Ubuntu-24.04, workspace built):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\KTH\Competition\edgeai_robot_ws\Start-Simulation.ps1 -Robots 2 -SLAM -DisplayServer WSLg
-powershell -ExecutionPolicy Bypass -File D:\KTH\Competition\edgeai_robot_ws\Stop-Simulation.ps1
+powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1 -Robots 2 -SLAM -DisplayServer WSLg
+powershell -ExecutionPolicy Bypass -File .\Stop-Simulation.ps1
 ```
 
 WSLg is the default. `-DisplayServer VcXsrv` explicitly selects the fallback.
 `-Distro` can override the registered
-distribution name. Windows source and `/home/ypfree/edgeai_robot_ws` are separate
-copies: rebuild/synchronize the Linux copy after editing Windows source.
+distribution name. Use the configured build workspace; rebuild after source changes.
+See [entrypoint responsibilities](docs/windows-entrypoints.md).
 
 ## Interfaces and frame ownership
 

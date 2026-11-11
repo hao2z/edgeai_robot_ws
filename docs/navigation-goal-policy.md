@@ -1,5 +1,7 @@
 # 逐点导航要求
 
+分用途独立配置入口见[导航任务配置](navigation-task-profiles.md)。S1和C1现已分离，旧文中“救援统一关闭倒车”由各任务`allow_reverse`配置替代。
+
 RPP派生三个固定控制器，统一使用原生 `RotationShimController` + RPP，替代自定义 `LatticeRotationShim`。指定朝向及救援点启用 `rotate_to_goal_heading: true`、`use_path_orientations: true`，由Shim在位置容差内对齐终点朝向；RPP的 `use_rotate_to_heading` 关闭。普通位置点保留不要求最终朝向的规则，运行时关闭Shim的终点旋转；仅普通点+Lattice允许倒车。RPP参数和运动测试入口见 [RPP运动控制](rpp-controller.md)。
 
 运行时也按每个请求绑定局部控制器：普通点使用 `FollowPath`，DWB 移除 `RotateToGoal`，避免在位置未达标时因终点转向锁住平移；指定朝向点使用 `FollowPathHeading`，救援使用 `FollowPathRescue`，两者保留 `RotateToGoal`。各 DWB 实例的终点窗口自动匹配对应检查器的 XY 容差。所有实例继承同一份速度、避障和路径跟踪调参，只运行当前任务所选控制器。MPPI配置则对普通点去掉 `GoalAngleCritic`，要求朝向的点保留它。

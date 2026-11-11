@@ -20,6 +20,16 @@ def panel():
 
 
 class GeometryTests(unittest.TestCase):
+    def test_small_oblique_marker_uses_configured_pixel_limit(self):
+        k=np.array([[600.,0,320],[0,600.,240],[0,0,1.]])
+        points=np.array([[-.08,.08,0],[.08,.08,0],[.08,-.08,0],[-.08,-.08,0]])
+        corners=cv2.projectPoints(points,np.array([0.,np.deg2rad(80.),0.]),
+                                 np.array([0.,0.,2.]),k,np.zeros(5))[0]
+        shortest=np.min(np.linalg.norm(corners.reshape(4,2)-np.roll(corners.reshape(4,2),-1,axis=0),axis=1))
+        self.assertGreater(shortest,6.);self.assertLess(shortest,12.)
+        self.assertIsNone(estimate(corners,.16,k,np.zeros(5),12.,2.5,.15,5.))
+        self.assertIsNotNone(estimate(corners,.16,k,np.zeros(5),6.,2.5,.15,5.))
+
     def test_detect_and_metric_scale(self):
         corners, ids, _ = detector('DICT_4X4_50')(panel())
         self.assertEqual(ids.flatten().tolist(), [3])

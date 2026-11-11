@@ -8,8 +8,8 @@ from pathlib import Path
 def run(step, c):
     import rclpy
     import yaml
-    from normal_rescue import Rescue
-    from search_policy import observation_positions
+    from edgeai_tasks.normal_rescue import Rescue
+    from edgeai_search.search_policy import observation_positions
     from nav2_msgs.action import NavigateToPose
     from std_srvs.srv import SetBool
     from tf2_ros import TransformException

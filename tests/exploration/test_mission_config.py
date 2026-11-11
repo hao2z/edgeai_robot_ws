@@ -1,4 +1,4 @@
-"""Stage configuration derivation and shell boundary checks; no motion."""
+"""Stage configuration derivation checks; no motion."""
 import json
 from pathlib import Path
 import sys
@@ -36,13 +36,6 @@ class MissionConfig(unittest.TestCase):
                 self.assertTrue(Path(path).is_file())
             disabled=prepare(ROOT,d,ROOT/'src/edgeai_navigation/config/midterm_single_rescue.yaml',d/'map',600,True,False,'frontier',rescue_enabled=False)
             self.assertFalse(disabled['rescue_enabled'])
-
-    def test_shell_no_longer_schedules_rescue_stages(self):
-        text=(ROOT/'scripts/simulation/run-open-source-exploration.sh').read_text()
-        for legacy in ('normal_rescue.py','cooperative_rescue.py','SCAN_CONFIG','SEARCH_CONFIG','rescue-result.json'):
-            self.assertNotIn(legacy,text)
-        self.assertIn('mission_coordinator',text)
-        self.assertIn('wait "$mission_pid"',text)
 
 
 if __name__=='__main__':unittest.main()

@@ -16,6 +16,28 @@ def node(key,odom,corrected,stamp=1_000_000_000):
 
 
 class LandmarkAnchors(unittest.TestCase):
+    def test_old_frame_does_not_reapply_drift_to_new_map_observation(self):
+        g=AnchorGraph();a=node(8,[0.,0.,0.],[1.,2.,0.],1)
+        g.update(graph([a]))
+        binding=g.bind(77_000_000_000,[2.4,2.,.15],np.eye(3),[2.,2.],frame='map')
+        np.testing.assert_allclose(g.project(binding)[0],[2.4,2.,.15])
+        a['map']=[2.,3.,np.pi/2];g.update(graph([a],revision=2))
+        np.testing.assert_allclose(g.project(binding)[0],[2.,4.4,.15],atol=1e-10)
+
+    def test_revisited_old_region_binds_nearest_frame_without_age_gate(self):
+        g=AnchorGraph();g.update(graph([
+            node(1,[0.,0.,0.],[1.,0.,0.],1),
+            node(2,[2.,0.,0.],[3.,0.,0.],299_000_000_000)]))
+        binding=g.bind(300_000_000_000,[1.,.2,.15],np.eye(3),[.8,0.])
+        self.assertEqual(binding['node_id'],1)
+        np.testing.assert_allclose(g.project(binding)[0],[2.,.2,.15])
+
+    def test_spatial_limit_is_configurable(self):
+        g=AnchorGraph(max_distance=3.);g.update(graph([node(1,[0.,0.,0.],[0.,0.,0.],1)]))
+        self.assertEqual(g.bind(300_000_000_000,[2.5,0.,.15],np.eye(3),[2.,0.])['node_id'],1)
+        g.max_distance=1.
+        with self.assertRaises(ValueError):g.bind(300_000_000_000,[2.5,0.,.15],np.eye(3),[2.,0.])
+
     def test_unrelated_current_robot_correction_does_not_move_old_target(self):
         g=AnchorGraph();a=node(0,[0.,0.,0.],[1.,2.,0.]);b=node(1,[4.,0.,0.],[5.,2.,0.],5_000_000_000)
         g.update(graph([a,b]));binding=g.bind(1_000_000_000,[.5,.2,.15],np.eye(3),[0.,0.])

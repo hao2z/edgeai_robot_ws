@@ -12,7 +12,7 @@
 自动固定点测试（普通位置、指定朝向、救援停车）：
 
 ```powershell
-.\Start-Autonomous-Exploration.ps1 -NavigationTest -Controller rpp -MotionTest points -Duration 300
+.\Start-Autonomous-Mission.ps1 -NavigationTest -Controller rpp -MotionTest points -Duration 300
 ```
 
 长U形绕W2往返：增加 `-PointScenario u_wall`。窄U形绕O2/W1/W1b往返：增加 `-PointScenario narrow_u`。每个绕墙段只下发一个目标，不插入中间导航点。窄U形世界坐标为准备点(1.50,2.78)、墙另一侧(0.48,3.87)，再返回准备点。普通探索启动也可指定 `-Controller rpp`，仍使用SLAM，不向导航注入仿真真值。默认控制器仍为DWB。

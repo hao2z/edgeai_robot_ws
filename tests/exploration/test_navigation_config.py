@@ -75,7 +75,9 @@ class NavigationConfig(unittest.TestCase):
                                input=code, text=True, env=env, check=True)
                 config = yaml.safe_load(output.read_text())
                 control = config['controller_server']['ros__parameters']
-                self.assertEqual(len(control['controller_plugins']), 3)
+                self.assertEqual(set(control['controller_plugins']),
+                                 {'FollowPath','FollowPathHeading','FollowPathRescue',
+                                  'FollowPathFrontier','FollowPathCooperative'})
                 primary = control['FollowPath'].get('primary_controller', control['FollowPath']['plugin'])
                 expected = {'dwb':'dwb_core::DWBLocalPlanner',
                             'rpp':'edgeai_navigation::MatchedRPP',

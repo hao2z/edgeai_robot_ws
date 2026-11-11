@@ -1,0 +1,6 @@
+# S1救援导航；与C1独立。任务范围/停留仍在midterm_single_rescue.yaml。
+require_heading: true
+allow_reverse: false
+controller: {}
+planner: {}
+goal_checker: {}

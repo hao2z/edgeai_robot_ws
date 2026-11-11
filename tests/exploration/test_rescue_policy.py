@@ -5,7 +5,8 @@ import yaml
 import tempfile
 import json
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from rescue_policy import Dwell, select_goal, validate_config, rescue_position
+from edgeai_tasks.rescue_policy import Dwell, select_goal, validate_config, rescue_position
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_mission/scripts'))
 from export_handover import export
 
 
@@ -112,11 +113,11 @@ class RescueTests(unittest.TestCase):
         self.assertEqual(goal['target_id'], 1)
         self.assertAlmostEqual(goal['y'], 3.75)
         dwell = Dwell(c)
-        for i in range(100):
+        for i in range(110):
             self.assertFalse(dwell.update(i*.1, .05, 0., 0., 0.))
-        self.assertTrue(dwell.update(10., .05, 0., 0., 0.))
-        self.assertFalse(dwell.update(10.1, .11, 0., 0., 0.))
-        self.assertFalse(dwell.update(10.2, .05, 0., 0., 0.))
+        self.assertTrue(dwell.update(11., .05, 0., 0., 0.))
+        self.assertFalse(dwell.update(11.1, .11, 0., 0., 0.))
+        self.assertFalse(dwell.update(11.2, .05, 0., 0., 0.))
         c['normal_offset_m'] = .45
         with self.assertRaises(ValueError):
             validate_config(c)

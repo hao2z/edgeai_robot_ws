@@ -11,6 +11,10 @@ from rescue_success_log import success_evidence
 
 
 class TruthEvidence(unittest.TestCase):
+    def test_c1_truth_heading_is_coordinate_bearing_not_marker_normal(self):
+        from rescue_success_log import heading_error
+        self.assertAlmostEqual(heading_error([1.,1.,-3*math.pi/4],[0.,0.,1.2],True),0.)
+        self.assertAlmostEqual(abs(heading_error([1.,1.,math.pi],[0.,0.,0.],True)),math.pi/4)
     def evaluate(self,task='s1',alter=None):
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)

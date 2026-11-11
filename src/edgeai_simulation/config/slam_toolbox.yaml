@@ -10,6 +10,7 @@ slam_toolbox:
     ceres_loss_function: None
 
     # ROS Parameters
+    anchor_graph_publish_period_s: 0.5  # 地图关键帧修正快照，墙钟秒；供目标后台关联。
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint

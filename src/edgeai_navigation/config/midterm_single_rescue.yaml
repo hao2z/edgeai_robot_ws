@@ -1,5 +1,6 @@
 # Default midterm mission: one robot explores, then rescues detected S1 once.
 enabled: true
+settle_margin_s: 1.0  # 达标后继续连续停稳1秒；真值仍核验最后10秒，不放宽阈值。
 require_confirmation: false
 goal_source: detected_target
 target_id: 1

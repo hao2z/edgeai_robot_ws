@@ -73,12 +73,18 @@ def handle(op,response):
  if scenario in ('activation_retry','activation_exhausted') and a.task=='c1' and op=='wait_navigation_ready':
   success=counts[op]>({'activation_retry':1,'activation_exhausted':100}[scenario])
  if scenario=='localization_retry' and a.task=='c1' and op=='localize':success=counts[op]>1
+ if scenario in ('preplan_occupied','preplan_occupied_exhausted') and a.task=='c1':
+  if op in ('select_parking','select_parking_locked'):
+   success=counts.get('recover_preplan_start',0)>0 and scenario=='preplan_occupied'
+   data['category']='failure' if success else 'start_occupied'
+  if op=='recover_preplan_start':
+   success=scenario=='preplan_occupied';data['category']='start_occupied'
  if op=='record_success' and success:okay=True
  response.success=success
  if a.task==c.get('fail_step'):data['category']='fatal'
  response.message=json.dumps(dict(success=success,**data))
  return response
-ops=['next_target','check_targets','acquire','select_target','search_target','select_approach','inside_rescue_region','correct','handover','wait_navigation_ready','localize','prepare_target','select_parking','select_parking_locked','cancel_navigation','cancel_all_navigation','dispatch_navigation','poll_navigation','check_rescue','record_success']
+ops=['next_target','check_targets','acquire','select_target','search_target','select_approach','inside_rescue_region','correct','handover','wait_navigation_ready','localize','prepare_target','select_parking','select_parking_locked','recover_preplan_start','cancel_navigation','cancel_all_navigation','dispatch_navigation','poll_navigation','check_rescue','record_success']
 services=[node.create_service(Trigger,'/mission/tasks/'+a.task+'/units/'+op,lambda req,res,op=op:handle(op,res)) for op in ops]
 try:
  while rclpy.ok():rclpy.spin_once(node,timeout_sec=.02)
@@ -296,6 +302,22 @@ class MissionROS(unittest.TestCase):
         self.assertEqual(units.count('handover'),1)
         self.assertEqual(units.count('wait_navigation_ready'),3)
         self.assertNotIn('localize',units);self.assertNotIn('dispatch_navigation',units)
+
+    def test_c1_start_occupancy_recovers_then_requires_new_preplan(self):
+        result,_,events=self.exercise(cooperative=True,scenario='preplan_occupied')
+        self.assertTrue(result['success'])
+        units=[e.get('unit') for e in events if e.get('task')=='c1' and e['phase']=='UNIT_CALL']
+        i=units.index('recover_preplan_start')
+        self.assertEqual(units[i+1],'select_parking_locked')
+        self.assertLess(i,units.index('dispatch_navigation'))
+        self.assertNotIn('select_parking',units)
+
+    def test_c1_start_recovery_failure_cannot_dispatch_or_reselect_goals(self):
+        result,_,events=self.exercise(cooperative=True,scenario='preplan_occupied_exhausted')
+        self.assertFalse(result['success'])
+        units=[e.get('unit') for e in events if e.get('task')=='c1' and e['phase']=='UNIT_CALL']
+        self.assertIn('recover_preplan_start',units)
+        self.assertNotIn('dispatch_navigation',units);self.assertNotIn('select_parking',units)
 
     def test_disabled_rescue_still_saves_map(self):
         result,calls,_=self.exercise(rescue=False)

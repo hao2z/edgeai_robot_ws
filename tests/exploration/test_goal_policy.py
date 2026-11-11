@@ -13,8 +13,8 @@ from goal_policy import managed_trees, POLICIES, CONTROLLERS
 
 class GoalTrees(unittest.TestCase):
     def test_frontier_heading_is_a_planning_input_not_an_arrival_requirement(self):
-        self.assertEqual(POLICIES['frontier'],('general_goal_checker','GridBased'))
-        self.assertEqual(CONTROLLERS['frontier'],'FollowPath')
+        self.assertEqual(POLICIES['frontier'],('frontier_goal_checker','GridBasedFrontier'))
+        self.assertEqual(CONTROLLERS['frontier'],'FollowPathFrontier')
 
     def test_fixed_plugins_preserve_recovery_tree(self):
         source=ROOT/'src/edgeai_navigation/config/behavior_trees/explore_recovery.xml'

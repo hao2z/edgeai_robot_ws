@@ -4,7 +4,7 @@ import math
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from rescue_approach import approaches,approach_goal,failure_reason,should_change_approach
+from edgeai_tasks.rescue_approach import approaches,approach_goal,failure_reason,should_change_approach
 
 
 class RescueApproach(unittest.TestCase):

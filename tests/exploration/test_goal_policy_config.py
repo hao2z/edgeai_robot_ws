@@ -15,6 +15,34 @@ from navigation_config import load_navigation
 
 
 class GoalPolicyConfig(unittest.TestCase):
+    def test_c1_profile_overrides_are_isolated_and_reverse_is_coordinated(self):
+        import shutil
+        from planner_profile import configure_lattice
+        from ament_index_python.packages import get_package_share_directory
+        resource=ROOT/'src/edgeai_navigation/config'
+        config=load_navigation(resource,'rpp')
+        control=config['controller_server']['ros__parameters']
+        control['heading_goal_checker']=dict(control['general_goal_checker'])
+        control['rescue_goal_checker']=dict(control['general_goal_checker'])
+        configure_lattice(config,resource,get_package_share_directory('nav2_smac_planner'))
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles=Path(tmp)/'tasks';shutil.copytree(resource/'navigation_tasks',profiles)
+            path=profiles/'cooperative.yaml';settings=yaml.safe_load(path.read_text())
+            settings.update(allow_reverse=True,controller=dict(desired_linear_vel=.22),
+                            goal_checker=dict(xy_goal_tolerance=.08))
+            path.write_text(yaml.safe_dump(settings));configure_controllers(config,profiles)
+        planners=config['planner_server']['ros__parameters']
+        self.assertTrue(control['FollowPathCooperative']['allow_reversing'])
+        self.assertTrue(planners['GridBasedCooperative']['allow_reverse_expansion'])
+        self.assertFalse(control['FollowPathRescue']['allow_reversing'])
+        self.assertFalse(planners['GridBasedHeading']['allow_reverse_expansion'])
+        self.assertIsNot(planners['GridBasedHeading'],planners['GridBasedRescue'])
+        planners['GridBasedRescue']['rotation_penalty']=123.
+        self.assertNotEqual(planners['GridBasedHeading']['rotation_penalty'],123.)
+        self.assertEqual(control['FollowPathCooperative']['desired_linear_vel'],.22)
+        self.assertNotEqual(control['FollowPathRescue']['desired_linear_vel'],.22)
+        self.assertEqual(control['cooperative_goal_checker']['xy_goal_tolerance'],.08)
+
     def test_rpp_keeps_position_and_heading_goals_separate(self):
         config=load_navigation(ROOT/'src/edgeai_navigation/config','rpp')
         control=config['controller_server']['ros__parameters']
@@ -28,8 +56,8 @@ class GoalPolicyConfig(unittest.TestCase):
             self.assertTrue(control[name]['use_path_orientations'])
             self.assertFalse(control[name]['allow_reversing'])
         self.assertFalse(control['FollowPath']['rotate_to_goal_heading'])
-        self.assertEqual(CONTROLLERS['frontier'],'FollowPath')
-        self.assertEqual(len(control['controller_plugins']),3)
+        self.assertEqual(CONTROLLERS['frontier'],'FollowPathFrontier')
+        self.assertEqual(len(control['controller_plugins']),5)
         self.assertEqual(config['local_costmap']['local_costmap']['ros__parameters']['global_frame'],
                          config['global_costmap']['global_costmap']['ros__parameters']['global_frame'])
         self.assertEqual(config['behavior_server']['ros__parameters']['local_frame'],'map')

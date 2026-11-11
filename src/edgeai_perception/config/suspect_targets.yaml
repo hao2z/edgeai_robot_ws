@@ -14,6 +14,6 @@ suspect_targets:
     max_image_age_s: 0.5
     sync_slop_s: 0.05
     confirmation_frames: 2
-    candidate_ttl_s: 8.0  # 单帧候选过期时间；多帧候选保留至本次会话结束。
+    candidate_ttl_s: 10.0  # 单帧候选过期时间；多帧候选保留至本次会话结束。
     known_target_radius_m: 0.30
     output_directory: ''

@@ -3,7 +3,7 @@ import sys,unittest
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
 from navigation_config import load_navigation
-from goal_policy import configure_controllers
+from goal_policy import CONTROLLERS, configure_controllers
 from motion_limits import configure_motion_limits
 
 
@@ -24,12 +24,12 @@ class MotionLimits(unittest.TestCase):
         # Exercise a fixed envelope independently of user-adjustable YAML tuning.
         config['velocity_smoother']['ros__parameters'].update(
             max_velocity=[.6,0.,.9],min_velocity=[-.25,0.,-.9])
-        for name in ('FollowPath','FollowPathHeading','FollowPathRescue'):
+        for name in set(CONTROLLERS.values()):
             config['controller_server']['ros__parameters'][name]['reverse_velocity_limit']=.25
         report=configure_motion_limits(config)
-        self.assertEqual(len(report['controllers']),3)
+        self.assertEqual(set(report['controllers']),set(CONTROLLERS.values()))
         control=config['controller_server']['ros__parameters']
-        for name in ('FollowPath','FollowPathHeading','FollowPathRescue'):
+        for name in set(CONTROLLERS.values()):
             follow=control[name]
             self.assertEqual(follow['primary_controller'],'edgeai_navigation::MatchedRPP')
             self.assertEqual(follow['motion_angular_limit'],.9)

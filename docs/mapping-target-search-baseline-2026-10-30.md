@@ -6,7 +6,7 @@
 ## 启动方式
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Controller dwb -Arena competition -Duration 300
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1 -Controller dwb -Arena competition -Duration 300
 ```
 
 ```bash

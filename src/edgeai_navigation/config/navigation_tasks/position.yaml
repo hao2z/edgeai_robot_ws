@@ -1,0 +1,6 @@
+# 普通手动点/换位；参数覆盖公共控制器、规划器和到点检查器。
+require_heading: false
+allow_reverse: true
+controller: {}
+planner: {}
+goal_checker: {}

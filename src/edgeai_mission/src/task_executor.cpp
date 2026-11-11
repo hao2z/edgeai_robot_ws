@@ -140,6 +140,10 @@ int main(int argc,char ** argv)
   factory.registerNodeType<UntilDone>("UntilDone");factory.registerNodeType<RetryTask>("RetryTask");
   factory.registerSimpleCondition("TaskDone",[](BT::TreeNode & node){return std::as_const(node).config().blackboard->get<bool>("complete")?BT::NodeStatus::SUCCESS:BT::NodeStatus::FAILURE;});
   factory.registerSimpleCondition("CorrectionNeeded",[](BT::TreeNode & node){return std::as_const(node).config().blackboard->get<bool>("needs_correction")?BT::NodeStatus::SUCCESS:BT::NodeStatus::FAILURE;});
+  factory.registerSimpleCondition("TaskErrorIs",[](BT::TreeNode & node){
+    return node.getInput<std::string>("category").value()==std::as_const(node).config().blackboard->get<std::string>("retry_kind")?
+      BT::NodeStatus::SUCCESS:BT::NodeStatus::FAILURE;
+  },{BT::InputPort<std::string>("category")});
   std::optional<BT::Tree> tree;
   Clock::time_point begin;
   bool finished=false,okay=false;

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.8)
 project(edgeai_mission)
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+ament_python_install_package(edgeai_tasks)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rosidl_default_generators REQUIRED)

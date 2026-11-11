@@ -2,7 +2,7 @@
 from collections import deque
 import math
 import numpy as np
-from frustum_search import line_clear
+from edgeai_search.frustum_search import line_clear
 
 
 def without_known(hints,registry,radius=.30):
@@ -116,7 +116,7 @@ class ParallelCandidates:
         self.baseline=baseline;self.node=node;self.positions=baseline.positions
         self.used=[];self.used_positions=[];self.active_id=None;self.visits=0
         if camera_provider is None:
-            from search_candidates import camera_model
+            from edgeai_tasks.search_candidates import camera_model
             camera_provider=lambda:camera_model(node)
         self.camera_provider=camera_provider
 

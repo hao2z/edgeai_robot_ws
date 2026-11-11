@@ -18,7 +18,7 @@ from tf2_ros import Buffer, TransformListener, TransformException
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src/edgeai_navigation/scripts'))
-from cooperative_policy import cell,compose
+from edgeai_tasks.cooperative_policy import cell,compose
 
 
 def main():

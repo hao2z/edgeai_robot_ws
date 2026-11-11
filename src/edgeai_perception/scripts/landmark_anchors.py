@@ -14,7 +14,7 @@ def pose_point(pose,point,inverse=False):
 
 
 class AnchorGraph:
-    def __init__(self,frame='map',max_distance=1.):
+    def __init__(self,frame='map',max_distance=3.):
         self.frame,self.max_distance=frame,max_distance
         self.epoch=None;self.revision=0;self.nodes={}
 
@@ -31,15 +31,19 @@ class AnchorGraph:
         self.epoch=snapshot['epoch'];self.revision=snapshot['revision'];self.nodes=nodes
         return changed
 
-    def bind(self,stamp,point,rotation,robot_odom):
+    def bind(self,stamp,point,rotation,robot_odom,frame='odom'):
+        """Bind an image-time observation in map, or legacy odom coordinates."""
+        if frame not in ('map','odom'):raise ValueError('Invalid observation coordinate frame')
         viable=[n for n in self.nodes.values() if
-            math.dist(n['odom'][:2],robot_odom[:2])<=self.max_distance and
-            (abs(n['stamp_ns']-stamp)<=5e9 or math.dist(n['odom'][:2],robot_odom[:2])<=.25)]
+            math.dist(n[frame][:2],robot_odom[:2])<=self.max_distance]
         if not viable:raise ValueError('No nearby SLAM keyframe for target observation')
-        node=min(viable,key=lambda n:abs(n['stamp_ns']-stamp))
+        # Revisited regions need not generate a new keyframe. Age is a tie
+        # breaker, never a rejection; retain the graph epoch/correction link.
+        node=min(viable,key=lambda n:(math.dist(n[frame][:2],robot_odom[:2]),abs(n['stamp_ns']-stamp)))
+        origin=node[frame]
         return dict(kind='slam_graph',epoch=self.epoch,node_id=node['id'],
-            point=pose_point(node['odom'],point,inverse=True),
-            rotation=yaw_rotation(-node['odom'][2])@rotation)
+            point=pose_point(origin,point,inverse=True),
+            rotation=yaw_rotation(-origin[2])@rotation)
 
     def project(self,binding):
         if binding['kind']=='map':return binding['point'].copy(),binding['rotation'].copy()

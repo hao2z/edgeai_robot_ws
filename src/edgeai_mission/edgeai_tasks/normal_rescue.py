@@ -21,8 +21,8 @@ from nav_msgs.msg import Odometry, OccupancyGrid
 from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin, DriveOnHeading
 from action_msgs.msg import GoalStatus
 from tf2_ros import Buffer, TransformListener, TransformException
-from rescue_policy import select_goal, Dwell, rescue_position, RescueAttemptFailed
-from search_log import search_text, goal_text
+from edgeai_tasks.rescue_policy import select_goal, Dwell, rescue_position, RescueAttemptFailed
+from edgeai_tasks.search_log import search_text, goal_text
 
 
 class Rescue(Node):
@@ -180,13 +180,13 @@ class Rescue(Node):
             return dict(goal)
         nominal=select_goal(dict(self.c, target_id=goal['target_id']), registry)
         if 'approach_angle_rad' in goal:
-            from rescue_approach import approach_goal
+            from edgeai_tasks.rescue_approach import approach_goal
             return approach_goal(nominal,self.c,goal['approach_angle_rad'],goal['approach_distance_m'])
         return nominal
 
     def choose_approach(self,goal,exclude_current=False,started=None):
-        from rescue_approach import approaches, approach_goal, failure_reason, should_change_approach
-        from cooperative_policy import footprint_clear
+        from edgeai_tasks.rescue_approach import approaches, approach_goal, failure_reason, should_change_approach
+        from edgeai_tasks.cooperative_policy import footprint_clear
         registry=self.read_target_registry()
         if registry is None:raise RuntimeError('No target estimate for rescue approach selection')
         nominal=select_goal(dict(self.c,target_id=goal['target_id']),registry)
@@ -210,7 +210,7 @@ class Rescue(Node):
                 record.update(feasible=False,reason='footprint_occupied_unknown_or_outside')
                 self.event('APPROACH_REJECTED',f"{goal_text(candidate)}；车身净空不足、未知或越界")
                 continue
-            request=ComputePathToPose.Goal();request.planner_id='GridBasedHeading'
+            request=ComputePathToPose.Goal();request.planner_id='GridBasedRescue'
             request.goal.header.frame_id='map';request.goal.header.stamp=self.get_clock().now().to_msg()
             request.goal.pose.position.x=candidate['x'];request.goal.pose.position.y=candidate['y']
             request.goal.pose.orientation.z=math.sin(candidate['yaw']/2);request.goal.pose.orientation.w=math.cos(candidate['yaw']/2)
@@ -349,7 +349,7 @@ class Rescue(Node):
             if terminal.status == GoalStatus.STATUS_SUCCEEDED and terminal.result.error_code == 0:
                 return started
             failure = f'status={terminal.status}, error={terminal.result.error_code}'
-            from rescue_approach import failure_reason, should_change_approach
+            from edgeai_tasks.rescue_approach import failure_reason, should_change_approach
             record['failure_reason']=failure_reason(terminal.result.error_code)
             self.event('NAV_FAILURE',f"{record['failure_reason']}；{failure}；{terminal.result.error_msg}")
             if selection and terminal.status==GoalStatus.STATUS_ABORTED and should_change_approach(terminal.result.error_code):
@@ -392,7 +392,7 @@ class Rescue(Node):
                 if ('No eligible localized ' not in str(exc) or
                         not self.c.get('search_enabled', False)):
                     raise
-                from target_research import search_target
+                from edgeai_tasks.target_research import search_target
                 goal = search_target(self)
         self.rescue_goal = goal
         return goal
@@ -462,7 +462,7 @@ class Rescue(Node):
                 if sample_time<measurement_after:
                     continue
                 if self.c.get('alignment_enabled',False):
-                    from rescue_alignment import correction, adjust
+                    from edgeai_tasks.rescue_alignment import correction, adjust
                     if correction(self.c,goal,last) is not None:
                         if alignment_started is None:alignment_started=now
                         if (now-alignment_started>self.c.get('alignment_timeout_s',60.) or
@@ -523,7 +523,7 @@ def main():
     result = dict(success=False)
     goal = None
     try:
-        from rescue_policy import validate_config
+        from edgeai_tasks.rescue_policy import validate_config
         validate_config(c)
         node = Rescue(c, directory)
         result = node.execute()

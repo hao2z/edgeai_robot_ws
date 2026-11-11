@@ -24,7 +24,7 @@ from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin, DriveOnHea
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts'))
-from normal_rescue import Rescue
+from edgeai_tasks.normal_rescue import Rescue
 
 
 class FakeNavigation(Node):
@@ -383,7 +383,7 @@ class RescueROS(unittest.TestCase):
             executor.shutdown();thread.join(timeout=5);fake.destroy_node();rclpy.shutdown()
 
     def test_frustum_falls_back_without_calibration(self):
-        from search_candidates import make_candidates
+        from edgeai_tasks.search_candidates import make_candidates
         rclpy.init()
         c=yaml.safe_load((Path(__file__).resolve().parents[2]/'src/edgeai_navigation/config/normal_rescue.yaml').read_text())
         c['search_frustum']=dict(enabled=True)

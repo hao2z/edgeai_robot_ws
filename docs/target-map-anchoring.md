@@ -1,6 +1,6 @@
 # 目标坐标与地图修正
 
-更新：2026-11-10。
+更新：2026-11-11。
 
 建图期间，ArUco历史观测绑定附近SLAM关键帧，不再用当前机器人处的map→odom重新投影全部历史观测。关键帧被回环优化修正后，其绑定的目标位置和法线一起更新，再在map坐标系融合。该方法复用SLAM Toolbox，不向SLAM优化器添加标记约束，也不使用仿真真值。
 
@@ -13,7 +13,15 @@
 - 观测融合：`src/edgeai_perception/scripts/aruco_targets.py`。
 - 配置：`src/edgeai_perception/config/aruco_targets.yaml`，`map_anchoring: slam_graph`；直接使用静态地图时设为`map`。
 
-关键帧选择要求odom平面距离不超过`anchor_max_distance_m`（默认1米），通常还要求时间差不超过5秒；距离不超过0.25米时允许静止期间使用较早帧。没有匹配帧时，观测最多暂存5秒，不退回旧的当前TF投影。地图图实例更换时清除旧图观测。
+新观测先使用图像时刻的map→odom变换定位，通过PnP、TF和融合一致性检查后直接发布map坐标。相机回调只记录图像时刻的位置、方向及机器人位置，关键帧关联由独立定时回调处理。
+
+后台按map平面距离选最近节点，将位置及方向记录为相对于该节点当前map位姿的量。完成关联后，目标跟随该节点的图优化修正，位置与方向一同更新。重访旧区域时，不再将旧节点的里程计修正重复套到新观测上。关联升级替换同一条观测，不增加多帧确认次数。
+
+重新入镜时，新观测继续更新位置、方向和最后观测时间，并重新后台关联。如果新位置偏离旧融合中心超过`outlier_distance_m`，会在`reobservation_window_s`内用`confirmation_observations`条相互一致的观测替换旧位置，记录`TARGET_RELOCALIZED`。零散异常观测仍被过滤，旧位置不会永久挡住经重新确认的新位置。
+
+范围由`anchor_max_distance_m`控制（默认3米）。关键帧年龄不设门槛，时间差只用于距离相同时排序。找不到节点时，保留图像时刻的map坐标并继续发布，后台持续重试仍保留的观测。已删除待绑定超时和独立队列容量参数，存储统一受`max_observations_per_id`及融合窗口约束。输出中的`pending_anchor_observations`说明尚未关联的观测数量。尚未关联的旧观测无法跟随局部图优化修正，新的相机观测会补充当前位置。
+
+后台回调`anchor_processing_hz`和目标发布`target_publish_hz`均默认5Hz，配置在`src/edgeai_perception/config/aruco_targets.yaml`。SLAM图快照周期`anchor_graph_publish_period_s`默认0.5墙钟秒，配置在`src/edgeai_simulation/config/slam_toolbox.yaml`。图快照到达后立即更新关联，目标在下一次发布时反映图优化结果。图像时刻TF不可用时记录`image_time_tf_unavailable`，地图图实例更换时清除旧图目标。
 
 双机器人地图交接前，任务调用`/targets/finalize_map`。它请求`/slam_toolbox/finalize_anchors`暂停新扫描，生成最终地图及关键帧快照，然后固定目标坐标。服务成功后才保存地图、停止SLAM并启动AMCL。此后新观测直接存入静态map坐标，旧观测不随AMCL的map→odom变化。最终化失败时交接报错，不假称坐标已经固定。
 

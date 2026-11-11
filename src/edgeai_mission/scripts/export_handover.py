@@ -7,6 +7,17 @@ import sys
 import yaml
 
 
+def export_preview(map_yaml):
+    """Write a lossless PNG alongside the ROS map, without changing its YAML."""
+    from PIL import Image
+    map_yaml = Path(map_yaml)
+    metadata = yaml.safe_load(map_yaml.read_text())
+    preview = map_yaml.with_suffix('.png')
+    with Image.open(map_yaml.parent/metadata['image']) as image:
+        image.save(preview, format='PNG')
+    return preview
+
+
 def export(directory, map_yaml):
     directory, map_yaml = Path(directory), Path(map_yaml)
     source = directory/'targets.json'
@@ -27,6 +38,12 @@ def export(directory, map_yaml):
                   target_stamp_ns=registry.get('stamp_ns'),
                   note='Development ID/type mapping and geometry; not final official parameters')
     (directory/'task1-output.json').write_text(json.dumps(result, indent=2))
+    # A convenience image must not turn successful map handover into failure.
+    try:
+        preview = export_preview(map_yaml)
+        print(f'地图预览已保存：{preview}', flush=True)
+    except (OSError, ValueError, ImportError) as error:
+        print(f'地图预览生成失败（原始地图已保留）：{error}', file=sys.stderr, flush=True)
 
 
 if __name__ == '__main__':

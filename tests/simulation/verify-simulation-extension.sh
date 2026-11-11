@@ -3,11 +3,9 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 set -eo pipefail
 export PATH="$HOME/.pixi/bin:$PATH"
 export COLUMNS=120 LINES=40
-export GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
 CHECK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Use native WSLg display for sensor rendering, as requested.
-export DISPLAY=:0 QT_QPA_PLATFORM=xcb
-unset XAUTHORITY
+source "$PROJECT_ROOT/scripts/display/configure-desktop.sh"
 if [[ ${EDGEAI_TEST_DISPLAY:-wslg} == vcxsrv ]]; then
     export DISPLAY="$(ip -4 route show default | awk 'NR==1 {print $3}'):1"
     export XAUTHORITY="$PROJECT_ROOT/runtime/vcxsrv.xauth" QT_X11_NO_MITSHM=1
@@ -29,8 +27,15 @@ multi=true
 extras=(--count "$count" --maps)
 if [[ $mode == single ]]; then multi=false; extras+=(--single); fi
 if [[ $mode == motion ]]; then extras+=(--motion); fi
+if [[ ! $count =~ ^[1-4]$ || ! $mode =~ ^(single|multi|motion)$ ]]; then
+    echo 'Usage: verify-simulation-extension.sh [1..4] [single|multi|motion]' >&2; exit 2
+fi
+# Development sensor fixture is intentional: this is not the midterm mission.
+sim_share="$PROJECT_ROOT/src/edgeai_simulation"
 setsid ros2 launch edgeai_simulation simulation_real.launch.py \
   multi_robot:="$multi" robot_count:="$count" gui:=false rviz:=false slam:=true \
+  robots_file:="$sim_share/config/robots.yaml" targets_file:="$sim_share/config/targets.yaml" \
+  world_file:="$sim_share/worlds/empty.sdf" \
   >"$PROJECT_ROOT/tests/results/simulation-extension/launch-$mode-$count.log" 2>&1 &
 sim_pid=$!
 cleanup() {

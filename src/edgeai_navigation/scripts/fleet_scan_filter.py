@@ -16,7 +16,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from tf2_ros import Buffer, TransformListener, TransformException
-from cooperative_policy import compose, relative
+from edgeai_nav.geometry import compose, relative
 
 
 def planar(p):

@@ -32,13 +32,13 @@ Linux队员从 [Linux上手说明](docs/linux-quickstart.md) 开始；统一入�
 Windows/WSL entry points, run from this directory:
 
 中期检查新场地、S1/C1 标记和双机起点使用
-默认运行 `Start-Simulation.ps1`：robot1 探索并完成 S1，随后共享地图定位并执行 C1 双机救援。
-仅查看双机环境用 `Start-Simulation.ps1 -SimulationOnly -Robots 2`，见
+默认任务入口为 `Start-Autonomous-Mission.ps1`：robot1 探索并完成 S1，随后共享地图定位并执行 C1 双机救援。
+仅查看双机环境用 `Start-Simulation.ps1 -Robots 2`（[脚本职责](docs/windows-entrypoints.md)），见
 [中期仿真环境](docs/competition/midterm-environment.md)。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Simulation.ps1
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Exploration.ps1 -Controller rpp -Arena midterm -Duration 3600
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1
+powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1 -Controller rpp -Arena midterm -Duration 3600
 ```
 
 Alternatively, run directly in the Ubuntu-24.04 WSL terminal:

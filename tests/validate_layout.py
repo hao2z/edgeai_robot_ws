@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parents[1]
 for relative in ('src/edgeai_robot_description', 'scripts', 'src/edgeai_navigation',
                  'src/edgeai_simulation', 'src/edgeai_exploration', 'tests/exploration', 'tests/simulation'):
     assert (root/relative).is_dir(), f'Missing workspace directory: {relative}'
-for name in ('Start-Simulation.ps1', 'Start-Autonomous-Exploration.ps1', 'start_sim.sh'):
+for name in ('Start-Simulation.ps1', 'Start-Autonomous-Mission.ps1', 'start_sim.sh'):
     assert (root/name).is_file(), f'Missing entry point: {name}'
 files = list(root.glob('*.ps1'))
 for folder in ('scripts','src','tests/simulation','tests/exploration'):

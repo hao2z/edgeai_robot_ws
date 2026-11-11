@@ -19,10 +19,12 @@ def rescue_position(config,goal,measurement):
 
 
 def validate_config(c):
+    margin=float(c.get('settle_margin_s',0.))
+    if not math.isfinite(margin) or margin<0:raise ValueError('Invalid settle_margin_s')
     retries=c.get('rescue_max_retries',2)
     if isinstance(retries,bool) or not isinstance(retries,int) or not 0<=retries<=10:
         raise ValueError('rescue_max_retries must be an integer in 0..10')
-    from frustum_search import settings
+    from edgeai_search.frustum_search import settings
     settings(c.get('search_frustum',{}))
     approach=c.get('approach_selection',{})
     if not isinstance(approach,dict) or not isinstance(approach.get('enabled',False),bool):
@@ -127,4 +129,4 @@ class Dwell:
             return False
         if self.since is None:
             self.since = now
-        return now-self.since >= c['dwell_s']
+        return now-self.since >= c['dwell_s']+c.get('settle_margin_s',0.)

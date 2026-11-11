@@ -126,9 +126,9 @@ class ActionHandshakeTest(unittest.TestCase):
                 self.assertEqual(dispatched[-1], executions[0].request.pose)
                 self.assertEqual(executions[0].request.pose,request.pose)
                 frontier_tree=ET.parse(executions[0].request.behavior_tree)
-                self.assertEqual(frontier_tree.find('.//ComputePathToPose').get('planner_id'),'GridBased')
-                self.assertEqual(frontier_tree.find('.//FollowPath').get('controller_id'),'FollowPath')
-                self.assertEqual(frontier_tree.find('.//FollowPath').get('goal_checker_id'),'general_goal_checker')
+                self.assertEqual(frontier_tree.find('.//ComputePathToPose').get('planner_id'),'GridBasedFrontier')
+                self.assertEqual(frontier_tree.find('.//FollowPath').get('controller_id'),'FollowPathFrontier')
+                self.assertEqual(frontier_tree.find('.//FollowPath').get('goal_checker_id'),'frontier_goal_checker')
                 second = result(client.send_goal_async(NavigateToPose.Goal()))
                 self.assertTrue(second.accepted)
                 second_result = second.get_result_async()
@@ -181,7 +181,7 @@ class ActionHandshakeTest(unittest.TestCase):
                     pending[-1].set_result(True);self.assertEqual(result(done).status,4)
                     until(lambda: authority.policy.phase=='IDLE')
                 policies=[('general_goal_checker','GridBased'),('heading_goal_checker','GridBasedHeading'),
-                          ('rescue_goal_checker','GridBasedHeading'),('general_goal_checker','GridBased')]
+                          ('rescue_goal_checker','GridBasedRescue'),('general_goal_checker','GridBased')]
                 for handle,(checker,planner) in zip(executions[3:],policies):
                     bound=ET.parse(handle.request.behavior_tree)
                     self.assertEqual(bound.find('.//FollowPath').get('goal_checker_id'),checker)

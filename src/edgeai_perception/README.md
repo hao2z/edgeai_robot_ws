@@ -55,7 +55,7 @@ References: OpenCV ArUco tutorial and solvePnP/IPPE documentation.
 
 ## Startup 360-degree observation task
 
-Windows: append `-Scan360` to `Start-Autonomous-Exploration.ps1`.
+Windows: append `-Scan360` to `Start-Autonomous-Mission.ps1`.
 Linux: append `--scan360` to `scripts/simulation/start-autonomous-exploration.sh`.
 
 This is an optional startup task, not a periodic scheduler. Authority starts in

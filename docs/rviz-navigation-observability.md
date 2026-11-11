@@ -3,7 +3,7 @@
 默认视图与日志已精简，当前入口行为见 [日常观察与诊断输出](observation-output.md)。
 下表包含可选诊断显示；全局代价地图、全局轮廓和深度图不再默认显示。
 
-`Start-Autonomous-Exploration.ps1` 自动加载这些显示，并启动只读诊断节点。
+`Start-Autonomous-Mission.ps1` 自动加载这些显示，并启动只读诊断节点。
 所有活动节点使用Gazebo `/clock`。诊断节点不发布速度、位姿估计或TF，不参与控制。
 
 | 显示 | 含义 |

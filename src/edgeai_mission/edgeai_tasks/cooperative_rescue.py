@@ -22,13 +22,33 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger, Empty
 from lifecycle_msgs.srv import ChangeState, GetState
 from lifecycle_msgs.msg import State, Transition
-from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin
+from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin, DriveOnHeading, BackUp
+from nav2_msgs.srv import GetCostmap
 from tf2_ros import Buffer, TransformListener, TransformException, TransformBroadcaster
 import yaml
 
-from cooperative_policy import (compose, relative, cell, parking_pairs, JointDwell,
+from edgeai_tasks.cooperative_policy import (compose, relative, cell, parking_pairs, JointDwell,
                                 rescue_yaw_error, path_clear_of_peer)
-from fleet_config import namespaced_config, configure_peer_costmaps
+from edgeai_nav.fleet_config import namespaced_config, configure_peer_costmaps, parking_geometry
+
+
+class PreplanStartOccupied(RuntimeError):
+    category='start_occupied'
+
+
+def validate_preplan_recovery(settings):
+    if not settings.get('enabled',False):return
+    for key in ('speed_mps','time_allowance_s','action_timeout_s','min_progress_m','min_progress_rad'):
+        if not math.isfinite(float(settings.get(key,0.))) or settings.get(key,0.)<=0:
+            raise ValueError('Invalid preplan_recovery.'+key)
+    motions=settings.get('motions',[])
+    if not motions:raise ValueError('preplan_recovery.motions is empty')
+    for motion in motions:
+        kind=motion.get('kind')
+        if kind not in ('spin','backup','forward','escape'):raise ValueError('Unknown preplan recovery motion')
+        value=float(motion.get('angle_rad' if kind=='spin' else 'distance_m',0.))
+        if not math.isfinite(value) or value==0 or (kind=='backup' and value>0) or (kind=='forward' and value<0):
+            raise ValueError('Invalid preplan recovery motion direction/distance')
 
 
 def pose_value(p):
@@ -40,6 +60,9 @@ class CooperativeRescue(Node):
     def __init__(self,directory,config):
         super().__init__('cooperative_rescue')
         self.directory,self.c=Path(directory),config
+        margin=float(config.get('settle_margin_s',0.))
+        if not math.isfinite(margin) or margin<0:raise ValueError('Invalid settle_margin_s')
+        validate_preplan_recovery(config.get('preplan_recovery',{}))
         self.buffer=Buffer();self.listener=TransformListener(self.buffer,self)
         self.seed_broadcaster=TransformBroadcaster(self);self.seed_enabled=True
         self.mapping_start_pose=None
@@ -52,6 +75,7 @@ class CooperativeRescue(Node):
         self.state_pub=self.create_publisher(String,'/cooperative_rescue/state',
             QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.initial_pubs={};self.nav={};self.plan={};self.spin={};self.manual={};self.stop={}
+        self.escape={};self.backup={};self.preplan_blocked={};self.preplan_recovery_history={}
         self.peer_poses_enabled=False;self.peer_pubs={}
         for ns in ('','robot2'):
             topic=lambda name:'/'+(ns+'/' if ns else '')+name
@@ -65,9 +89,13 @@ class CooperativeRescue(Node):
             self.initial_pubs[ns]=self.create_publisher(PoseWithCovarianceStamped,topic('initialpose'),1)
             if self.c.get('peer_costmap',{}).get('enabled',True):
                 self.peer_pubs[ns]=self.create_publisher(PoseStamped,'/cooperative_rescue/peer_pose/'+(ns or 'robot1'),1)
-            self.nav[ns]=ActionClient(self,NavigateToPose,topic('navigation/rescue_to_pose'))
+            self.nav[ns]=ActionClient(self,NavigateToPose,topic('navigation/cooperative_to_pose'))
             self.plan[ns]=ActionClient(self,ComputePathToPose,topic('navigation_backend/compute_path_to_pose'))
             self.spin[ns]=ActionClient(self,Spin,topic('navigation_backend/spin'))
+            self.escape[ns]=ActionClient(self,DriveOnHeading,topic('navigation_backend/escape_occupied'))
+            self.backup[ns]=ActionClient(self,BackUp,topic('navigation_backend/backup'))
+            if not hasattr(self,'advance'):self.advance={}
+            self.advance[ns]=ActionClient(self,DriveOnHeading,topic('navigation_backend/drive_on_heading'))
             self.manual[ns]=self.create_client(SetBool,topic('navigation_authority/set_manual'))
             self.stop[ns]=self.create_client(Trigger,topic('navigation_authority/stop'))
             self.nomotion[ns]=self.create_client(Empty,topic('request_nomotion_update'))
@@ -511,7 +539,77 @@ class CooperativeRescue(Node):
         self.target=target;self.target_ready=True
         return changed
 
+    def record_occupied_costmap(self,ns,pose,error):
+        """One bounded crop per robot/5 sim seconds; no extra subscriptions."""
+        recorded=getattr(self,'occupied_recorded',{})
+        if self.now()-recorded.get(ns,-100.)<5.:return
+        self.occupied_recorded=recorded;recorded[ns]=self.now()
+        client=self.create_client(GetCostmap,('/'+ns if ns else '')+'/global_costmap/get_costmap')
+        try:
+            if not client.service_is_ready():return
+            grid=self.service(client,GetCostmap.Request(),2.).map
+            if grid.header.frame_id!='map':return
+            info=grid.metadata;origin=pose_value(info.origin)
+            local=relative(origin,pose)
+            cx,cy=math.floor(local[0]/info.resolution),math.floor(local[1]/info.resolution)
+            reach=math.ceil(.6/info.resolution)
+            x0,x1=max(0,cx-reach),min(info.size_x,cx+reach+1)
+            y0,y1=max(0,cy-reach),min(info.size_y,cy+reach+1)
+            from edgeai_tasks.cooperative_policy import footprint_clear,separated
+            peer=self.tf_pose('base_footprint' if ns else 'robot2/base_footprint')
+            record=dict(sim_time=self.now(),robot=ns or 'robot1',error=error,pose=pose,
+                        peer_pose=peer,physical_bodies_separated=separated(pose,peer,self.footprint,0.),
+                        padded_bodies_separated=separated(pose,peer,self.footprint,self.c.get('footprint_padding_m',.01)),
+                        static_start_clear=footprint_clear(self.map,pose,self.footprint,self.c.get('footprint_padding_m',.01)),
+                        footprint_padding_m=self.c.get('footprint_padding_m'),
+                        parking_peer_clearance_m=self.c.get('parking_peer_clearance_m'),
+                        resolution=info.resolution,origin=origin,crop_origin_cell=[x0,y0],
+                        size=[max(0,x1-x0),max(0,y1-y0)],
+                        costs=[list(grid.data[y*info.size_x+x0:y*info.size_x+x1]) for y in range(y0,y1)])
+            path=self.directory/('occupied-costmap-'+(ns or 'robot1')+'.json')
+            path.write_text(json.dumps(record))
+            self.event('OCCUPIED_DIAGNOSTIC',robot=ns or 'robot1',static_start_clear=record['static_start_clear'],file=path.name)
+        except (RuntimeError,ValueError,OSError,TransformException) as error:
+            self.event('OCCUPIED_DIAGNOSTIC_UNAVAILABLE',robot=ns or 'robot1',reason=str(error))
+        finally:self.destroy_client(client)
+
+    def recover_preplan_start(self):
+        settings=self.c.get('preplan_recovery',{})
+        if not settings.get('enabled',False) or not self.preplan_blocked:
+            raise PreplanStartOccupied('Preplan start recovery disabled or no blocked robot')
+        for ns in self.preplan_blocked:
+            history=self.preplan_recovery_history.setdefault(ns,[])
+            moved=False
+            for index,motion in enumerate(settings['motions']):
+                if index in history:continue
+                history.append(index)
+                before=self.tf_pose((ns+'/' if ns else '')+'base_footprint')
+                kind=motion['kind']
+                if kind=='spin':
+                    request=Spin.Goal();request.target_yaw=float(motion['angle_rad']);client=self.spin[ns]
+                else:
+                    request=BackUp.Goal() if kind=='backup' else DriveOnHeading.Goal()
+                    request.target.x=float(motion['distance_m']);request.speed=float(settings['speed_mps'])
+                    client=self.backup[ns] if kind=='backup' else self.escape[ns] if kind=='escape' else self.advance[ns]
+                request.time_allowance=rclpy.duration.Duration(seconds=float(settings['time_allowance_s'])).to_msg()
+                self.event('PREPLAN_RECOVERY_STARTED',robot=ns or 'robot1',motion=motion,attempt=len(history))
+                try:terminal=self.action(client,request,float(settings['action_timeout_s']))
+                except RuntimeError as error:
+                    raise PreplanStartOccupied('Preplan recovery did not complete: '+str(error)) from error
+                if terminal.status==5:
+                    error=RuntimeError('Preplan recovery canceled externally');error.category='fatal';raise error
+                after=self.tf_pose((ns+'/' if ns else '')+'base_footprint')
+                distance=math.dist(before[:2],after[:2]);angle=abs(math.remainder(after[2]-before[2],2*math.pi))
+                moved=(terminal.status==4 and terminal.result.error_code==0 and
+                       (distance>=settings['min_progress_m'] or angle>=settings['min_progress_rad']))
+                self.event('PREPLAN_RECOVERY_RESULT',robot=ns or 'robot1',status=terminal.status,
+                           error=terminal.result.error_code,distance_m=distance,angle_rad=angle,progress=moved)
+                if moved:break
+            if not moved:raise PreplanStartOccupied(f'{ns or "robot1"}: no remaining safe preplan recovery with progress')
+        self.preplan_blocked={}
+
     def select_parking_pair(self,locked=None,excluded=None,settled=()):
+        self.preplan_blocked={}
         pairs=parking_pairs(self.map,self.target,self.footprint,self.c)
         robots=('','robot2')
         poses={ns:self.tf_pose((ns+'/' if ns else '')+'base_footprint') for ns in robots}
@@ -523,7 +621,7 @@ class CooperativeRescue(Node):
                 math.dist(pair[i][:2],old[:2])<.04
                 for i,ns in enumerate(('','robot2')) for old in excluded.get(ns,[]))]
         if locked:
-            from cooperative_policy import footprint_clear,separated
+            from edgeai_tasks.cooperative_policy import footprint_clear,separated
             constrained=[]
             for pair in pairs:
                 pair=[list(p) for p in pair]
@@ -531,14 +629,15 @@ class CooperativeRescue(Node):
                        for key,pose in locked.items() if ns==key):continue
                 for i,ns in enumerate(('','robot2')):
                     if ns in locked:pair[i]=list(locked[ns])
-                if (all(footprint_clear(self.map,p,self.footprint) for p in pair) and
-                    math.dist(pair[0][:2],pair[1][:2])>=self.c['min_separation_m'] and separated(*pair,self.footprint)):
+                if (all(footprint_clear(self.map,p,self.footprint,self.c.get('footprint_padding_m',.01)) for p in pair) and
+                    math.dist(pair[0][:2],pair[1][:2])>=self.c['min_separation_m'] and
+                    separated(*pair,self.footprint,self.c.get('parking_peer_clearance_m',.08)/2)):
                     constrained.append(pair)
             pairs=constrained
         # Reachability is checked through each robot's native planner before dispatch.
         pairs.sort(key=lambda pair:sum(math.dist(poses[ns][:2],p[:2]) for ns,p in zip(robots,pair)))
         selected=None
-        margin=float(self.c.get('parked_peer_clearance_m',.05))
+        margin=float(self.c.get('parking_peer_clearance_m',self.c.get('parked_peer_clearance_m',.05)))
         if not math.isfinite(margin) or margin<0:raise ValueError('Invalid C1 parked-peer clearance')
         plans={}
         for pair in list({tuple(map(tuple,pair)):pair for pair in pairs}.values())[:12]:
@@ -548,11 +647,15 @@ class CooperativeRescue(Node):
                 peer=robots[1-i];parked=poses[peer] if peer in settled else pair[1-i]
                 key=(ns,tuple(p))
                 if key not in plans:
-                    plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedHeading'),15.)
+                    plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedCooperative'),15.)
                     result=plan.result
                     if plan.status!=4 or result.error_code!=0 or not result.path.poses or result.path.header.frame_id!='map':
                         self.event('PLAN_REJECTED',robot=ns or 'robot1',start=poses[ns],goal=p,error=result.error_code,
                                    message=getattr(result,'error_msg','') or 'No usable path in map frame')
+                        if result.error_code in (205,206):self.record_occupied_costmap(ns,poses[ns],result.error_code)
+                        if result.error_code==ComputePathToPose.Result.START_OCCUPIED:
+                            self.preplan_blocked={ns:dict(start=poses[ns],goal=p)}
+                            raise PreplanStartOccupied(f'{ns or "robot1"}: preplan start occupied; recovery required before selecting another goal')
                         plans[key]=None
                     else:plans[key]=[pose_value(s.pose) for s in result.path.poses]
                 path=plans[key]
@@ -576,15 +679,15 @@ class CooperativeRescue(Node):
         self.refresh_target()
         if not self.target_ready:raise RuntimeError('C1 estimate unavailable before navigation')
         nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text())
-        self.footprint=json.loads(nav['local_costmap']['local_costmap']['ros__parameters']['footprint'])
+        self.footprint=parking_geometry(nav,self.c)
         selected=self.select_parking_pair()
         self.navigate_pair(selected)
         self.refresh_target(force=True)
         self.event('JOINT_DWELL',target_id=target['id'])
-        dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']);last_event=-100.;last_sample=None;repairs=0
+        dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.));last_event=-100.;last_sample=None;repairs=0
         while time.monotonic()<self.deadline:
             self.wait(lambda:True,1.,True);now=self.now();distances=[];valid=True
-            if self.refresh_target():dwell=JointDwell(self.c['radius_m'],self.c['dwell_s'])
+            if self.refresh_target():dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.))
             target=self.target
             # Compare at one common, fresh odometry timestamp.
             stamp=min(Time.from_msg(m.header.stamp).nanoseconds for m in self.odom.values())
@@ -643,7 +746,7 @@ class CooperativeRescue(Node):
                 selected=self.select_parking_pair()
                 self.navigate_pair(selected)
                 self.refresh_target(force=True)
-                dwell=JointDwell(self.c['radius_m'],self.c['dwell_s'])
+                dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.))
         raise RuntimeError('Joint rescue completion timeout')
 
     def close(self):

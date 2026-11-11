@@ -154,8 +154,8 @@ local_costmap:
           obstacle_min_range: 0.0
       footprint: '[[0.1125, 0.165], [-0.3125, 0.165], [-0.3125, -0.165], [0.1125,
         -0.165]]'
-      # 车身四边额外净空，m；减小会降低安全余量，勿用来掩盖跟踪问题。
-      footprint_padding: 0.005
+      # 统一车身硬边距，m：全局、局部、对方车身及救援筛选共用；软膨胀单独调节。
+      footprint_padding: &body_padding 0.01
 # 全局地图：静态地图 + 原始激光动态障碍，最后统一膨胀。
 global_costmap:
   global_costmap:
@@ -200,8 +200,7 @@ global_costmap:
       transform_tolerance: 0.2
       footprint: '[[0.1125, 0.165], [-0.3125, 0.165], [-0.3125, -0.165], [0.1125,
         -0.165]]'
-      footprint_padding: 0.01
-# Lattice启动时全局padding至少0.02m，给跟踪留下比局部多1cm的余量。
+      footprint_padding: *body_padding
 map_saver:
   ros__parameters:
     save_map_timeout: 5.0
