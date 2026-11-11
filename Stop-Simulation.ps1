@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Simulation cleanup failed.' }
 if ($KeepTerminals) { return }
 $processes = @(Get-CimInstance Win32_Process)
 $scriptNames = @('Open-ROS-Terminal.ps1', 'Open-ROS-Monitor.ps1',
-    'Start-Autonomous-Mission.ps1', 'Start-Simulation.ps1',
+    'Start-Autonomous-Mission.ps1', 'Start-Midterm-Check.ps1', 'Start-Simulation.ps1',
     'Start-Autonomous-Exploration.ps1', 'Start-SimulationOnly.ps1')
 $paths = $scriptNames | ForEach-Object { [regex]::Escape((Join-Path $PSScriptRoot $_)) }
 $pathPattern = '(?i)(?:' + ($paths -join '|') + ')(?:"|\s|$)'

@@ -98,7 +98,7 @@ raise SystemExit(0 if okay or c.get('false_zero_exit') else 1)
 
 
 class MissionROS(unittest.TestCase):
-    def exercise(self, *, cooperative=False, rescue=True, fail=None, block=None, timeout=5., complete=True, dead_process=False, omit_result=None, false_zero_exit=False, owned_navigation=False, scenario=None, kill_task_server=False, known_cells=100, grow_map=False, publish_map=True):
+    def exercise(self, *, cooperative=False, rescue=True, fail=None, block=None, timeout=5., complete=True, dead_process=False, omit_result=None, false_zero_exit=False, owned_navigation=False, scenario=None, kill_task_server=False, known_cells=100, grow_map=False, publish_map=True, tree='integrated.xml'):
         rclpy.init();peer=rclpy.create_node('mission_test_peer')
         publisher=peer.create_publisher(Empty,'/exploration_complete',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
         maps=peer.create_publisher(OccupancyGrid,'/map',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -125,12 +125,15 @@ class MissionROS(unittest.TestCase):
                 c=dict(directory=str(d),project_root=str(ROOT),cooperative=cooperative,rescue_enabled=rescue,
                     observation=observation_test,backend='frontier',initial_relative_pose=[0.,-.6,0.],
                     required_targets=[dict(id=1,type='normal')]+([dict(id=2,type='cooperative')] if cooperative else []),
-                    worker_script=str(worker),tree=str(ROOT/'src/edgeai_mission/config/integrated.xml'),
+                    worker_script=str(worker),tree=str(ROOT/'src/edgeai_mission/config'/tree),
                     unit_worker_script=str(units),task_trees={t:str(ROOT/'src/edgeai_mission/config/tasks'/f'{t}.xml') for t in ('find_targets','s1','c1')},
                     exploration_timeout_s=timeout,wall_timeout_s=25.,fail_step=fail,
                     block_step=block or ('supplement_mapping' if scenario in ('frontier_during_supplement','monitor_missing') else None),
                     mapping=dict(min_known_area_m2=18.,supplement_attempts=3,reposition_timeout_s=60.),
                     omit_result=omit_result,false_zero_exit=false_zero_exit,owned_navigation=owned_navigation,scenario=scenario)
+                if tree=='midterm_part2.xml':
+                    c.update(demonstration_part='part2',initial_pose_seed=False,external_navigation=True)
+                if scenario=='missing_mapping_reference':c['initial_pose_seed']=False
                 config=d/'config.json';config.write_text(json.dumps(c));(d/'ready').touch()
                 if observation_test:
                     (d/'observation-scan-runtime.yaml').write_text('observation_scan:\n  ros__parameters:\n    use_sim_time: false\n')
@@ -166,7 +169,7 @@ class MissionROS(unittest.TestCase):
                             else:estimates[1]['yaw']=0.
                             targets.publish(String(data=json.dumps(dict(frame_id='map',targets=estimates))))
                         can_complete='OBSERVATION_SUPPRESSED:' in text
-                    if complete and can_complete and 'EXPLORING' in events and (not cooperative or (d/'mission-reference.json').exists()):publisher.publish(Empty())
+                    if complete and can_complete and 'EXPLORING' in events and (not cooperative or not c.get('initial_pose_seed',True) or (d/'mission-reference.json').exists()):publisher.publish(Empty())
                     if block and (d/'calls.jsonl').exists() and block in (d/'calls.jsonl').read_text() and cancel_sent is None:
                         if kill_task_server:
                             record=json.loads((d/f'task-{block}-worker-process.json').read_text())
@@ -187,7 +190,8 @@ class MissionROS(unittest.TestCase):
                     events.extend(dict(phase='UNIT_CALL',**json.loads(line)) for line in (d/'unit-calls.jsonl').read_text().splitlines())
                 self.assertTrue(stops,'No authority stop at mission end')
                 if block:self.assertIsNotNone(cancel_sent)
-                if cooperative:self.assertTrue((d/'mission-reference.json').exists())
+                if cooperative and c.get('initial_pose_seed',True):self.assertTrue((d/'mission-reference.json').exists())
+                if not c.get('initial_pose_seed',True):self.assertFalse((d/'mission-reference.json').exists())
                 if owned_navigation:
                     pid=json.loads((d/'mission-owned-navigation.json').read_text())['pid']
                     path=Path('/proc')/str(pid)/'stat'
@@ -202,6 +206,30 @@ class MissionROS(unittest.TestCase):
     def test_fixed_single_robot_order(self):
         result,calls,_=self.exercise()
         self.assertTrue(result['success']);self.assertEqual(calls,['quiesce','find_targets','save_map','s1'])
+
+    def test_midterm_part1_stops_after_mapping_and_target_search(self):
+        result,calls,events=self.exercise(cooperative=True,tree='midterm_part1.xml',scenario='missing_c1')
+        self.assertTrue(result['success'],result)
+        self.assertEqual(calls,['quiesce','find_targets','save_map'])
+        self.assertTrue(any(e.get('task')=='find_targets' and e.get('unit')=='search_target' for e in events))
+        self.assertTrue(any(e['phase']=='EXPLORING' and e.get('wall_monotonic_s',0)>0 for e in events))
+
+    def test_midterm_part1_exhausted_search_fails_before_map_export(self):
+        result,calls,_=self.exercise(cooperative=True,tree='midterm_part1.xml',scenario='search_exhausted')
+        self.assertFalse(result['success'])
+        self.assertEqual(calls,['quiesce','find_targets'])
+
+    def test_midterm_part2_runs_rescues_without_mapping_or_search(self):
+        result,calls,_=self.exercise(cooperative=True,tree='midterm_part2.xml',complete=False,publish_map=False)
+        self.assertTrue(result['success'],result)
+        self.assertEqual(calls,['s1','c1'])
+        self.assertGreater(result['completed_wall_monotonic_s'],0)
+
+    def test_integrated_c1_requires_mapping_reference(self):
+        result,calls,_=self.exercise(cooperative=True,scenario='missing_mapping_reference')
+        self.assertFalse(result['success'])
+        self.assertEqual(result['reason'],'Missing mapping-start reference')
+        self.assertNotIn('c1',calls)
 
     def test_suppresses_observation_only_after_both_targets_are_localized(self):
         result,calls,events=self.exercise(cooperative=True,scenario='observation_target_gate',timeout=15.)

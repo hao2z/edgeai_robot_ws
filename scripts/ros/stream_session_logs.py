@@ -12,6 +12,9 @@ from collections import Counter, defaultdict
 from mission_display import mission_description
 
 COOPERATIVE = dict(
+    TEST_SETUP='准备独立地图与双车粗略起点', AMCL_ACTIVE='AMCL已激活',
+    INITIAL_POSE_SENT='已下发粗略初始位姿', AUTHORITY_ACQUIRED='已取得导航控制权',
+    LOCALIZATION_FAILED='双车定位未收敛',
     WAITING_S1='等待 S1 完成', HANDOVER_REQUESTED='准备共享地图交接', HANDOVER='开始共享地图交接',
     NAVIGATION_WAITING='等待导航组件激活', NAVIGATION_READY='双机导航已就绪',
     LOCALIZING='正在校准双机定位', LOCALIZED='双机定位已通过',

@@ -80,6 +80,23 @@ class FakeFleet(Node):
 
 
 class CooperativeROS(unittest.TestCase):
+    def test_amcl_initial_state_query_retries_lost_response(self):
+        from unittest.mock import Mock
+        client=Mock(srv_name='/amcl/get_state')
+        lost=Mock();lost.done.return_value=False
+        ready=Mock();ready.done.return_value=True
+        ready.result.return_value=SimpleNamespace(current_state=SimpleNamespace(id=State.PRIMARY_STATE_ACTIVE))
+        client.call_async.side_effect=[lost,ready]
+        node=SimpleNamespace(deadline=time.monotonic()+10.,process=None,event=Mock())
+        calls=[0]
+        def wait(predicate,timeout):
+            calls[0]+=1
+            if calls[0]==2:raise RuntimeError('Cooperative phase timeout')
+        node.wait=wait
+        CooperativeRescue.wait_amcl_active(node,client)
+        self.assertEqual(client.call_async.call_count,2)
+        client.remove_pending_request.assert_called_once_with(lost)
+
     def activation_gate(self,activate):
         rclpy.init();peer=Node('activation_peer');behavior=LifecycleNode('behavior_server',namespace='robot2')
         behavior.trigger_configure()

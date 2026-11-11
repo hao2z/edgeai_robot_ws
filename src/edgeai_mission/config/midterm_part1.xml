@@ -1,0 +1,7 @@
+<root BTCPP_format="4" main_tree_to_execute="MidtermPart1">
+  <include path="integrated.xml"/>
+  <BehaviorTree ID="MidtermPart1">
+    <!-- Includes find_targets: both S1/C1 must be localized before saving and Part2. -->
+    <SubTree ID="MappingAndTargetSearch" mapping_attempts="{mapping_attempts}"/>
+  </BehaviorTree>
+</root>

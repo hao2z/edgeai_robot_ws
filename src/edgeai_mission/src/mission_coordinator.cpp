@@ -72,6 +72,7 @@ public:
   {
     config = declare_parameter<std::string>("config", "");
     c = readJson(config); directory = c.at("directory").get<std::string>();
+    seed_enabled = c.value("initial_pose_seed", true);
     fs::create_directories(directory);
     state = create_publisher<std_msgs::msg::String>("/mission/state", rclcpp::QoS(1).transient_local());
     if (c.at("observation").get<bool>() && c.at("rescue_enabled").get<bool>()) {
@@ -135,6 +136,7 @@ public:
   void event(const std::string & name, Json extra = Json::object())
   {
     phase = name; extra["phase"] = name; extra["sim_time"] = now().seconds();
+    extra["wall_monotonic_s"] = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
     std_msgs::msg::String m; m.data = extra.dump(); state->publish(m);
     std::ofstream(directory/"mission-events.jsonl", std::ios::app) << m.data << '\n';
     RCLCPP_INFO(get_logger(), "MISSION_%s: %s", name.c_str(), m.data.c_str());
@@ -221,7 +223,8 @@ public:
         if (Clock::now()-launched > std::chrono::seconds(90)) {n.reason = "Startup readiness timeout"; return BT::NodeStatus::FAILURE;}
         return BT::NodeStatus::RUNNING;
       }
-      ready = true; started = Clock::now(); n.event("EXPLORING");
+      ready = true; started = Clock::now();
+      n.event("EXPLORING");
       if (!n.exploration_started) {n.exploration_started = started;}
       if (n.c.at("observation").get<bool>()) {
         fs::path root = n.c.at("project_root").get<std::string>();
@@ -330,7 +333,7 @@ public:
   {
     task=getInput<std::string>("task").value();started=Clock::now();sent={};result={};handle.reset();
     if(task!="find_targets" && task!="s1" && task!="c1") {throw std::runtime_error("Unregistered task");}
-    if(task=="c1") {
+    if(task=="c1" && n.c.value("demonstration_part", "integrated") != "part2") {
       if(!n.start_map) {n.reason="Missing mapping-start reference";return BT::NodeStatus::FAILURE;}
       n.seed_enabled=false;
     }
@@ -451,6 +454,8 @@ int main(int argc, char ** argv)
   } catch (const std::exception & error) {
     if (n) {n->reason = error.what();} else {std::cerr << error.what() << std::endl;}
   }
+  const double completed_wall = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+  if (n) {n->event("FINISHED", {{"success", success}, {"completed_wall_monotonic_s", completed_wall}});}
   if (tree) {tree->haltTree();}
   if (n) {
     n->observation.stop();
@@ -472,7 +477,7 @@ int main(int argc, char ** argv)
         }
       }
     }
-    Json result{{"success", success}, {"reason", success ? "Completed" : n->reason}, {"scheduler", "fixed_rules"}, {"sim_time", n->now().seconds()}};
+    Json result{{"success", success}, {"reason", success ? "Completed" : n->reason}, {"scheduler", "fixed_rules"}, {"sim_time", n->now().seconds()}, {"completed_wall_monotonic_s", completed_wall}};
     n->event("RESULT", result); writeJson(n->directory/"mission-result.json", result);
   }
   tree.reset(); n.reset();

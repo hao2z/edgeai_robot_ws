@@ -1,6 +1,29 @@
-﻿param([Parameter(Mandatory=$true)][string]$SessionDirectory, [switch]$SimulationOnly)
+﻿param([Parameter(Mandatory=$true)][string]$SessionDirectory, [switch]$SimulationOnly, [switch]$Midterm)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../ros/windows-host-tools.ps1')
+if ($Midterm) {
+    $children = @()
+    $started = @{}
+    try {
+        while (-not (Test-Path (Join-Path $SessionDirectory 'exit-code.txt'))) {
+            foreach ($part in @('part1','part2')) {
+                $partDirectory = Join-Path $SessionDirectory $part
+                if (-not $started.ContainsKey($part) -and (Test-Path $partDirectory)) {
+                    $children += Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @(
+                        '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",
+                        '-SessionDirectory',"`"$partDirectory`"")
+                    $started[$part] = $true
+                }
+            }
+            Start-Sleep -Seconds 1
+        }
+    } finally {
+        foreach ($child in $children) {
+            if (-not $child.WaitForExit(3000)) { $child.Kill() }
+        }
+    }
+    return
+}
 $screenshots = Join-Path $SessionDirectory 'screenshots'
 [void][IO.Directory]::CreateDirectory($screenshots)
 $capture = Join-Path $PSScriptRoot 'Capture-SimulationWindow.ps1'

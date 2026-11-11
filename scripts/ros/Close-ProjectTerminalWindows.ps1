@@ -13,7 +13,7 @@ $tabCondition = [Windows.Automation.PropertyCondition]::new(
     [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::TabItem)
 $buttonCondition = [Windows.Automation.PropertyCondition]::new(
     [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
-$pattern = '^EdgeAI (?:ROS Commands|ROS Live Monitor|Autonomous Exploration|Simulation)(?:\s*\||$)'
+$pattern = '^EdgeAI (?:ROS Commands|ROS Live Monitor|Autonomous Exploration|Midterm Check|Simulation)(?:\s*\||$)'
 $closed = 0
 foreach ($window in $root.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
     try {

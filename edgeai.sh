@@ -10,6 +10,7 @@ case "$command" in
         cat <<'HELP'
 Usage: bash edgeai.sh COMMAND [options]
   mission       Explore, rescue S1, then cooperative C1 (RPP, 3600s)
+  midterm       Independent Part1 then Part2; shared 780s wall budget
   navigation    Static truth-map navigation; select goals manually in RViz
   cooperative   Static-map C1 diagnostic (--params FILE, or latest run)
   simulation    Simulator only (ros2 launch arguments, e.g. robot_count:=2)
@@ -30,6 +31,7 @@ HELP
         if [[ $command == check ]]; then options+=(--check); fi
         exec bash scripts/simulation/start-autonomous-exploration.sh "${options[@]}" "$@"
         ;;
+    midterm) exec bash scripts/simulation/start-midterm-check.sh "$@" ;;
     cooperative) exec bash scripts/simulation/start-cooperative-test.sh "$@" ;;
     simulation)
         source scripts/display/configure-desktop.sh

@@ -57,8 +57,8 @@ def pose_value(p):
 
 
 class CooperativeRescue(Node):
-    def __init__(self,directory,config):
-        super().__init__('cooperative_rescue')
+    def __init__(self,directory,config,*,node_name='cooperative_rescue'):
+        super().__init__(node_name)
         self.directory,self.c=Path(directory),config
         margin=float(config.get('settle_margin_s',0.))
         if not math.isfinite(margin) or margin<0:raise ValueError('Invalid settle_margin_s')
@@ -343,6 +343,13 @@ class CooperativeRescue(Node):
         self.measurement_after=self.now()
 
     def handover(self):
+        if getattr(self,'external_navigation',False):
+            self.deadline=time.monotonic()+self.c['wall_timeout_s']
+            self.targets=json.loads((self.directory/'cooperative-targets.json').read_text())
+            for ns in ('','robot2'):self.acquire_manual(ns)
+            self.initialized=True
+            self.event('HANDOVER_REQUESTED',source='prepared Part2 navigation')
+            return
         if getattr(self,'static_test',False):
             self.deadline=time.monotonic()+self.c['wall_timeout_s']
             self.targets=json.loads((self.directory/'cooperative-targets.json').read_text())
@@ -418,19 +425,45 @@ class CooperativeRescue(Node):
             tmp.write_text(json.dumps(owned));tmp.replace(path)
         for ns,pose in zip(('','robot2'),(root_pose,second)):
             state_client=self.create_client(GetState,'/'+(ns+'/' if ns else '')+'amcl/get_state')
-            active_by=time.monotonic()+40.
-            while self.service(state_client,GetState.Request()).current_state.id!=3:
-                if time.monotonic()>active_by:raise RuntimeError('AMCL activation timeout')
-                next_poll=time.monotonic()+.2
-                self.wait(lambda:time.monotonic()>=next_poll,1.)
+            try:self.wait_amcl_active(state_client)
+            finally:self.destroy_client(state_client)
             self.wait(lambda n=ns:self.initial_pubs[n].get_subscription_count()>0,30.)
+            self.wait(lambda:self.now()>0 and ns in self.odom and self.map is not None,20.)
             msg=PoseWithCovarianceStamped();msg.header.frame_id='map';msg.header.stamp=self.get_clock().now().to_msg()
             msg.pose.pose=self.goal_pose(pose).pose
             msg.pose.covariance[0]=msg.pose.covariance[7]=self.c['initial_std_xy_m']**2
             msg.pose.covariance[35]=self.c['initial_std_yaw_rad']**2
             self.initial_pubs[ns].publish(msg)
+            self.event('INITIAL_POSE_SENT',robot=ns or 'robot1',pose=pose,
+                       std_xy_m=self.c['initial_std_xy_m'],std_yaw_rad=self.c['initial_std_yaw_rad'])
             self.acquire_manual(ns)
         self.initialized=True
+
+    def wait_amcl_active(self,client):
+        # The first GetState response may be lost while AMCL is being configured.
+        # Retry read-only discovery within one budget, before publishing initialpose.
+        active_by=min(self.deadline,time.monotonic()+40.)
+        last='state unavailable'
+        while time.monotonic()<active_by:
+            future=None
+            try:
+                self.wait(client.service_is_ready,min(2.,active_by-time.monotonic()))
+                future=client.call_async(GetState.Request())
+                self.wait(future.done,min(2.,max(0.,active_by-time.monotonic())))
+                state=future.result().current_state
+                if state.id==State.PRIMARY_STATE_ACTIVE:
+                    self.event('AMCL_ACTIVE',service=client.srv_name)
+                    return
+                last=state.label
+            except RuntimeError as error:
+                if self.process is not None and self.process.poll() is not None:raise
+                last=str(error)
+                if future is not None and not future.done():
+                    client.remove_pending_request(future)
+            pause=min(.2,max(0.,active_by-time.monotonic()))
+            next_poll=time.monotonic()+pause
+            if pause:self.wait(lambda:time.monotonic()>=next_poll,pause+.1)
+        raise RuntimeError(f'AMCL activation timeout: {client.srv_name}; last={last}')
 
     def wait_navigation_active(self,timeout=45.):
         """Action discovery and authority IDLE do not imply lifecycle activation."""
@@ -487,7 +520,24 @@ class CooperativeRescue(Node):
                 request=Spin.Goal(target_yaw=.35);request.time_allowance.sec=6
                 terminal=self.action(self.spin['robot2'],request,12.)
                 self.event('LOCALIZATION_MOTION',status=terminal.status,error=terminal.result.error_code)
-        raise RuntimeError('Laser localization did not converge')
+        diagnostics=self.localization_diagnostics()
+        self.event('LOCALIZATION_FAILED',robots=diagnostics)
+        raise RuntimeError('Laser localization did not converge: '+json.dumps(diagnostics))
+
+    def localization_diagnostics(self):
+        result={}
+        for ns in ('','robot2'):
+            sample=self.localization.get(ns);scan=self.scan.get(ns)
+            row=dict(amcl_pose=sample is not None,scan=scan is not None)
+            if sample is not None:
+                row.update(pose=pose_value(sample.pose.pose),
+                    age_s=self.now()-Time.from_msg(sample.header.stamp).nanoseconds/1e9,
+                    std_xy_m=[math.sqrt(max(0.,sample.pose.covariance[i])) for i in (0,7)],
+                    std_yaw_rad=math.sqrt(max(0.,sample.pose.covariance[35])))
+            try:row['scan_match']=self.laser_match(ns) if scan is not None else None
+            except (TransformException,ValueError,RuntimeError) as error:row['scan_match_error']=str(error)
+            result[ns or 'robot1']=row
+        return result
 
     def refresh_target(self,force=False):
         """Use the live map-frame estimate; handover files remain audit snapshots."""

@@ -1,0 +1,8 @@
+<root BTCPP_format="4" main_tree_to_execute="MidtermPart2">
+  <BehaviorTree ID="MidtermPart2">
+    <Sequence>
+      <ExecuteTask task="s1"/>
+      <ExecuteTask task="c1"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

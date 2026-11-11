@@ -102,94 +102,7 @@ printf '%s\n' "$GALLIUM_DRIVER" > "$temp_dir/render-driver.txt"
 ros2 pkg prefix nav2_mppi_controller > "$temp_dir/mppi-prefix.txt"
 export PYTHONUNBUFFERED=1 RCUTILS_LOGGING_BUFFERED_STREAM=0
 export ROS_LOG_DIR="$temp_dir/ros"
-python3 - "$nav_config" "$temp_dir/nav2-runtime.yaml" <<'PY'
-from pathlib import Path
-import sys, yaml, os
-source, output = map(Path, sys.argv[1:])
-sys.path.insert(0,str(source.parent.parent/'scripts'))
-from navigation_config import load_navigation
-profile=os.environ.get('EDGEAI_NAV_PROFILE','rectangle')
-depth_switch=os.environ.get('EDGEAI_DEPTH_OBSTACLES','config').lower()
-if depth_switch not in ('config','true','false'):
-    raise ValueError('EDGEAI_DEPTH_OBSTACLES must be config, true or false')
-config=load_navigation(source.parent,os.environ.get('EDGEAI_CONTROLLER','dwb'),profile,
-                       None if depth_switch=='config' else depth_switch=='true')
-planner_profile=os.environ.get('EDGEAI_GLOBAL_PLANNER','lattice' if profile=='rectangle' else 'navfn')
-if planner_profile=='lattice':
-    from ament_index_python.packages import get_package_share_directory
-    from planner_profile import configure_lattice
-    configure_lattice(config,source.parent,get_package_share_directory('nav2_smac_planner'))
-elif planner_profile!='navfn':
-    raise ValueError('EDGEAI_GLOBAL_PLANNER must be lattice or navfn')
-for section in ('local_costmap', 'global_costmap'):
-    costmap = config[section][section]['ros__parameters']
-    for dimension in ('width', 'height'):
-        value = costmap.get(dimension)
-        if value is not None and (type(value) is not int or value <= 0):
-            raise ValueError(f'{section}.{dimension} must be a positive integer in Nav2 Jazzy; '
-                             'set fractional_window.width_m/height_m for fractional local dimensions')
-if os.environ.get('EDGEAI_MOTION_ABLATION') == 'goal_only':
-    assert os.environ.get('EDGEAI_TURN_TEST') == 'true'
-    follow = config['controller_server']['ros__parameters']['FollowPath']
-    assert follow['plugin'] == 'nav2_mppi_controller::MPPIController'
-    follow['critics'] = ['ConstraintCritic', 'GoalCritic', 'GoalAngleCritic', 'PreferForwardCritic']
-    follow['GoalCritic']['threshold_to_consider'] = 10.0
-    print('TEST ABLATION: goal-only MPPI; collision monitor remains enabled. Not a deployment profile.', flush=True)
-planner = config['planner_server']['ros__parameters']['GridBased']
-if 'lattice_filepath' in planner:
-    planner['lattice_filepath'] = str((source.parent / planner['lattice_filepath']).resolve())
-# A selectable stopped checker tightens rescue acceptance without changing exploration.
-rescue_config = yaml.safe_load((Path(os.environ.get('EDGEAI_RESCUE_CONFIG', str(source.parents[0]/'normal_rescue.yaml')))).read_text())
-control = config['controller_server']['ros__parameters']
-control['general_goal_checker']['plugin'] = 'nav2_controller::PositionGoalChecker'
-control['general_goal_checker'].pop('yaw_goal_tolerance', None)
-if os.environ.get('EDGEAI_POINT_TEST_PARAMS'):
-    assert os.environ.get('EDGEAI_TURN_TEST')=='true' and os.environ.get('EDGEAI_MOTION_TEST')=='points'
-    overrides=yaml.safe_load(Path(os.environ['EDGEAI_POINT_TEST_PARAMS']).read_text()) or {}
-    control['progress_checker'].update(overrides.pop('progress_checker',{}))
-    control['FollowPath'].update(overrides)
-is_navfn=planner['plugin']=='nav2_navfn_planner::NavfnPlanner'
-if is_navfn:planner['use_final_approach_orientation'] = True
-# Per-action policies use fixed plugin IDs; never mutate a live planner parameter.
-from copy import deepcopy
-planners = config['planner_server']['ros__parameters']
-if is_navfn:
-    planners['GridBasedHeading'] = deepcopy(planner)
-    planners['GridBasedHeading']['use_final_approach_orientation'] = False
-planners['planner_plugins'] = list(dict.fromkeys(planners['planner_plugins']+['GridBasedHeading']))
-control['goal_checker_plugins'] = list(dict.fromkeys(control['goal_checker_plugins']+['heading_goal_checker','rescue_goal_checker']))
-control['heading_goal_checker'] = dict(plugin='nav2_controller::SimpleGoalChecker', stateful=True,
-    xy_goal_tolerance=control['general_goal_checker']['xy_goal_tolerance'],
-    yaw_goal_tolerance=float(rescue_config['yaw_tolerance_rad']))
-control['rescue_goal_checker'] = dict(plugin='nav2_controller::StoppedGoalChecker', stateful=True,
-    xy_goal_tolerance=float(rescue_config['position_tolerance_m']),
-    yaw_goal_tolerance=float(rescue_config['yaw_tolerance_rad']),
-    trans_stopped_velocity=float(rescue_config['stopped_linear_mps']),
-    rot_stopped_velocity=float(rescue_config['stopped_angular_rps']))
-sys.path.insert(0,str(source.parent.parent/'scripts'))
-from goal_policy import configure_controllers
-configure_controllers(config)
-from motion_limits import configure_motion_limits
-import json
-motion_report=configure_motion_limits(config)
-output.with_name('motion-limits.json').write_text(json.dumps(motion_report,indent=2))
-if motion_report['controllers']:
-    print('MOTION_LIMITS: RPP预测前速度已联动公共限幅；详见 motion-limits.json',flush=True)
-for warning in motion_report['warnings']:print('MOTION_LIMITS_WARNING: '+warning,flush=True)
-bt = config['bt_navigator']['ros__parameters']
-local_geometry=config['local_costmap']['local_costmap']['ros__parameters']
-escape=config['behavior_server']['ros__parameters']['escape_occupied']
-escape['actual_footprint']=local_geometry.get('footprint','[]')
-escape['footprint_padding']=float(local_geometry.get('footprint_padding',0.))
-bt['plugin_lib_names']=list(dict.fromkeys(bt.get('plugin_lib_names',[])+['edgeai_navigation_bt_nodes']))
-bt['navigators'] = ['navigate_to_pose']
-bt['default_nav_to_pose_bt_xml'] = str((source.parent/'behavior_trees/explore_recovery.xml').resolve())
-if os.environ.get('EDGEAI_COOPERATIVE_RESCUE') == 'true':
-    from fleet_config import configure_peer_costmaps
-    coop=yaml.safe_load((source.parent/'cooperative_rescue.yaml').read_text())
-    configure_peer_costmaps(config,'',coop.get('peer_costmap',{}))
-output.write_text(yaml.safe_dump(config, sort_keys=False))
-PY
+python3 "$PROJECT_ROOT/scripts/ros/prepare_navigation_runtime.py" "$nav_config" "$temp_dir/nav2-runtime.yaml"
 nav_config="$temp_dir/nav2-runtime.yaml"
 for name in sim nav explore rviz rosout watch alignment authority perception observation suspects; do touch "$temp_dir/$name.log"; done
 event() { printf '%s [session] %s\n' "$(date --iso-8601=seconds)" "$*" | tee -a "$temp_dir/events.log"; }
@@ -326,7 +239,8 @@ if [[ $mission_enabled == true ]]; then
     python3 "$PROJECT_ROOT/src/edgeai_mission/scripts/prepare_mission.py" \
         --root "$PROJECT_ROOT" --directory "$temp_dir" --rescue "$mission_rescue" \
         --map "${map_basename:-$temp_dir/map}" --duration "$duration" --backend "$backend" \
-        --cooperative "$cooperative" --observation "$mission_observation" --rescue-enabled "${EDGEAI_RESCUE:-true}"
+        --cooperative "$cooperative" --observation "$mission_observation" --rescue-enabled "${EDGEAI_RESCUE:-true}" \
+        --part "${EDGEAI_MIDTERM_PART:-integrated}"
     mission_executable="$(ros2 pkg prefix edgeai_mission)/lib/edgeai_mission/mission_coordinator"
     "$mission_executable" --ros-args -p use_sim_time:=true -p "config:=$temp_dir/mission-runtime.json" \
         >"$temp_dir/mission.log" 2>&1 9>&- &
@@ -381,77 +295,7 @@ if [[ $rviz == true ]]; then
     rviz_config="$exploration_dir/rviz/exploration.rviz"
     # Generate all modes so the depth display follows the actual runtime switch.
     if [[ -f $nav_config ]]; then
-        python3 - "$rviz_config" "$temp_dir/navigation-test.rviz" "$navigation_test" "$controller" "$nav_config" <<'TEST_RVIZ'
-from pathlib import Path
-import sys,yaml,os
-from copy import deepcopy
-source,output=map(Path,sys.argv[1:3]);config=yaml.safe_load(source.read_text())
-manager=config['Visualization Manager']
-frame_rate=int(os.environ.get('EDGEAI_RVIZ_FPS','30'))
-if not 1 <= frame_rate <= 120:
-    raise SystemExit('EDGEAI_RVIZ_FPS must be 1..120')
-manager['Global Options']['Frame Rate']=frame_rate
-nav=yaml.safe_load(Path(sys.argv[5]).read_text())
-depth_enabled='depth_layer' in nav['local_costmap']['local_costmap']['ros__parameters']['plugins']
-if sys.argv[3]=='true':manager['Views']['Current']['Focal Point'].update(X=2.5,Y=2.5)
-for display in manager['Displays']:
-    if display.get('Name')=='Depth costmap input (cyan)':
-        display['Enabled']=depth_enabled;display['Value']=depth_enabled
-    if sys.argv[3]=='true' and display.get('Name')=='SLAM map (occupancy)':
-        display['Name']='True map (world coordinates)'
-    if sys.argv[4]=='rpp' and display.get('Name')=='Local trajectory (pink)':
-        display['Name']='RPP collision arc (pink)';display['Topic']['Value']='/lookahead_arc'
-if sys.argv[4]=='rpp':
-    manager['Displays'].append({'Class':'rviz_default_plugins/PointStamped',
-        'Name':'RPP lookahead point','Enabled':True,'Value':True,
-        'Color':'255; 190; 0','Radius':0.05,'History Length':1,
-        'Topic':{'Value':'/lookahead_point','Depth':1,'Reliability Policy':'Reliable','Durability Policy':'Volatile'}})
-if os.environ.get('EDGEAI_COOPERATIVE_RESCUE')=='true':
-    robots=[[],[]]
-    colors={'/plan':'255; 170; 0','/local_plan':'190; 100; 255','/lookahead_arc':'190; 100; 255',
-            '/scan':'80; 170; 255',
-            '/navigation_authority/dispatched_goal':'80; 200; 255',
-            '/lookahead_point':'190; 100; 255'}
-    shared=[]
-    for display in list(manager['Displays']):
-        field='Description Topic' if display.get('Class')=='rviz_default_plugins/RobotModel' else 'Topic'
-        topic=display.get(field,{}).get('Value','')
-        if topic in ('','/map','/targets/markers','/explore/frontiers'):
-            shared.append(display)
-            continue
-        robots[0].append(display)
-        # Fleet simulation only renders RGB-D on the primary robot.
-        if topic.startswith('/camera/'):
-            continue
-        second=deepcopy(display)
-        second[field]['Value']='/robot2'+topic
-        if display.get('Update Topic',{}).get('Value','').startswith('/'):
-            second['Update Topic']['Value']='/robot2'+display['Update Topic']['Value']
-        if topic in colors:
-            second['Color']=colors[topic]
-        # Both costmaps remain available; avoid two layers covering each other on startup.
-        if topic.endswith('/costmap'):
-            for item in (display,second):
-                item['Enabled']=item['Value']=False
-        if topic=='/diagnostics/navigation':
-            for item in (display,second):
-                item['Name']='Aligned footprints and pose correction'
-        if topic=='/plan':
-            second['Name']='Global path (orange)'
-        if topic=='/scan':
-            second['Name']='Laser scan (blue)'
-        if topic=='/navigation_authority/dispatched_goal':
-            second['Name']='Dispatched goal (light blue)'
-        if topic in ('/local_plan','/lookahead_arc'):
-            second['Name']=second['Name'].replace('pink','purple')
-        if topic=='/truth/markers':
-            second['Name']='Simulation truth (robot 2 aligned)'
-        robots[1].append(second)
-    manager['Displays']=shared+[
-        {'Class':'rviz_common/Group','Name':f'Robot {i}','Enabled':True,'Displays':displays}
-        for i,displays in enumerate(robots,1)]
-output.write_text(yaml.safe_dump(config,sort_keys=False))
-TEST_RVIZ
+        python3 "$PROJECT_ROOT/scripts/ros/prepare_session_rviz.py" "$rviz_config" "$temp_dir/navigation-test.rviz" "$navigation_test" "$controller" "$nav_config"
         rviz_config="$temp_dir/navigation-test.rviz"
     fi
     setsid ros2 run rviz2 rviz2 -d "$rviz_config" \

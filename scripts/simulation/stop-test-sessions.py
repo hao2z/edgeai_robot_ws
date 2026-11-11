@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import time
 
@@ -46,22 +47,35 @@ def stop_orphan_lock_holders():
             while time.monotonic() < deadline:
                 time.sleep(.1)
 
-for registration in (root / 'runtime').glob('exploration-*.json'):
-    record = json.loads(registration.read_text())
+# Stop the parent first: stopping only Part1 could otherwise launch Part2.
+registrations = list((root/'runtime').glob('midterm-*.json'))
+registrations += list((root/'runtime').glob('exploration-*.json'))
+for registration in registrations:
+    # Other runtime reports (e.g. midterm-release-checks.json) are not PID records.
+    if not re.fullmatch(r'(midterm|exploration)-\d+\.json', registration.name):continue
+    if not registration.exists():continue
+    try:
+        record = json.loads(registration.read_text())
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'Cannot read session registration {registration.name}: {error}')
+    if (not isinstance(record,dict) or type(record.get('pid')) is not int
+            or record['pid']<=1 or not str(record.get('start_ticks','')).isdigit()
+            or 'domain' not in record):
+        raise SystemExit(f'Invalid session registration: {registration.name}; expected pid/start_ticks/domain')
     pid = record['pid']
 
     def matches():
         try:
             return (Path(f'/proc/{pid}/stat').read_text().split()[21] == record['start_ticks']
                     and any(name in Path(f'/proc/{pid}/cmdline').read_bytes() for name in
-                            (b'run-open-source-exploration.sh',b'cooperative_truth_test.py')))
+                            (b'run-open-source-exploration.sh',b'cooperative_truth_test.py',b'midterm_check.py')))
         except FileNotFoundError:
             return False
 
     if matches():
         print(f'Stopping previous test: PID={pid}, domain={record["domain"]}', flush=True)
         os.kill(pid, signal.SIGTERM)
-        for _ in range(350):
+        for _ in range(1000 if registration.name.startswith('midterm-') else 350):
             if not matches():
                 break
             time.sleep(.1)

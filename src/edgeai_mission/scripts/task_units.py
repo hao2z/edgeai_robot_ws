@@ -46,6 +46,8 @@ class Units:
             settings=yaml.safe_load((root/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
             self.node=CooperativeRescue(self.directory,settings)
             self.node.static_test=bool(c.get('cooperative_static_test',False))
+            self.node.external_navigation=bool(c.get('external_navigation',False))
+            if self.node.external_navigation:self.node.peer_pubs={}
             self.node.seed_enabled=False;self.node.handover_reference=str(self.directory/'mission-reference.json')
             self.dwell=JointDwell(settings['radius_m'],settings['dwell_s']+settings.get('settle_margin_s',0.))
 

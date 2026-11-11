@@ -7,7 +7,8 @@ from pathlib import Path
 import yaml
 
 
-def prepare(root, directory, rescue, map_basename, duration, cooperative, observation, backend, rescue_enabled=True):
+def prepare(root, directory, rescue, map_basename, duration, cooperative, observation, backend, rescue_enabled=True, part='integrated'):
+    if part not in ('integrated','part1'):raise ValueError('Unsupported mapping mission part')
     root, directory = Path(root).resolve(), Path(directory).resolve()
     nav = yaml.safe_load((directory/'nav2-runtime.yaml').read_text())
     radii = []
@@ -32,6 +33,8 @@ def prepare(root, directory, rescue, map_basename, duration, cooperative, observ
         raise ValueError('Invalid mapping completion settings')
     for name in ('find_targets','s1','c1'):shutil.copyfile(source/'tasks'/f'{name}.xml',trees/f'{name}.xml')
     shutil.copyfile(source/'integrated.xml',trees/'integrated.xml')
+    if part=='part1':
+        shutil.copyfile(source/'midterm_part1.xml',trees/'midterm_part1.xml')
     settings = dict(project_root=str(root), directory=str(directory), map_basename=str(Path(map_basename).resolve()),
                     exploration_timeout_s=float(duration), rescue_enabled=rescue_enabled and bool(c.get('enabled')),
                     cooperative=cooperative, observation=observation, backend=backend,
@@ -47,7 +50,8 @@ def prepare(root, directory, rescue, map_basename, duration, cooperative, observ
                     required_targets=[dict(id=c['target_id'],type='normal')]+([dict(id=coop['target_id'],type='cooperative')] if cooperative else []),
                     target_observation_require_confirmation=c.get('require_confirmation',False),
                     task_trees={task:str(trees/f'{task}.xml') for task in ('find_targets','s1','c1')},
-                    tree=str(trees/'integrated.xml'))
+                    tree=str(trees/('midterm_part1.xml' if part=='part1' else 'integrated.xml')),
+                    demonstration_part=part)
     (directory/'mission-runtime.json').write_text(json.dumps(settings, indent=2))
     return settings
 
@@ -59,5 +63,6 @@ if __name__ == '__main__':
     p.add_argument('--cooperative',choices=('true','false'),required=True)
     p.add_argument('--observation',choices=('true','false'),required=True)
     p.add_argument('--rescue-enabled',choices=('true','false'),default='true')
+    p.add_argument('--part',choices=('integrated','part1'),default='integrated')
     a=p.parse_args()
-    prepare(a.root,a.directory,a.rescue,a.map,a.duration,a.cooperative=='true',a.observation=='true',a.backend,a.rescue_enabled=='true')
+    prepare(a.root,a.directory,a.rescue,a.map,a.duration,a.cooperative=='true',a.observation=='true',a.backend,a.rescue_enabled=='true',a.part)

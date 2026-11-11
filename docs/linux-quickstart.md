@@ -23,6 +23,7 @@ bash edgeai.sh check
 | 命令 | 用途 |
 |---|---|
 | `bash edgeai.sh mission` | 默认完整任务：RPP、Smac Lattice、中期场地、双机器人；探索阶段3600秒墙钟上限 |
+| `bash edgeai.sh midterm` | 独立Part1建图找目标 → 场景重启 → Part2 S1/C1；共用780秒墙钟，详见中期检查清单 |
 | `bash edgeai.sh mission --single-robot` | 单机建图和S1救援对照 |
 | `bash edgeai.sh navigation` | 加载仿真真值地图与定位，单机手动选点测试 |
 | `bash edgeai.sh cooperative` | 使用上一轮运行参数，跳过探索/S1，直接做静态地图C1专项 |
