@@ -21,7 +21,8 @@ Usage: bash edgeai.sh COMMAND [options]
   build         Build explorer overlay and workspace
   check         Check mission dependencies without launching/stopping tests
 Mission/navigation: --duration SEC --controller rpp|dwb|mppi --planner lattice|navfn
-                    --domain ID --single-robot --depth-obstacles config|true|false
+                    --domain ID --single-robot --depth-obstacles config|true|false --language zh|en
+Midterm: add --language en (English) or --language zh (Chinese, default)
 See docs/linux-quickstart.md. GUI capture/window automation remains Windows-only.
 HELP
         ;;

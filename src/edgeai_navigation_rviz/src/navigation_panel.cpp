@@ -36,10 +36,10 @@ public:
       if (!families.empty()) {setFont(QFont(families.first(), 10));}
     }
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(new QLabel(QString::fromUtf8("机器人 1 控制"), this));
+    layout->addWidget(new QLabel(displayText("机器人 1 控制", "Robot 1 control"), this));
     auto *controls = new QHBoxLayout();
-    for (const auto &item : {std::make_pair("自动探索", false), std::make_pair("手动接管", true)}) {
-      auto *button = new QPushButton(QString::fromUtf8(item.first), this);
+    for (const auto &item : {std::make_pair(displayText("自动探索", "Autonomous exploration"), false), std::make_pair(displayText("手动接管", "Manual control"), true)}) {
+      auto *button = new QPushButton(item.first, this);
       controls->addWidget(button);
       connect(button, &QPushButton::clicked, this, [this, manual = item.second]() {
         if (!mode_client_ || !mode_client_->service_is_ready()) {return;}
@@ -48,7 +48,7 @@ public:
         mode_client_->async_send_request(request);
       });
     }
-    auto *stop = new QPushButton(QString::fromUtf8("停止任务"), this);
+    auto *stop = new QPushButton(displayText("停止任务", "Stop task"), this);
     controls->addWidget(stop);
     connect(stop, &QPushButton::clicked, this, [this]() {
       if (stop_client_ && stop_client_->service_is_ready()) {
@@ -56,7 +56,7 @@ public:
       }
     });
     layout->addLayout(controls);
-    heading_toggle_ = new QCheckBox(QString::fromUtf8("手动目标要求朝向"), this);
+    heading_toggle_ = new QCheckBox(displayText("手动目标要求朝向", "Require manual goal heading"), this);
     heading_toggle_->setEnabled(false);
     connect(heading_toggle_, &QCheckBox::toggled, this, [this](bool checked) {
       if (!heading_client_ || !heading_client_->service_is_ready()) {return;}
@@ -65,19 +65,19 @@ public:
       heading_client_->async_send_request(request);
     });
     layout->addWidget(heading_toggle_);
-    status_ = new QLabel(QString::fromUtf8("等待导航诊断消息"), this);
+    status_ = new QLabel(displayText("等待导航诊断消息", "Waiting for navigation diagnostics"), this);
     status_->setWordWrap(true);
     view_ = new QTextBrowser(this);
     view_->setOpenExternalLinks(false);
     view_->setStyleSheet("QTextBrowser {background:#f5f7fa;color:#172536;}");
     view_->setMinimumWidth(300);
-    auto *detailsToggle = new QCheckBox(QString::fromUtf8("展开导航、数据时序与 TF 详情"), this);
+    auto *detailsToggle = new QCheckBox(displayText("展开导航、数据时序与 TF 详情", "Show navigation, timing and TF details"), this);
     details_ = new QTextBrowser(this);
     details_->setOpenExternalLinks(false);
     details_->hide();
     details_->setMaximumHeight(240);
     connect(detailsToggle, &QCheckBox::toggled, details_, &QWidget::setVisible);
-    auto *legendToggle = new QCheckBox(QString::fromUtf8("显示图例与说明"), this);
+    auto *legendToggle = new QCheckBox(displayText("显示图例与说明", "Show legend and notes"), this);
     legend_ = new QTextBrowser(this);
     legend_->setOpenExternalLinks(false);
     legend_->setMaximumHeight(220);
@@ -102,8 +102,8 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       if (received_) {
         const double age = std::chrono::duration<double>(std::chrono::steady_clock::now()-received_at_).count();
-        status_->setText((age < 1.5 ? QString::fromUtf8("诊断刷新正常 · 消息延迟 %1 秒").arg(age, 0, 'f', 1) :
-          QString::fromUtf8("诊断消息已停止更新 · %1 秒").arg(age, 0, 'f', 1)) +
+        status_->setText((age < 1.5 ? displayText("诊断刷新正常 · 消息延迟 %1 秒", "Diagnostics active · message age %1 s").arg(age, 0, 'f', 1) :
+          displayText("诊断消息已停止更新 · %1 秒", "Diagnostics stopped updating · %1 s").arg(age, 0, 'f', 1)) +
           QString::fromUtf8(" · %1").arg(QTime::currentTime().toString("HH:mm:ss")));
         status_->setStyleSheet(age < 1.5 ? "color:#17713c;" : "color:#b3261e;");
       }
@@ -159,6 +159,10 @@ public:
   }
 
 private:
+  static QString displayText(const char *chinese, const char *english)
+  {
+    return QString::fromUtf8(qgetenv("EDGEAI_LANGUAGE") == "en" ? english : chinese);
+  }
   QLabel *status_;
   QTextBrowser *view_;
   QTextBrowser *details_;

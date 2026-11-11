@@ -1,4 +1,5 @@
 """Shared names for mission events in the terminal and RViz."""
+from language import localize
 
 TASKS = dict(find_targets='搜寻全部救援目标', s1='S1 单机救援', c1='C1 双机救援')
 UNITS = dict(
@@ -18,7 +19,7 @@ PHASES = dict(
     MAPPING_AREA_READY='建图面积达标', MAPPING_AREA_INSUFFICIENT='建图面积不足或地图过期')
 
 
-def mission_description(data):
+def _mission_description(data):
     phase = data.get('phase', '')
     task = TASKS.get(data.get('task'), data.get('task', ''))
     unit = data.get('unit', data.get('step', ''))
@@ -42,3 +43,7 @@ def mission_description(data):
         if isinstance(area, (int, float)) and isinstance(required, (int, float)):
             label += f'：{area:.2f} / {required:.2f} m²'
     return label
+
+
+def mission_description(data, selected=None):
+    return localize(_mission_description(data), selected)

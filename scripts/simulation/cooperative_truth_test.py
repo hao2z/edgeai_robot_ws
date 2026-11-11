@@ -13,6 +13,8 @@ import time
 import yaml
 
 ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'scripts/ros'))
+from language import localize, language
 sys.path[:0]=[str(ROOT/'src/edgeai_simulation/launch'),str(ROOT/'src/edgeai_simulation/tools')]
 from simulation_support import make_world
 from generate_navigation_truth_map import generate
@@ -28,7 +30,7 @@ def main():
     parser.add_argument('--midterm-part2',action='store_true',help='Both robots start in the start area; coordinator executes S1 then C1')
     parser.add_argument('--prepared-map',type=Path,help='Prebuilt map in arena/world coordinates, used only in Part2')
     parser.add_argument('--verification-seconds',type=float,default=0.,help='Keep the stopped Part2 scene open after success')
-    args=parser.parse_args();directory=args.directory.resolve();directory.mkdir(parents=True,exist_ok=True)
+    args=parser.parse_args();os.environ['EDGEAI_LANGUAGE']=language();directory=args.directory.resolve();directory.mkdir(parents=True,exist_ok=True)
     if args.midterm_part2 and args.filter_check:parser.error('Part2 cannot run the filter diagnostic')
     if args.duration<=0 or args.verification_seconds<0:parser.error('Invalid time budget')
     nav=yaml.safe_load(args.params.read_text())
@@ -77,7 +79,7 @@ def main():
     os.environ.update(ROS_DOMAIN_ID=str(args.domain),GZ_PARTITION=f'edgeai_cooperative_{args.domain}_{os.getpid()}',
         EDGEAI_TRUTH_DIRECTORY=str(directory),PROJECT_ROOT=str(ROOT),
         CYCLONEDDS_URI='<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>')
-    record=dict(pid=os.getpid(),start_ticks=Path('/proc/self/stat').read_text().split()[21],
+    record=dict(pid=os.getpid(),start_ticks=Path('/proc/self/stat').read_text().split()[21],language=language(),
                 directory=str(directory),domain=args.domain,partition=os.environ['GZ_PARTITION'],profile='cooperative-truth-test',params_source=str(args.params))
     registration=ROOT/f'runtime/exploration-{args.domain}.json';registration.write_text(json.dumps(record,indent=2))
     (directory/'session.json').write_text(json.dumps(record,indent=2));(ROOT/'runtime/latest-session.txt').write_text(str(directory)+'\n')
@@ -169,7 +171,7 @@ def main():
                 '-p','config:='+str(directory/'mission-runtime.json')])
             startup_phase='S1/C1 task trees'
             end=time.monotonic()+args.duration
-            print('PART2_READY: 两车起始区定位完成；任务树开始 S1 → C1',flush=True)
+            print(localize('PART2_READY: 两车起始区定位完成；任务树开始 S1 → C1'),flush=True)
             while coordinator.poll() is None:
                 if time.monotonic()>end:raise subprocess.TimeoutExpired('Part2 mission',args.duration)
                 if bootstrap.process.poll() is not None:raise RuntimeError('Part2 localization/navigation exited')
@@ -178,7 +180,7 @@ def main():
             result=0 if coordinator.returncode==0 and saved.exists() and json.loads(saved.read_text()).get('success') else 1
             print('PART2_RESULT: '+(saved.read_text() if saved.exists() else 'No confirmed result'),flush=True)
             if result==0 and args.verification_seconds>0:
-                print(f'核验阶段：保持停车画面 {args.verification_seconds:.0f} 秒；结果位于 {directory}',flush=True)
+                print(localize(f'核验阶段：保持停车画面 {args.verification_seconds:.0f} 秒；结果位于 {directory}'),flush=True)
                 until=time.monotonic()+args.verification_seconds
                 while time.monotonic()<until:rclpy.spin_once(bootstrap,timeout_sec=.1)
             return result

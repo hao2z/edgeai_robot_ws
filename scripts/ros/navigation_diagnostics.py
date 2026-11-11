@@ -24,6 +24,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 from navigation_status import runtime_settings, render
 from mission_display import mission_description
+from language import localize
 
 
 def planar(transform):
@@ -354,7 +355,7 @@ class NavigationDiagnostics(Node):
                            '蓝色雷达。两车显示项分别开关；当前仿真仅机器人 1 有 RGB-D。</p>')
             if self.mission_display:
                 body = '<p><b>任务调度：</b>'+escape(self.mission_display)+'</p>'+body
-            self.status_publisher.publish(String(data=body+'<!--DETAILS-->'+details+'<!--LEGEND-->'+legend))
+            self.status_publisher.publish(String(data=localize(body+'<!--DETAILS-->'+details+'<!--LEGEND-->'+legend)))
         self.publisher.publish(MarkerArray(markers=markers))
         state = (status, tuple(stale), bool(problems))
         if state != self.last_status:

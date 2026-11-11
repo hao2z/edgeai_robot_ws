@@ -24,6 +24,24 @@ class SessionLoggingTest(unittest.TestCase):
         reducer.consume('rescue','RESCUE_SUCCESS_POSE: 真值核验：无法确认')
         self.assertEqual([r[1] for r in records],['OK','ERROR','WARN'])
 
+    def test_language_switch_localizes_operator_text_but_keeps_evidence(self):
+        records = []
+        reducer = module.EventReducer(lambda *args, **kwargs: records.append((args, kwargs)), selected='en')
+        reducer.consume('nav', 'Goal succeeded')
+        self.assertEqual(records[0][0][2], 'Navigation goal reached')
+        self.assertEqual(records[0][0][3], 'Goal succeeded')
+        evidence = 'MISSION_TASK_FEEDBACK: {"task":"c1","unit":"check_rescue"}'
+        reducer.consume('mission', evidence)
+        self.assertEqual(records[-1][0][2], 'C1 cooperative rescue · Check rescue conditions and dwell time')
+        self.assertEqual(records[-1][0][3], evidence)
+
+    def test_language_validation(self):
+        from language import language, localize
+        self.assertEqual(language('zh-CN'), 'zh')
+        self.assertEqual(localize('已到达导航目标', 'en'), 'Navigation goal reached')
+        with self.assertRaises(ValueError):
+            language('sv')
+
     def test_mission_stage_failure_is_visible_in_main_event_stream(self):
         records=[]
         reducer=module.EventReducer(lambda *args,**kw:records.append(args))

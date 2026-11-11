@@ -3,6 +3,7 @@ import html
 import math
 from pathlib import Path
 import yaml
+from language import localize
 
 
 def runtime_settings(directory):
@@ -204,4 +205,6 @@ def render(snapshot):
         ('#b020b0','SLAM修正箭头','相对初始里程计锚点的坐标修正，不是真值轨迹')]
     legend = '<table cellspacing="3">'+''.join('<tr><td style="color:'+color+'"><b>'+escape(name)+
         '</b></td></tr><tr><td>'+escape(meaning)+'</td></tr>' for color,name,meaning in legend_rows)+'</table>'
-    return dict(body=body,summary=summary,details=details,legend=legend,heading=heading,warnings=warnings)
+    return dict(body=localize(body), summary=localize(summary), details=localize(details),
+                legend=localize(legend), heading=localize(heading),
+                warnings=[localize(warning) for warning in warnings])

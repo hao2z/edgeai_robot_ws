@@ -1,4 +1,5 @@
 param(
+    [ValidateSet('zh','en')][string]$Language = 'zh',
     [ValidateRange(30,3600)][int]$Duration=3600,
     [string]$Distro='Ubuntu-24.04',
     [ValidateRange(0,232)][int]$DomainId=86,
@@ -9,5 +10,5 @@ param(
 )
 $ErrorActionPreference='Stop'
 & (Join-Path $PSScriptRoot 'Start-Autonomous-Mission.ps1') -NavigationTest -Arena midterm `
-    -Duration $Duration -Distro $Distro -DomainId $DomainId -Controller $Controller -Planner $Planner `
+    -Duration $Duration -Distro $Distro -DomainId $DomainId -Controller $Controller -Planner $Planner -Language $Language `
     -CheckOnly:$CheckOnly -InCurrentWindow:$InCurrentWindow

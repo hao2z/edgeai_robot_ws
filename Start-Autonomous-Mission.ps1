@@ -1,4 +1,6 @@
 param(
+    # Operator display/log language: zh = 中文, en = English.
+    [ValidateSet('zh','en')][string]$Language = 'zh',
     [ValidateRange(30, 3600)][int]$Duration = 3600,
     [string]$Distro = 'Ubuntu-24.04',
     [ValidateSet('simple', 'competition', 'midterm')][string]$Arena = 'midterm',
@@ -23,6 +25,7 @@ param(
     [switch]$RecoveryTest
 )
 $ErrorActionPreference = 'Stop'
+$env:EDGEAI_LANGUAGE = $Language
 . (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
 if (-not $Backend) {
     $backendFile = Join-Path $PSScriptRoot 'runtime/ros-backend'
@@ -47,14 +50,14 @@ if ($MPPISource -and $Controller -ne 'mppi') { throw 'MPPISource requires Contro
 if ($TurnTest -and $RecoveryTest) { throw 'Choose either TurnTest or RecoveryTest.' }
 $linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
-& $wslExe -d $Distro -- env "EDGEAI_ROS_BACKEND=$Backend" "EDGEAI_DEPTH_OBSTACLES=$DepthObstacles" bash "$linuxRoot/scripts/simulation/start-autonomous-exploration.sh" --check --duration $Duration --controller $Controller --planner $Planner --arena $Arena --domain $DomainId
+& $wslExe -d $Distro -- env "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" "EDGEAI_DEPTH_OBSTACLES=$DepthObstacles" bash "$linuxRoot/scripts/simulation/start-autonomous-exploration.sh" --check --duration $Duration --controller $Controller --planner $Planner --arena $Arena --domain $DomainId
 if ($LASTEXITCODE -ne 0) { throw "ROS backend '$Backend' failed its runtime check. Build this backend with scripts/setup/prepare-open-source.sh before starting a test." }
 if ($CheckOnly) { return }
 if (-not $InCurrentWindow) {
     & (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro
     $consoleArgs = @('-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass',
         '-File', "`"$PSCommandPath`"", '-InCurrentWindow', '-Duration', $Duration, '-Distro', "`"$Distro`"", '-Arena', $Arena, '-DomainId', $DomainId)
-    $consoleArgs += @('-Controller', $Controller, '-Backend', $Backend)
+    $consoleArgs += @('-Controller', $Controller, '-Backend', $Backend, '-Language', $Language)
     $consoleArgs += @('-Planner', $Planner)
     $consoleArgs += @('-DepthObstacles', $DepthObstacles)
     if ($TurnTest) { $consoleArgs += '-TurnTest' }
@@ -74,16 +77,16 @@ if (-not $InCurrentWindow) {
     } else {
         Start-Process $windowsPowerShell -ArgumentList $consoleArgs -WorkingDirectory $PSScriptRoot -WindowStyle Normal
     }
-    Write-Host 'Autonomous exploration window opened.'
+    Write-Host (Get-ProjectText '自主任务已在独立终端启动。' 'Autonomous mission opened in a separate terminal.')
     return
 }
 $Host.UI.RawUI.WindowTitle = if ($NavigationTest) { 'EdgeAI Navigation Test' } else { 'EdgeAI Autonomous Exploration' }
 if ($NavigationTest) {
-    Write-Host "Navigation test: static true map + Gazebo truth localization + Nav2 $Controller. ROS_DOMAIN_ID=$DomainId."
-    Write-Host 'Use RViz 2D Goal Pose to select navigation goals. Ctrl+C stops this session.'
+    Write-Host (Get-ProjectText "导航测试：静态真值地图 + Gazebo 真值定位 + Nav2 $Controller；ROS_DOMAIN_ID=$DomainId。" "Navigation test: static true map + Gazebo truth localization + Nav2 $Controller. ROS_DOMAIN_ID=$DomainId.")
+    Write-Host (Get-ProjectText '使用 RViz 2D Goal Pose 选择导航点，Ctrl+C 停止本轮。' 'Use RViz 2D Goal Pose to select navigation goals. Ctrl+C stops this session.')
 } else {
-    Write-Host "SLAM Toolbox + Nav2 $Controller + frontier_exploration_ros2. Cooperative rescue=$CooperativeRescue. Backend=$Backend. ROS_DOMAIN_ID=$DomainId."
-    Write-Host 'The robot moves autonomously in Gazebo. Ctrl+C stops this session.'
+    Write-Host (Get-ProjectText "SLAM Toolbox + Nav2 $Controller + frontier_exploration_ros2；协作救援=$CooperativeRescue；后端=$Backend；ROS_DOMAIN_ID=$DomainId。" "SLAM Toolbox + Nav2 $Controller + frontier_exploration_ros2. Cooperative rescue=$CooperativeRescue. Backend=$Backend. ROS_DOMAIN_ID=$DomainId.")
+    Write-Host (Get-ProjectText '机器人将在 Gazebo 中自主运动，Ctrl+C 停止本轮。' 'The robot moves autonomously in Gazebo. Ctrl+C stops this session.')
 }
 # Also cover callers invoking the worker directly.
 & (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro -ProcessesOnly
@@ -97,7 +100,7 @@ $sessionDirectory = Join-Path $PSScriptRoot "tests/results/runs/$runName"
 [void](New-Item -ItemType File -Path (Join-Path $sessionDirectory 'events.log') -Force)
 $linuxSession = "$linuxRoot/tests/results/runs/$runName"
 $mapPath = "$linuxSession/map"
-Write-Host "Session logs: $sessionDirectory"
+Write-Host (Get-ProjectText "本轮日志：$sessionDirectory" "Session logs: $sessionDirectory")
 # The worker already streams events here. Open-ROS-Monitor.ps1 remains a manual tool.
 $observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', "`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"", '-SessionDirectory', "`"$sessionDirectory`"")
@@ -110,9 +113,9 @@ $invertLinear = if ($MPPIInvertLinear) { 'true' } else { 'false' }
 $mppiSourceFlag = if ($MPPISource) { 'true' } else { 'false' }
 # Use the same managed Linux entry as a direct WSL invocation. PowerShell owns
 # only Windows windows/capture; Linux owns test execution and history retention.
-Write-Host 'Starting the managed WSL test entry...'
-& $wslExe -d $Distro -- env "EDGEAI_ROS_BACKEND=$Backend" "EDGEAI_DEPTH_OBSTACLES=$DepthObstacles" EDGEAI_MANAGED_SESSION=true "EDGEAI_COOPERATIVE_RESCUE=$($CooperativeRescue.IsPresent.ToString().ToLowerInvariant())" "EDGEAI_GLOBAL_PLANNER=$Planner" "EDGEAI_NAVIGATION_TEST=$navigationTestMode" "EDGEAI_MPPI_USE_SOURCE=$mppiSourceFlag" "EDGEAI_MPPI_INVERT_LINEAR=$invertLinear" "EDGEAI_MOTION_FRAME=$MotionFrame" "EDGEAI_MOTION_ABLATION=$motionAblation" "EDGEAI_MOTION_TEST=$MotionTest" "EDGEAI_POINT_TEST_SCENARIO=$PointScenario" "EDGEAI_CONTROLLER=$Controller" "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SCAN360=$scanMode" "EDGEAI_TURN_TEST=$turnMode" "EDGEAI_RECOVERY_TEST=$recoveryMode" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/start-autonomous-exploration.sh $Duration $mapPath $Arena $DomainId
+Write-Host (Get-ProjectText '正在启动 WSL 托管任务……' 'Starting the managed WSL test entry...')
+& $wslExe -d $Distro -- env "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" "EDGEAI_DEPTH_OBSTACLES=$DepthObstacles" EDGEAI_MANAGED_SESSION=true "EDGEAI_COOPERATIVE_RESCUE=$($CooperativeRescue.IsPresent.ToString().ToLowerInvariant())" "EDGEAI_GLOBAL_PLANNER=$Planner" "EDGEAI_NAVIGATION_TEST=$navigationTestMode" "EDGEAI_MPPI_USE_SOURCE=$mppiSourceFlag" "EDGEAI_MPPI_INVERT_LINEAR=$invertLinear" "EDGEAI_MOTION_FRAME=$MotionFrame" "EDGEAI_MOTION_ABLATION=$motionAblation" "EDGEAI_MOTION_TEST=$MotionTest" "EDGEAI_POINT_TEST_SCENARIO=$PointScenario" "EDGEAI_CONTROLLER=$Controller" "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SCAN360=$scanMode" "EDGEAI_TURN_TEST=$turnMode" "EDGEAI_RECOVERY_TEST=$recoveryMode" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/start-autonomous-exploration.sh $Duration $mapPath $Arena $DomainId
 $result = $LASTEXITCODE
 if (-not $observer.WaitForExit(15000)) { $observer.Kill() }
-Write-Host "Exploration process ended with code $result. The window stays open for inspection."
+Write-Host (Get-ProjectText "自主任务已结束（退出码 $result），窗口保留以便检查。" "Exploration process ended with code $result. The window stays open for inspection.")
 if ($result -ne 0) { throw "Exploration failed with code $result." }

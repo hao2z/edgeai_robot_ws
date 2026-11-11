@@ -105,7 +105,11 @@ export ROS_LOG_DIR="$temp_dir/ros"
 python3 "$PROJECT_ROOT/scripts/ros/prepare_navigation_runtime.py" "$nav_config" "$temp_dir/nav2-runtime.yaml"
 nav_config="$temp_dir/nav2-runtime.yaml"
 for name in sim nav explore rviz rosout watch alignment authority perception observation suspects; do touch "$temp_dir/$name.log"; done
-event() { printf '%s [session] %s\n' "$(date --iso-8601=seconds)" "$*" | tee -a "$temp_dir/events.log"; }
+event() {
+    local message
+    message=$(python3 "$PROJECT_ROOT/scripts/ros/language.py" "$@")
+    printf '%s [session] %s\n' "$(date --iso-8601=seconds)" "$message" | tee -a "$temp_dir/events.log"
+}
 registration="$PROJECT_ROOT/runtime/exploration-$ROS_DOMAIN_ID.json"
 python3 - "$registration" "$temp_dir" "$$" "$GZ_PARTITION" "$arena" "$profile" "$duration" <<'PY'
 import json, pathlib, sys, os
@@ -113,6 +117,7 @@ registration, directory, pid, partition, arena, profile, duration = sys.argv[1:]
 record = dict(pid=int(pid), start_ticks=pathlib.Path(f'/proc/{pid}/stat').read_text().split()[21],
               directory=directory, partition=partition, domain=os.environ['ROS_DOMAIN_ID'],
               arena=arena, profile=profile, duration=int(duration))
+record['language'] = os.environ.get('EDGEAI_LANGUAGE', 'zh')
 record['mode'] = 'isolated_turn_check' if os.environ.get('EDGEAI_TURN_TEST') == 'true' else 'exploration'
 if os.environ.get('EDGEAI_RECOVERY_TEST') == 'true':
     record['mode'] = 'native_recovery_check'

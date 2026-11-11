@@ -20,6 +20,8 @@ bash edgeai.sh check
 
 ## 日常操作
 
+主任务、中期检查和手动导航测试支持 `--language en` / `--language zh`，默认中文。例如 `bash edgeai.sh midterm --language en`。其他子进程继承 `EDGEAI_LANGUAGE`，也可使用 `EDGEAI_LANGUAGE=en bash edgeai.sh cooperative`。项目可读事件和自定义 RViz 面板随语言切换，原始 ROS 日志保持原文。
+
 | 命令 | 用途 |
 |---|---|
 | `bash edgeai.sh mission` | 默认完整任务：RPP、Smac Lattice、中期场地、双机器人；探索阶段3600秒墙钟上限 |

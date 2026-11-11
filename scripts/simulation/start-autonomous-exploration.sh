@@ -17,6 +17,7 @@ Usage: bash scripts/simulation/start-autonomous-exploration.sh [options]
   --navigation-test       Static truth map and manual RViz goals; single robot
   --depth-obstacles config|true|false       Local depth layer (default: config)
   --check                  Check runtime/packages without starting/stopping tests
+  --language zh|en         Operator display/log language (default: zh)
   --help                   Show this help
 Legacy positional form remains: [duration] [map basename] [arena] [domain]
 HELP
@@ -40,7 +41,7 @@ else
             --single-robot) export EDGEAI_COOPERATIVE_RESCUE=false; shift ;;
             --navigation-test) export EDGEAI_NAVIGATION_TEST=true EDGEAI_COOPERATIVE_RESCUE=false; shift ;;
             --check) check_only=true; shift ;;
-            --duration|--map|--arena|--domain|--controller|--backend|--planner|--depth-obstacles)
+            --duration|--map|--arena|--domain|--controller|--backend|--planner|--depth-obstacles|--language)
                 [[ $# -ge 2 && $2 != --* ]] || { echo "Missing value: $1" >&2; exit 2; }
                 case "$1" in
                     --duration) duration=$2 ;;
@@ -51,12 +52,15 @@ else
                     --planner) export EDGEAI_GLOBAL_PLANNER=$2 ;;
                     --backend) export EDGEAI_ROS_BACKEND=$2 ;;
                     --depth-obstacles) export EDGEAI_DEPTH_OBSTACLES=$2 ;;
+                    --language) export EDGEAI_LANGUAGE=$2 ;;
                 esac
                 shift 2 ;;
             *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
         esac
     done
 fi
+export EDGEAI_LANGUAGE=${EDGEAI_LANGUAGE:-zh}
+[[ $EDGEAI_LANGUAGE =~ ^(zh|en)$ ]] || { echo 'Language must be zh or en.' >&2; exit 2; }
 [[ ${EDGEAI_DEPTH_OBSTACLES:-config} =~ ^(config|true|false)$ ]] || { echo 'Depth obstacles must be config, true or false.' >&2; exit 2; }
 if [[ ${EDGEAI_SCAN360:-false} == true && ( ${EDGEAI_TURN_TEST:-false} == true || ${EDGEAI_RECOVERY_TEST:-false} == true ) ]]; then
     echo 'Scan360 cannot be combined with motion/recovery tests.' >&2; exit 2

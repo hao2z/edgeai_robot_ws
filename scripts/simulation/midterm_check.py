@@ -11,6 +11,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'scripts/ros'))
+from language import localize
 
 
 def read_json(path, default=None):
@@ -42,8 +44,10 @@ def main():
     p.add_argument('--planner', choices=('lattice', 'navfn'), default='lattice')
     p.add_argument('--depth-obstacles', choices=('config', 'true', 'false'), default='config')
     p.add_argument('--part', choices=('all', 'part2'), default='all')
+    p.add_argument('--language', choices=('zh', 'en'), default=os.environ.get('EDGEAI_LANGUAGE', 'zh'))
     p.add_argument('--check', action='store_true')
     a = p.parse_args()
+    os.environ['EDGEAI_LANGUAGE'] = a.language
     if not 30 <= a.duration <= 3600 or not 0 <= a.domain <= 232 or not 0 <= a.verification_seconds <= 120:
         p.error('Budget 30..3600, domain 0..232, verification 0..120 seconds required')
     # Check the actual worker too: dependency discovery alone does not catch
@@ -52,10 +56,10 @@ def main():
     command = ['bash', str(ROOT/'scripts/simulation/start-autonomous-exploration.sh'),
                '--duration', str(a.duration), '--domain', str(a.domain),
                '--controller', a.controller, '--planner', a.planner, '--arena', 'midterm',
-               '--depth-obstacles', a.depth_obstacles]
+               '--depth-obstacles', a.depth_obstacles, '--language', a.language]
     subprocess.run(command+['--check'], check=True, cwd=ROOT)
     if a.check:
-        print(f'{a.part}: Part2 uses AMCL and S1 → C1 task trees. No simulation started.', flush=True)
+        print(localize(f'{a.part}: Part2 uses AMCL and S1 → C1 task trees. No simulation started.'), flush=True)
         return 0
     subprocess.run(['python3', str(ROOT/'scripts/simulation/stop-test-sessions.py')], check=True)
     subprocess.run(['bash', str(ROOT/'scripts/simulation/stop-simulation.sh')], check=True)
@@ -84,7 +88,7 @@ def main():
         nonlocal child, started, completed
         if stopped:
             raise RuntimeError('Demonstration stopped')
-        print(f'[{part}] 日志：{directory/part}', flush=True)
+        print(localize(f'[{part}] 日志：{directory/part}'), flush=True)
         child = subprocess.Popen(command, cwd=ROOT, env=env, start_new_session=True)
         startup_end = time.monotonic()+180.
         seen = 0
@@ -95,7 +99,7 @@ def main():
                     started = row['wall_monotonic_s']
                     (directory/'timer.json').write_text(json.dumps(dict(start_wall_monotonic_s=started,
                         budget_wall_s=a.duration, includes='Part1, switching, Part2 initialization and rescue'), indent=2))
-                    print(f'共享计时开始：{a.duration} 秒', flush=True)
+                    print(localize(f'共享计时开始：{a.duration} 秒'), flush=True)
                 if part == 'part2':
                     if row.get('phase') == 'FINISHED' and row.get('success'):
                         completed = row['completed_wall_monotonic_s']
@@ -136,7 +140,7 @@ def main():
             EDGEAI_RECOVERY_TEST='false', EDGEAI_SCAN360='false', EDGEAI_EXPLORER='frontier',
             EDGEAI_RESCUE='true', EDGEAI_RESCUE_CONFIG=str(ROOT/'src/edgeai_navigation/config/midterm_single_rescue.yaml'))
         if a.part == 'all':
-            print(f'中期检查：Part1 建图及寻找两目标 → 重启 → Part2 S1/C1。结果：{directory}', flush=True)
+            print(localize(f'中期检查：Part1 建图及寻找两目标 → 重启 → Part2 S1/C1。结果：{directory}'), flush=True)
             run(command+['--map', str(directory/'part1/map')], 'part1', env)
             registry = read_json(directory/'part1/targets.json', {})
             ids = {t['id'] for t in registry.get('targets', []) if t.get('yaw') is not None}
@@ -155,13 +159,13 @@ def main():
             started = time.monotonic()
             (directory/'timer.json').write_text(json.dumps(dict(start_wall_monotonic_s=started,
                 budget_wall_s=a.duration, includes='Part2 initialization and rescue only'), indent=2))
-            print(f'仅运行 Part2：AMCL 定位后执行 S1 → C1。结果：{directory}', flush=True)
+            print(localize(f'仅运行 Part2：AMCL 定位后执行 S1 → C1。结果：{directory}'), flush=True)
         remaining = a.duration-(time.monotonic()-started)
         if remaining <= 0:
             raise RuntimeError('No wall budget left for Part2')
         env.pop('EDGEAI_SESSION_DIR', None)
         env['EDGEAI_MIDTERM_PART'] = 'part2'
-        print(f'启动双车起始区 Part2，剩余 {remaining:.1f} 秒。', flush=True)
+        print(localize(f'启动双车起始区 Part2，剩余 {remaining:.1f} 秒。'), flush=True)
         run(['bash', str(ROOT/'scripts/simulation/run-cooperative-truth-test.sh'),
              '--midterm-part2', '--directory', str(directory/'part2'),
              '--params', str(params),
@@ -172,7 +176,7 @@ def main():
         result.update(success=True, reason='Part2 completed' if a.part == 'part2' else 'Both parts completed', elapsed_wall_s=completed-started)
     except (RuntimeError, subprocess.SubprocessError, OSError) as error:
         result['reason'] = str(error)
-        print(f'中期检查未完成：{error}', flush=True)
+        print(localize(f'中期检查未完成：{error}'), flush=True)
     finally:
         if child is not None and child.poll() is None:
             child.terminate()
@@ -196,9 +200,9 @@ def main():
             '- Windows分阶段截图：part1/screenshots/、part2/screenshots/；原始日志及双车诊断同普通任务入口',
             '- 物理碰撞：未配置接触记录，需人工核验，不能由任务成功推断无碰撞',
             '- 当前标记高度按项目配置为 0.15 m，演示前确认现场要求', '']
-        (directory/'verification.md').write_text('\n'.join(evidence))
+        (directory/'verification.md').write_text(localize('\n'.join(evidence)), encoding='utf-8')
         (directory/'exit-code.txt').write_text('0' if result['success'] else '1')
-        print(f'核验记录：{directory/"verification.md"}', flush=True)
+        print(localize(f'核验记录：{directory/"verification.md"}'), flush=True)
     return 0 if result['success'] else 1
 
 

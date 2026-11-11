@@ -1,4 +1,8 @@
 # Dot-source from Windows entry points. Terminal can inherit an incomplete PATH.
+function Get-ProjectText([string]$Chinese, [string]$English) {
+    if ($env:EDGEAI_LANGUAGE -eq 'en') { return $English }
+    return $Chinese
+}
 # Keep resolution local to this process; do not change the user's system PATH.
 # WSL callers may forward an incomplete PATHEXT (for example, only .CPL).
 # PowerShell then treats even an absolute wsl.exe as a document in a pipeline.

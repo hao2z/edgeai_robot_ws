@@ -10,6 +10,7 @@ import errno
 import os
 from collections import Counter, defaultdict
 from mission_display import mission_description
+from language import language, localize
 
 COOPERATIVE = dict(
     TEST_SETUP='准备独立地图与双车粗略起点', AMCL_ACTIVE='AMCL已激活',
@@ -65,8 +66,9 @@ RULES = [
 
 class EventReducer:
     """Keep evidence and counts while bounding repeated live messages."""
-    def __init__(self, emit, clock=time.monotonic):
+    def __init__(self, emit, clock=time.monotonic, selected=None):
         self.writer, self.clock = emit, clock
+        self.selected_language = language(selected)
         self.groups = {}
         self.counts = Counter()
         self.level_counts = Counter()
@@ -86,7 +88,8 @@ class EventReducer:
     def emit(self, source, level, description, evidence, **fields):
         match = ROS_LINE.search(evidence)
         robot = fields.pop('robot', None) or robot_for(source, match[1] if match else '')
-        self.writer(source, level, description, evidence, **fields, **({'robot': robot} if robot else {}))
+        self.writer(source, level, localize(description, self.selected_language), evidence,
+                    **fields, **({'robot': robot} if robot else {}))
 
     def task_event(self, source, line, message):
         prefix = 'MISSION_' if source == 'mission' else 'COOPERATIVE_'
@@ -106,7 +109,7 @@ class EventReducer:
                             'PLAN_REJECTED', 'PLAN_BLOCKED_BY_PARKED_PEER', 'TARGET_UNAVAILABLE')
         level = 'ERROR' if failure else ('WARN' if warning else ('OK' if data.get('success') is True else 'INFO'))
         if source == 'mission':
-            description = mission_description(data)
+            description = mission_description(data, self.selected_language)
             if not description:
                 return True
             self.mission = None if phase == 'RESULT' else (description, line, data)
@@ -327,13 +330,14 @@ def follow(directory):
          (directory / 'events.jsonl').open('a', encoding='utf-8', buffering=1) as structured:
         def emit(source, level, description, evidence='', **fields):
             nonlocal terminal_output
+            description = localize(description)
             stamp = datetime.now().astimezone().isoformat(timespec='milliseconds')
-            label = {'robot1':'机器人1', 'robot2':'机器人2'}.get(fields.get('robot'))
+            label = localize({'robot1':'机器人1', 'robot2':'机器人2'}.get(fields.get('robot'), ''))
             scope = f' [{label}]' if label else ''
             text = f'{stamp} [{level}]{scope} [{source}] {description}'
             events.write(text + '\n')
             structured.write(json.dumps(dict(time=stamp, source=source, level=level,
-                description=description, evidence=evidence, **fields), ensure_ascii=False) + '\n')
+                description=description, evidence=evidence, language=language(), **fields), ensure_ascii=False) + '\n')
             if terminal_output:
                 try:
                     # Keep timestamps and message text neutral; highlight severity only.
@@ -343,7 +347,7 @@ def follow(directory):
                     print(display, flush=True)
                 except (BrokenPipeError, OSError):
                     terminal_output = False
-        reducer = EventReducer(emit)
+        reducer = EventReducer(emit, selected=language())
         reducer.frontier = (directory/'frontier-backend').exists()
         while True:
             for path in (directory / 'screenshots').glob('*.event'):

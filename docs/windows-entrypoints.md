@@ -2,6 +2,16 @@
 
 所有命令从仓库根目录运行。
 
+语言在启动脚本顶部的 `$Language` 参数设置，默认 `zh`（中文）。也可直接传参：
+
+```powershell
+.\Start-Midterm-Check.ps1 -Language en
+.\Start-Autonomous-Mission.ps1 -Language en
+# 中文：-Language zh；导航测试、协作测试、纯仿真入口也支持同一参数。
+```
+
+影响项目终端事件、任务阶段、真值核验摘要与 RViz 自定义诊断面板。ROS/Gazebo/RViz 自带界面及原始日志保留原文；不改变导航与任务规则。语言在启动时确定，已有会话需下次启动时切换。
+
 | 入口 | 职责 |
 |---|---|
 | `Start-Autonomous-Mission.ps1` | 主任务及其参数；默认双机器人流程 |

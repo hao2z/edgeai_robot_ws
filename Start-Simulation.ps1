@@ -1,5 +1,6 @@
 # Pure Gazebo/optional SLAM entry; never schedules rescue tasks.
 param(
+    [ValidateSet('zh','en')][string]$Language = 'zh',
     [ValidateSet('VcXsrv', 'WSLg')][string]$DisplayServer = 'WSLg',
     [ValidateRange(1, 4)][int]$Robots = 1,
     [ValidateSet('simple', 'midterm')][string]$Arena = 'midterm',
@@ -8,6 +9,7 @@ param(
     [switch]$InCurrentWindow
 )
 $ErrorActionPreference = 'Stop'
+$env:EDGEAI_LANGUAGE = $Language
 if ($Arena -eq 'midterm' -and $Robots -gt 2) { throw 'Midterm supports one or two robots.' }
 . (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
 $linuxRoot = (& $wslExe -d $Distro -- wslpath -a -u ($PSScriptRoot.Replace('\','/')) | Out-String).Trim()
@@ -16,7 +18,7 @@ if (-not $InCurrentWindow) {
     & (Join-Path $PSScriptRoot 'Stop-Simulation.ps1') -KeepProcessId $PID -Distro $Distro
     $consoleArgs = @('-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass',
         '-File', "`"$PSCommandPath`"", '-InCurrentWindow',
-        '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Arena', $Arena, '-Distro', "`"$Distro`"")
+        '-DisplayServer', $DisplayServer, '-Robots', $Robots, '-Arena', $Arena, '-Language', $Language, '-Distro', "`"$Distro`"")
     if ($SLAM) { $consoleArgs += '-SLAM' }
     if ($windowsTerminal) {
         Start-Process $windowsTerminal -ArgumentList (@('-w', 'new', 'new-tab', '--title', '"EdgeAI Simulation"',
@@ -72,7 +74,7 @@ $mapping = if ($SLAM) { 'true' } else { 'false' }
 & (Join-Path $PSScriptRoot 'Open-ROS-Terminal.ps1') -Distro $Distro -DisplayServer $DisplayServer
 $observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',
     '-File', "`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"", '-SessionDirectory', "`"$sessionDirectory`"", '-SimulationOnly')
-& $wslExe -d $Distro -- env "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SIM_ARENA=$Arena" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
+& $wslExe -d $Distro -- env "EDGEAI_LANGUAGE=$Language" "EDGEAI_SESSION_DIR=$linuxSession" "EDGEAI_SIM_ARENA=$Arena" EDGEAI_CAPTURE_ACK=true bash $linuxRoot/scripts/simulation/run-simulation.sh $backend "robot_count:=$Robots" "multi_robot:=$multi" "slam:=$mapping"
 $simulationExitCode = $LASTEXITCODE
 if (-not $observer.WaitForExit(15000)) { $observer.Kill() }
 Write-Host "Simulation ended (exit code $simulationExitCode). This window stays open for inspection." -ForegroundColor Cyan
