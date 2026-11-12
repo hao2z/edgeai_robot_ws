@@ -51,6 +51,65 @@ ros2 topic echo /detected_targets
 
 ---
 
+## Quickstart: Parametric Map Generator, Previews & Automated Verifier
+
+This section covers generating custom or random test arenas (`map_generator.py`), previewing generated 2D/3D maps, and running the automated robustness and referee verifier (`verify_midterm.py`).
+
+> **Build note:** In this workspace's Pixi environment (`setuptools 84.0.0`), `edgeai_perception` does not accept `--symlink-install`. Use `pixi run colcon build` for full workspace builds; you can still use `--symlink-install` when rebuilding only `edgeai_robot_description`.
+
+### 1. Generate Maps (Midterm Preset or New Random Seeds)
+```bash
+# Generate the standard Midterm preset arena
+pixi run python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset midterm --out-dir generated_maps
+
+# Generate a single random arena with a chosen seed (example: seed 100 -> random_arena_s100.*)
+pixi run python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset random --seed 100 --out-dir generated_maps --install-to-sim
+
+# Generate a batch of 5 consecutive seeds (seed 100..104 -> random_arena_s100..s104)
+pixi run python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset random --seed 100 --batch 5 --out-dir generated_maps --install-to-sim
+```
+- Optional flags: `--name <custom_name>` (for single map output), `--config <path>` (defaults to `src/edgeai_perception/config/generator_config.yaml`).
+- Each map outputs:
+  - `<name>.sdf` (3D Gazebo world; copied to `src/edgeai_robot_description/worlds/` when `--install-to-sim` is passed)
+  - `<name>_clean.pgm/.yaml` & `<name>_noisy.pgm/.yaml` (ideal and noise-degraded 2D occupancy maps)
+  - `<name>_gt.json` (ground-truth obstacles, docking slots, trap gaps, and verified A* paths)
+  - `<name>_preview.svg` (color-coded top-down SVG preview)
+
+### 2. View Generated Maps (2D & 3D)
+**2D previews & dashboard:**
+```bash
+xdg-open generated_maps/random_arena_s100_preview.svg
+xdg-open generated_maps/midterm_arena_preview.svg
+xdg-open evidence/verification_dashboard.svg
+```
+
+**3D Gazebo Harmonic (+ optional RViz):**
+Whenever a new `.sdf` is copied into `src/edgeai_robot_description/worlds/` with `--install-to-sim`, rebuild `edgeai_robot_description` before launching:
+```bash
+pixi run colcon build --packages-select edgeai_robot_description --symlink-install
+pixi run bash -c "source install/setup.bash && ros2 launch edgeai_robot_description simulation_real.launch.py world:=random_arena_s100.sdf"
+```
+To open RViz alongside Gazebo (`simulation_real.launch.py` alone starts Gazebo + SLAM Toolbox + bridges without RViz):
+```bash
+pixi run rviz2 -d src/edgeai_robot_description/rviz/realistic_robot.rviz
+```
+
+### 3. Run Automated Map Tests & Competition Verifier
+```bash
+# Offline test suite (SDF integrity, Clean/Noisy A* navigation, C1 docking geometry, trap-gap rejection)
+pixi run python3 src/edgeai_perception/edgeai_perception/verify_midterm.py \
+  --mode test-maps --maps-dir generated_maps
+
+# Live simulation verification (checks SLAM map, Part 1 detections, and Part 2 evidence logs)
+pixi run python3 src/edgeai_perception/edgeai_perception/verify_midterm.py --mode verify-run
+```
+- `--mode verify-run` writes `evidence/verification_report.json` and `evidence/verification_dashboard.svg`.
+
+---
+
 ## Environment
 
 - Ubuntu 24.04 (x86-64).
