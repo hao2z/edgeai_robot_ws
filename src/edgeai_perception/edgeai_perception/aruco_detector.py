@@ -296,6 +296,7 @@ class ArucoDetectorNode(Node):
         )
 
         if marker_id not in self.targets:
+            w_init = 1.0 / (max(rel_dist, 0.35) ** 2)
             self.targets[marker_id] = {
                 'id': marker_id,
                 'name': target_name,
@@ -307,6 +308,8 @@ class ArucoDetectorNode(Node):
                 'arena_x': ax,
                 'arena_y': ay,
                 'frame_id': frame_id,
+                'min_dist_m': round(rel_dist, 3),
+                'weight_sum': w_init,
                 'relative_base_footprint': {
                     'forward_x_m': round(rel_forward, 3),
                     'left_y_m': round(rel_left, 3),
@@ -324,16 +327,26 @@ class ArucoDetectorNode(Node):
             )
         else:
             t = self.targets[marker_id]
-            alpha = 0.20
-            t['x'] = (1.0 - alpha) * t['x'] + alpha * x
-            t['y'] = (1.0 - alpha) * t['y'] + alpha * y
-            t['z'] = (1.0 - alpha) * t['z'] + alpha * z
-            t['yaw'] = (1.0 - alpha) * t['yaw'] + alpha * yaw
-            ax_s, ay_s, _ = odom_to_arena(
-                t['x'], t['y'], t['yaw'], self.spawn_x, self.spawn_y, self.spawn_yaw
-            )
-            t['arena_x'] = ax_s
-            t['arena_y'] = ay_s
+            # Inverse-distance-squared weighting + far-observation outlier gating
+            w_obs = 1.0 / (max(rel_dist, 0.35) ** 2)
+            if rel_dist <= 2.4 or t.get('min_dist_m', 9.9) > 1.8:
+                t['weight_sum'] = t.get('weight_sum', 1.0) + w_obs
+                alpha = max(0.04, min(0.35, w_obs / t['weight_sum']))
+                t['x'] = (1.0 - alpha) * t['x'] + alpha * x
+                t['y'] = (1.0 - alpha) * t['y'] + alpha * y
+                t['z'] = (1.0 - alpha) * t['z'] + alpha * z
+                yaw_diff = math.atan2(math.sin(yaw - t['yaw']), math.cos(yaw - t['yaw']))
+                t['yaw'] = math.atan2(
+                    math.sin(t['yaw'] + alpha * yaw_diff),
+                    math.cos(t['yaw'] + alpha * yaw_diff),
+                )
+                ax_s, ay_s, _ = odom_to_arena(
+                    t['x'], t['y'], t['yaw'], self.spawn_x, self.spawn_y, self.spawn_yaw
+                )
+                t['arena_x'] = ax_s
+                t['arena_y'] = ay_s
+            if rel_dist < t.get('min_dist_m', 9.9):
+                t['min_dist_m'] = round(rel_dist, 3)
             t['frame_id'] = frame_id
             t['relative_base_footprint'] = {
                 'forward_x_m': round(rel_forward, 3),
@@ -356,6 +369,7 @@ class ArucoDetectorNode(Node):
 
     def save_evidence_json(self):
         evidence_path = os.path.join(self.evidence_dir, 'detected_targets.json')
+        summary_path = os.path.join(self.evidence_dir, 'part1_detection_summary.json')
         payload = [
             {
                 'id': t['id'],
@@ -367,6 +381,7 @@ class ArucoDetectorNode(Node):
                 'arena_y': round(t['arena_y'], 3),
                 'yaw': round(t['yaw'], 3),
                 'frame_id': t['frame_id'],
+                'min_dist_m': t.get('min_dist_m', 0.0),
                 'relative_base_footprint': t['relative_base_footprint'],
                 'first_detected_sim_time_sec': t['first_detected_sim_time_sec'],
                 'last_detected_sim_time_sec': t['last_detected_sim_time_sec'],
@@ -374,9 +389,30 @@ class ArucoDetectorNode(Node):
             }
             for t in self.targets.values()
         ]
+        summary_dict = {
+            t['name']: {
+                'id': t['id'],
+                'name': t['name'],
+                'type': t['type'],
+                'frame_id': t['frame_id'],
+                'odom_map_pose': {'x': round(t['x'], 3), 'y': round(t['y'], 3), 'yaw': round(t['yaw'], 3)},
+                'arena_pose': {'x': round(t['arena_x'], 3), 'y': round(t['arena_y'], 3), 'yaw': round(t['yaw'], 3)},
+                'relative_to_robot_base': {
+                    'forward_m': t['relative_base_footprint']['forward_x_m'],
+                    'left_m': t['relative_base_footprint']['left_y_m'],
+                    'distance_m': t['relative_base_footprint']['distance_m'],
+                },
+                'first_detected_sim_time_sec': t['first_detected_sim_time_sec'],
+                'last_detected_sim_time_sec': t['last_detected_sim_time_sec'],
+                'observations': t['count'],
+            }
+            for t in self.targets.values()
+        }
         try:
             with open(evidence_path, 'w') as f:
                 json.dump(payload, f, indent=2)
+            with open(summary_path, 'w') as f:
+                json.dump(summary_dict, f, indent=2)
         except OSError:
             pass
 

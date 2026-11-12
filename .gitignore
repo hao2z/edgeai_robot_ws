@@ -21,6 +21,7 @@ frames_*.pdf
 # Local map exports (README saves to <repo>/maps/); packaged maps live in src/*/maps/
 /maps/
 /evidence/
+/generated_maps/
 
 # rosbag recordings
 rosbag2_*/

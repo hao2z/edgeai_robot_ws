@@ -1,0 +1,64 @@
+# ============================================================================
+# KTH EdgeAI Robotics Challenge - Parametric Arena & Map Generator Config
+# Used by: edgeai_perception/map_generator.py
+# ============================================================================
+
+arena:
+  width: 5.0                    # Inner arena width in meters (X: 0.0 -> 5.0)
+  height: 5.0                   # Inner arena height in meters (Y: 0.0 -> 5.0)
+  wall_thickness: 0.10          # Perimeter & internal wall thickness (m)
+  wall_height: 0.50             # Wall height in Gazebo (m)
+  resolution: 0.05              # 2D OccupancyGrid resolution (m/pixel)
+  map_padding_m: 0.25           # Extra border around arena in exported .pgm (m)
+  start_zone: [0.0, 0.0, 1.4, 1.0]  # [x_min, y_min, x_max, y_max] lower-left start area
+  spawn_pose: [0.7, 0.5, 0.0]       # Default robot1 [x, y, yaw_rad] for odom origin alignment
+  spawn_pose_robot2: [1.15, 0.45, 0.0]  # Default robot2 start pose (collision-free)
+
+rooms_and_walls:
+  num_rooms: 3                  # Number of partitioned spaces (2 to 4 recommended for 5x5m)
+  min_room_size: 1.45           # Minimum width/length of a split room (m)
+  allow_tilted_walls: true      # Allow non-orthogonal (angled) internal walls
+  wall_tilt_prob: 0.55          # Probability that an internal wall is tilted
+  max_wall_tilt_deg: 18.0       # Maximum tilt angle in degrees from horizontal/vertical
+  add_t_spur_wall: true         # Add a short T-junction spur wall (like W1b in Midterm)
+  spur_length_range: [0.40, 0.65]
+
+passages_and_traps:
+  min_passable_gap: 0.88        # Minimum true passage width (m) - guarantees >=1 valid route
+  max_passable_gap: 1.18        # Maximum doorway/corridor opening width (m)
+  enable_trap_gaps: true        # Generate deceptive narrow gaps ("trap routes")
+  trap_gap_range: [0.28, 0.40]  # Width of trap gaps (m): looks open, impassable for 0.30m robot
+  robot_inflation_radius: 0.23  # Inflation radius (m) used by generator to verify A* traversability
+
+obstacles:
+  num_boxes: 2                  # Number of rectangular box obstacles
+  num_cylinders: 2              # Number of cylindrical barrel/pillar obstacles
+  allow_rotated_boxes: true     # Allow rectangular boxes to have random yaw rotation
+  box_width_range: [0.45, 0.80]
+  box_length_range: [0.50, 0.95]
+  cylinder_radius_range: [0.16, 0.26]
+  obstacle_height: 0.50
+  min_clearance_to_passages: 0.78
+
+targets:
+  marker_size: 0.16             # Physical ArUco marker side length (m)
+  S1:
+    id: 1
+    type: normal
+    rescue_radius: 0.50
+    hold_duration_sec: 10.0
+  C1:
+    id: 2
+    type: coop
+    rescue_radius: 0.70
+    hold_duration_sec: 10.0
+    docking_slot_dist: 0.44     # Distance from C1 center for each robot's safe docking slot (m)
+    min_inter_robot_dist: 0.52  # Minimum center-to-center distance between robot1 & robot2 at C1
+
+noise_test:
+  export_noisy_map: true        # Also export <name>_noisy.pgm + .yaml for robustness testing
+  edge_jitter_prob: 0.16        # Probability of 1-pixel lidar edge roughness on wall boundaries
+  random_speckle_count: 6       # Isolated false occupied pixels in free space (salt & pepper noise)
+  unknown_shadow_count: 3       # Unexplored gray (-1 / 205) patches behind obstacles/corners
+  global_offset_m: [0.05, -0.05]# Simulated SLAM map origin shift [dx, dy] in meters
+  global_rotation_deg: 1.5      # Simulated slight angular drift in degrees

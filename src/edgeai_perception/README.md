@@ -21,9 +21,37 @@ ROS 2 Jazzy Python package for ArUco target detection, 3D pose estimation, and p
    - Autonomous patrol node that moves 1.0 m forward and turns left 90° in a closed-loop using `/odom`.
    - Completes 2 full loops (8 sides) and automatically halts.
 
-4. **Simulation Assets**:
-   - `generate_markers.py`: Generates ArUco marker textures with white borders and builds Gazebo Harmonic 3D SDF models.
-   - `spawn_markers.py`: Spawns test targets into the running Gazebo arena.
+4. **Simulation Assets & Parametric Map Generator (`map_generator`)**:
+   - `config/generator_config.yaml`: Configurable parameters for arena dimensions, room counts (BSP splitting), tilted/angled walls, passable doorway widths vs. deceptive narrow "trap gaps", rotated boxes, cylindrical barrels, and OccupancyGrid noise injection.
+   - `map_generator.py`: Zero-dependency generator that simultaneously exports:
+     1. `<name>.sdf`: Gazebo Harmonic 3D world with ArUco target stands (`S1` & `C1`).
+     2. `<name>_clean.pgm/.yaml`: Ideal 2D OccupancyGrid aligned with robot spawn origin.
+     3. `<name>_noisy.pgm/.yaml`: Degraded OccupancyGrid (1-px edge jitter, isolated speckles, unknown gray shadows, slight rotation/offset) for testing navigation robustness.
+     4. `<name>_gt.json`: Ground-truth coordinates, C1 dual-robot docking slots, trap gap locations, and A* verified paths.
+     5. `<name>_preview.svg`: Top-down vector preview diagram (walls, barrels, trap gaps, rescue zones, A* paths).
+   - `verify_midterm.py`: Automated test suite for Clean/Noisy A* navigation, trap-gap inflation rejection, and the 2-minute Referee Verification Dashboard (`evidence/verification_dashboard.svg`).
+
+---
+
+## Quickstart: Parametric Map Generator & Automated Test Suite (Works on macOS & Linux)
+
+```bash
+# 1. Generate the exact Midterm Check arena (SDF + Clean/Noisy PGM + GT JSON + Preview SVG)
+python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset midterm --out-dir generated_maps
+
+# 2. Generate 5 procedural random test arenas (angled walls, barrels, trap gaps, A* verified)
+python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset random --seed 42 --batch 5 --out-dir generated_maps
+
+# 3. Generate a random arena and install its .sdf directly into simulation worlds/
+python3 src/edgeai_perception/edgeai_perception/map_generator.py \
+  --preset random --seed 42 --name test_arena_1 --install-to-sim
+
+# 4. Run the automated map & navigation robustness test suite + Referee Verification Dashboard
+python3 src/edgeai_perception/edgeai_perception/verify_midterm.py \
+  --mode all --generate-mock-evidence
+```
 
 ---
 
