@@ -23,6 +23,11 @@ frames_*.pdf
 /evidence/
 /generated_maps/
 
+# Generated Gazebo worlds copied via map_generator.py --install-to-sim (keep canonical worlds)
+/src/edgeai_robot_description/worlds/*.sdf
+!/src/edgeai_robot_description/worlds/empty.sdf
+!/src/edgeai_robot_description/worlds/midterm_arena.sdf
+
 # rosbag recordings
 rosbag2_*/
 *.db3
