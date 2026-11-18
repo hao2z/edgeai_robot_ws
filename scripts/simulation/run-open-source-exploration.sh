@@ -12,20 +12,18 @@ source "$PROJECT_ROOT/scripts/display/configure-desktop.sh"
 set +u  # colcon-generated setup scripts expect some variables to be unset.
 source "$PROJECT_ROOT/scripts/ros/workspace-env.sh"
 source "$EDGEAI_BUILD_ROOT/install/local_setup.bash"
-backend=${EDGEAI_EXPLORER:-frontier}
+backend=frontier
 cache=$EDGEAI_RUNTIME_CACHE
-if [[ $backend == frontier ]]; then
-    if [[ ! -f "$cache/frontier-install/edgeai-recovery-owner" ]] ||
-       ! grep -qx '11864e4ac6789dc81fd71bad51e43339c01deca2 repeat-gain-v4-monitor' "$cache/frontier-install/edgeai-recovery-owner"; then
-        echo 'Build the coordinated explorer first: bash scripts/setup/build-frontier-runtime.sh' >&2
-        exit 1
-    fi
-    source "$cache/frontier-install/local_setup.bash"
-elif [[ $backend == lite ]]; then
-    source "$cache/install/local_setup.bash"
-else
-    echo "Unknown exploration backend: $backend" >&2; exit 2
+if [[ ${EDGEAI_EXPLORER:-frontier} != frontier ]]; then
+    echo 'Only task-managed frontier exploration is supported.' >&2; exit 2
 fi
+if [[ ! -f "$cache/frontier-install/edgeai-recovery-owner" ]] ||
+   ! grep -qx '11864e4ac6789dc81fd71bad51e43339c01deca2 repeat-gain-v4-monitor' "$cache/frontier-install/edgeai-recovery-owner" ||
+   ! grep -qx 'frontier-endpoint-clearance-v1' "$cache/frontier-install/edgeai-recovery-owner"; then
+    echo 'Build the coordinated explorer first: bash scripts/setup/build-frontier-runtime.sh' >&2
+    exit 1
+fi
+source "$cache/frontier-install/local_setup.bash"
 set -u
 duration=${1:-120}
 map_basename=${2:-}
@@ -50,46 +48,50 @@ gui=${EDGEAI_GUI:-true}
 rviz=${EDGEAI_RVIZ:-true}
 navigation_test=${EDGEAI_NAVIGATION_TEST:-false}
 cooperative_default=false
-if [[ $arena == midterm && $navigation_test != true && ${EDGEAI_TURN_TEST:-false} != true && ${EDGEAI_SCAN360:-false} != true && ${EDGEAI_RECOVERY_TEST:-false} != true ]]; then
+if [[ ( $arena == midterm || $arena == competition ) && $navigation_test != true && ${EDGEAI_TURN_TEST:-false} != true && ${EDGEAI_SCAN360:-false} != true && ${EDGEAI_RECOVERY_TEST:-false} != true ]]; then
     cooperative_default=true
 fi
 cooperative=${EDGEAI_COOPERATIVE_RESCUE:-$cooperative_default}
+joint_mapping=${EDGEAI_JOINT_MAPPING:-false}
 export EDGEAI_COOPERATIVE_RESCUE=$cooperative
-if [[ $cooperative == true && -z ${CYCLONEDDS_URI:-} ]]; then
-    export CYCLONEDDS_URI='<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>'
-fi
-if [[ $cooperative == true && ( $arena != midterm || $navigation_test == true || ${EDGEAI_TURN_TEST:-false} == true ) ]]; then
-    echo 'Cooperative rescue requires the normal midterm exploration mission.' >&2; exit 2
+
+if [[ $cooperative == true && ( ( $arena != midterm && $arena != competition ) || $navigation_test == true || ${EDGEAI_TURN_TEST:-false} == true || ${EDGEAI_SCAN360:-false} == true || ${EDGEAI_RECOVERY_TEST:-false} == true ) ]]; then
+    echo 'Cooperative rescue requires a normal midterm or competition mission.' >&2; exit 2
 fi
 check_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config_dir="$PROJECT_ROOT/src/edgeai_navigation/config"
 sim_dir="$PROJECT_ROOT/src/edgeai_simulation"
 exploration_dir="$PROJECT_ROOT/src/edgeai_exploration"
-arena_args=("targets_file:=$sim_dir/config/targets.yaml"
-            "robots_file:=$sim_dir/config/robots.yaml" 'use_robot_pose:=false')
+robots_file="$sim_dir/config/robots.yaml"
+if [[ ( $joint_mapping == true || $cooperative == true ) && $arena != midterm ]]; then
+    robots_file="$sim_dir/config/robots_joint_development.yaml"
+fi
+targets_config="$sim_dir/config/targets.yaml"
+use_robot_pose=false
 camera_pose='3.8 -4.35 6 0 0.80 2.288'
-perception_args=()
 if [[ $arena == competition ]]; then
-    arena_args+=("targets_file:=$sim_dir/config/targets_competition.yaml")
+    targets_config="$sim_dir/config/targets_competition.yaml"
 elif [[ $arena == midterm ]]; then
-    arena_args=("targets_file:=$sim_dir/config/targets_midterm.yaml"
-                "robots_file:=$sim_dir/config/robots_midterm.yaml" 'use_robot_pose:=true')
+    robots_file="$sim_dir/config/robots_midterm.yaml"
+    targets_config="$sim_dir/config/targets_midterm.yaml"
+    use_robot_pose=true
     camera_pose='2.5 -3.8 7 0 0.85 1.57079632679'
-    perception_args=(-p marker_size_m:=0.16 -p 'target_types:=1:normal,2:cooperative')
     export EDGEAI_RESCUE_CONFIG=${EDGEAI_RESCUE_CONFIG:-$config_dir/midterm_single_rescue.yaml}
 elif [[ $arena != simple ]]; then
     echo "Unknown arena: $arena" >&2; exit 2
 fi
+camera_config=$(python3 -c 'import sys,yaml; a=yaml.safe_load(open(sys.argv[1])); print(a["dictionary"], a["marker_size_m"], a["panel_size_m"])' "$targets_config")
+read -r marker_dictionary marker_size suspect_panel_size <<< "$camera_config"
+perception_args=(-p "dictionary:=$marker_dictionary" -p "marker_size_m:=$marker_size")
+arena_args=("targets_file:=$targets_config" "robots_file:=$robots_file" "use_robot_pose:=$use_robot_pose")
 case "$controller" in
     dwb|mppi|rpp) nav_config="$config_dir/nav2_exploration_rectangle.yaml" ;;
     *) echo "Unknown controller: $controller" >&2; exit 2 ;;
 esac
-explore_config="$config_dir/explore_lite.yaml"
-if [[ $profile == safe ]]; then
-    explore_config="$config_dir/explore_lite_safe.yaml"
-elif [[ $profile != baseline && $profile != rectangle && $profile != conservative ]]; then
-    echo "Unknown profile: $profile" >&2; exit 2
-fi
+case "$profile" in
+    baseline|rectangle|conservative|safe) ;;
+    *) echo "Unknown profile: $profile" >&2; exit 2 ;;
+esac
 export EDGEAI_NAV_PROFILE=$profile
 temp_dir=${EDGEAI_SESSION_DIR:-$PROJECT_ROOT/tests/results/runs/$(date +%Y%m%d-%H%M%S)-domain$ROS_DOMAIN_ID-$$}
 mkdir -p "$temp_dir" "$PROJECT_ROOT/runtime"
@@ -104,7 +106,7 @@ export PYTHONUNBUFFERED=1 RCUTILS_LOGGING_BUFFERED_STREAM=0
 export ROS_LOG_DIR="$temp_dir/ros"
 python3 "$PROJECT_ROOT/scripts/ros/prepare_navigation_runtime.py" "$nav_config" "$temp_dir/nav2-runtime.yaml"
 nav_config="$temp_dir/nav2-runtime.yaml"
-for name in sim nav explore rviz rosout watch alignment authority perception observation suspects; do touch "$temp_dir/$name.log"; done
+for name in sim nav explore rviz rosout watch alignment authority perception suspects; do touch "$temp_dir/$name.log"; done
 event() {
     local message
     message=$(python3 "$PROJECT_ROOT/scripts/ros/language.py" "$@")
@@ -118,6 +120,7 @@ record = dict(pid=int(pid), start_ticks=pathlib.Path(f'/proc/{pid}/stat').read_t
               directory=directory, partition=partition, domain=os.environ['ROS_DOMAIN_ID'],
               arena=arena, profile=profile, duration=int(duration))
 record['language'] = os.environ.get('EDGEAI_LANGUAGE', 'zh')
+record['runtime_profile'] = os.environ.get('EDGEAI_RUNTIME_PROFILE', 'debug')
 record['mode'] = 'isolated_turn_check' if os.environ.get('EDGEAI_TURN_TEST') == 'true' else 'exploration'
 if os.environ.get('EDGEAI_RECOVERY_TEST') == 'true':
     record['mode'] = 'native_recovery_check'
@@ -130,7 +133,7 @@ printf '%s\n' "$temp_dir" > "$PROJECT_ROOT/runtime/latest-session.txt"
 [[ $backend != frontier ]] || touch "$temp_dir/frontier-backend"
 python3 -u "$PROJECT_ROOT/scripts/ros/stream_session_logs.py" "$temp_dir" 2>"$temp_dir/stream-errors.log" 9>&- &
 tail_pid=$!
-sim_pid='' nav_pid='' explore_pid='' rviz_pid='' monitor_pid='' diagnostic_pid='' authority_pid='' command_probe_pid='' perception_pid='' scan_pid='' suspects_pid=''
+sim_pid='' nav_pid='' explore_pid='' rviz_pid='' monitor_pid='' diagnostic_pid='' authority_pid='' command_probe_pid='' perception_pid='' scan_pid='' joint_pid=''
 mission_pid=''
 cleanup() {
     result=$?
@@ -143,6 +146,7 @@ cleanup() {
         done
     fi
     touch "$temp_dir/stopping"
+    [[ -z $joint_pid ]] || timeout 5s ros2 service call /robot2/navigation_authority/stop std_srvs/srv/Trigger '{}' >"$temp_dir/robot2/authority-stop.log" 2>&1 || true
     event "正在关闭本次测试的仿真、导航与探索进程（退出码 $result），日志保留在 $temp_dir"
     [[ -z $mission_pid ]] || kill -TERM "$mission_pid" 2>/dev/null || true
     [[ -z $mission_pid ]] || wait "$mission_pid" 2>/dev/null || true
@@ -153,8 +157,6 @@ cleanup() {
     [[ -z $scan_pid ]] || wait "$scan_pid" 2>/dev/null || true
     [[ -z $perception_pid ]] || kill -TERM "$perception_pid" 2>/dev/null || true
     [[ -z $perception_pid ]] || wait "$perception_pid" 2>/dev/null || true
-    [[ -z $suspects_pid ]] || kill -TERM "$suspects_pid" 2>/dev/null || true
-    [[ -z $suspects_pid ]] || wait "$suspects_pid" 2>/dev/null || true
     [[ -z $authority_pid ]] || kill -INT "$authority_pid" 2>/dev/null || true
     [[ -z $rviz_pid ]] || kill -TERM -- "-$rviz_pid" 2>/dev/null || true
     # Stop the Gazebo update loop through transport before delivering signals.
@@ -166,18 +168,18 @@ cleanup() {
             >"$temp_dir/gazebo-stop.log" 2>&1 || true
         sleep 2
     fi
-    for pid in "$explore_pid" "$nav_pid" "$sim_pid"; do
+    for pid in "$explore_pid" "$nav_pid" "$joint_pid" "$sim_pid"; do
         [[ -z $pid ]] || kill -INT -- "-$pid" 2>/dev/null || true
     done
     for _ in {1..30}; do
         alive=false
-        for pid in "$explore_pid" "$nav_pid" "$sim_pid"; do
+        for pid in "$explore_pid" "$nav_pid" "$joint_pid" "$sim_pid"; do
             if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then alive=true; fi
         done
         $alive || break
         sleep .2
     done
-    for pid in "$explore_pid" "$nav_pid" "$sim_pid"; do
+    for pid in "$explore_pid" "$nav_pid" "$joint_pid" "$sim_pid"; do
         [[ -z $pid ]] || kill -TERM -- "-$pid" 2>/dev/null || true
     done
     if grep -Eq 'Segmentation fault|exit code (139|-11)' "$temp_dir/sim.log"; then
@@ -203,11 +205,9 @@ python3 "$PROJECT_ROOT/src/edgeai_simulation/tools/prepare_observation_world.py"
     "$EDGEAI_GZ_GUI_CONFIG" "$camera_pose"
 arena_args+=("world_file:=$temp_dir/observation.sdf")
 simulation_slam=true
+[[ $joint_mapping != true ]] || simulation_slam=false
 if [[ $navigation_test == true ]]; then
     simulation_slam=false
-    targets_config="$sim_dir/config/targets.yaml"
-    [[ $arena != midterm ]] || targets_config="$sim_dir/config/targets_midterm.yaml"
-    [[ $arena != competition ]] || targets_config="$sim_dir/config/targets_competition.yaml"
     python3 - "$sim_dir" "$targets_config" "$temp_dir" <<'TRUTH_MAP'
 import importlib.util,sys
 from pathlib import Path
@@ -222,15 +222,23 @@ TRUTH_MAP
 fi
 python3 -u "$PROJECT_ROOT/scripts/ros/monitor_ros.py" >"$temp_dir/rosout.log" 2>&1 9>&- &
 monitor_pid=$!
+if [[ ${EDGEAI_RUNTIME_PROFILE:-debug} != performance ]]; then
 python3 -u "$PROJECT_ROOT/scripts/ros/navigation_diagnostics.py" --ros-args \
     -p use_sim_time:=true -p "static_map:=$navigation_test" -p "cooperative:=$cooperative" -p "log_directory:=$temp_dir" >"$temp_dir/alignment.log" 2>&1 9>&- &
 diagnostic_pid=$!
+else
+    event 'Performance profile: detailed navigation diagnostics disabled; task events and ground-truth audit retained'
+fi
 
 export EDGEAI_TRUTH_DIRECTORY="$temp_dir"
 fleet_args=('multi_robot:=false' 'robot_count:=1')
 if [[ $cooperative == true ]]; then
-    fleet_args=('multi_robot:=true' 'robot_count:=2' 'primary_unscoped:=true')
+    fleet_args=('multi_robot:=true' 'robot_count:=2')
 fi
+if [[ $joint_mapping == true ]]; then
+    fleet_args=('multi_robot:=true' 'robot_count:=2')
+fi
+if [[ $joint_mapping == true ]]; then perception_args+=(-p 'camera_robots:=robot1,robot2'); else perception_args+=(-p 'camera_robots:=robot1'); fi
 # The mission node starts early to capture the mapping-start relative reference.
 # Shell owns process launch/cleanup only, never S1/C1 stage transitions.
 mission_enabled=true
@@ -238,14 +246,14 @@ if [[ $navigation_test == true || ${EDGEAI_TURN_TEST:-false} == true || ${EDGEAI
     mission_enabled=false
 fi
 if [[ $mission_enabled == true ]]; then
-    mission_observation=false
-    if [[ ${EDGEAI_OBSERVATION_SCAN:-true} == true && ${EDGEAI_TARGET_SEARCH:-true} == true ]]; then mission_observation=true; fi
     mission_rescue=${EDGEAI_RESCUE_CONFIG:-$config_dir/normal_rescue.yaml}
     python3 "$PROJECT_ROOT/src/edgeai_mission/scripts/prepare_mission.py" \
         --root "$PROJECT_ROOT" --directory "$temp_dir" --rescue "$mission_rescue" \
         --map "${map_basename:-$temp_dir/map}" --duration "$duration" --backend "$backend" \
-        --cooperative "$cooperative" --observation "$mission_observation" --rescue-enabled "${EDGEAI_RESCUE:-true}" \
-        --part "${EDGEAI_MIDTERM_PART:-integrated}"
+        --cooperative "$cooperative" --rescue-enabled "${EDGEAI_RESCUE:-true}" \
+        --part "${EDGEAI_MIDTERM_PART:-integrated}" --robots-file "$robots_file" --targets-file "$targets_config"
+    target_types=$(python3 -c 'import json,sys; rows=json.load(open(sys.argv[1]))["required_targets"]; print(",".join(str(t["id"])+":"+t["type"] for t in rows))' "$temp_dir/mission-runtime.json")
+    perception_args+=(-p "target_types:=$target_types")
     mission_executable="$(ros2 pkg prefix edgeai_mission)/lib/edgeai_mission/mission_coordinator"
     "$mission_executable" --ros-args -p use_sim_time:=true -p "config:=$temp_dir/mission-runtime.json" \
         >"$temp_dir/mission.log" 2>&1 9>&- &
@@ -258,6 +266,11 @@ sim_pid=$!
 setsid ros2 launch edgeai_navigation managed_navigation.launch.py use_sim_time:=true \
     params_file:="$nav_config" mppi_invert_linear:="${EDGEAI_MPPI_INVERT_LINEAR:-false}" >"$temp_dir/nav.log" 2>&1 9>&- &
 nav_pid=$!
+if [[ $joint_mapping == true ]]; then
+    setsid ros2 launch edgeai_mission joint_mapping_mission.launch.py "directory:=$temp_dir" \
+        >"$temp_dir/joint-mapping.log" 2>&1 9>&- &
+    joint_pid=$!
+fi
 if [[ ${EDGEAI_MPPI_INVERT_LINEAR:-false} == true ]]; then
     [[ $controller == mppi && ${EDGEAI_TURN_TEST:-false} == true ]] || exit 2
     python3 -u "$PROJECT_ROOT/tests/exploration/mppi_command_probe.py" --ros-args \
@@ -265,35 +278,28 @@ if [[ ${EDGEAI_MPPI_INVERT_LINEAR:-false} == true ]]; then
     command_probe_pid=$!
     event '实验：仅 MPPI 线速度取反，恢复动作不变；碰撞监控保留'
 fi
-authority_mode=AUTO
+authority_mode=STOPPED
 [[ $navigation_test != true ]] || authority_mode=MANUAL
 [[ ${EDGEAI_SCAN360:-false} != true ]] || authority_mode=STOPPED
 [[ ${EDGEAI_TURN_TEST:-false} != true ]] || authority_mode=MANUAL
 [[ ${EDGEAI_RECOVERY_TEST:-false} != true ]] || authority_mode=MANUAL
-allow_auto=true
-[[ $navigation_test != true ]] || allow_auto=false
+[[ $joint_mapping != true ]] || authority_mode=STOPPED
 python3 -u "$PROJECT_ROOT/src/edgeai_navigation/scripts/navigation_authority.py" --directory "$temp_dir" \
     --mode "$authority_mode" --tree "$config_dir/behavior_trees/explore_recovery.xml" \
-    --ros-args -p use_sim_time:=true -p "allow_auto:=$allow_auto" >"$temp_dir/authority.log" 2>&1 9>&- &
+    --ros-args -r __ns:=/robot1 -p use_sim_time:=true >"$temp_dir/authority.log" 2>&1 9>&- &
 authority_pid=$!
 if [[ ${EDGEAI_TARGET_SEARCH:-true} == true ]]; then
     if [[ ${EDGEAI_DISABLE_RGBD_CAMERA:-false} == true ]]; then
         echo 'Target search requires RGB-D camera; unset EDGEAI_DISABLE_RGBD_CAMERA or disable EDGEAI_TARGET_SEARCH.' >&2
         exit 2
     fi
-    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/aruco_targets.py" --ros-args \
+    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/aruco_targets.py" \
+        --suspect-config "$PROJECT_ROOT/src/edgeai_perception/config/suspect_targets.yaml" \
+        --suspect-panel-size "$suspect_panel_size" --ros-args \
         --params-file "$PROJECT_ROOT/src/edgeai_perception/config/aruco_targets.yaml" \
         "${perception_args[@]}" \
         -p "output_directory:=$temp_dir" >"$temp_dir/perception.log" 2>&1 9>&- &
     perception_pid=$!
-    # Low-rate mapping/search detection with session-scoped multi-frame memory.
-    suspect_panel_size=0.24
-    [[ $arena != midterm ]] || suspect_panel_size=0.20
-    python3 -u "$PROJECT_ROOT/src/edgeai_perception/scripts/suspect_targets.py" --ros-args \
-        --params-file "$PROJECT_ROOT/src/edgeai_perception/config/suspect_targets.yaml" \
-        -p "panel_size_m:=$suspect_panel_size" -p "output_directory:=$temp_dir" \
-        >"$temp_dir/suspects.log" 2>&1 9>&- &
-    suspects_pid=$!
     event '目标寻找已启动：ArUco图像检测、多帧确认和地图定位；详见 perception.log、targets.json'
 fi
 if [[ $rviz == true ]]; then
@@ -310,7 +316,7 @@ fi
 ready=false
 for _ in {1..60}; do
     if ! kill -0 "$sim_pid" 2>/dev/null || ! kill -0 "$nav_pid" 2>/dev/null; then break; fi
-    if timeout 3s ros2 lifecycle get /bt_navigator 2>/dev/null | grep -q '^active '; then
+    if timeout 3s ros2 lifecycle get /robot1/bt_navigator 2>/dev/null | grep -q '^active '; then
         ready=true
         break
     fi
@@ -320,15 +326,16 @@ if [[ -n $perception_pid ]] && ! kill -0 "$perception_pid" 2>/dev/null; then
     echo 'Target perception process exited; inspect perception.log.' >&2
     exit 1
 fi
-if [[ -n $suspects_pid ]] && ! kill -0 "$suspects_pid" 2>/dev/null; then
-    event '疑似目标检测节点退出，搜寻将回退到视锥/空间候选；请检查 suspects.log'
-fi
 if ! $ready; then
     echo 'Nav2 did not become active. Recent simulator and navigation output:' >&2
     event '启动失败：Nav2 未进入 active 状态，请查看 sim.log 和 nav.log'
     tail -n 35 "$temp_dir/sim.log" >&2
     tail -n 80 "$temp_dir/nav.log" >&2
     exit 1
+fi
+if [[ $joint_mapping == true ]]; then
+    python3 "$PROJECT_ROOT/scripts/ros/wait_joint_mapping.py" "$temp_dir" \
+        >"$temp_dir/joint-startup.log" 2>&1 || { cat "$temp_dir/joint-startup.log" >&2; exit 1; }
 fi
 if [[ $navigation_test == true && ${EDGEAI_TURN_TEST:-false} != true ]]; then
     event '真值地图已就绪：使用RViz的2D Goal Pose手动选点；默认只要求位置，可勾选终点朝向'
@@ -361,25 +368,29 @@ elif [[ ${EDGEAI_TURN_TEST:-false} == true ]]; then
     [[ ${EDGEAI_MOTION_TEST:-turn} != points ]] || motion_check="$PROJECT_ROOT/tests/exploration/navigation_point_check.py"
     setsid python3 -u "$motion_check" \
         --output "$temp_dir/turn-result.json" --ros-args -p use_sim_time:=true >"$temp_dir/explore.log" 2>&1 9>&- &
-elif [[ $backend == frontier ]]; then
+else
     export EDGEAI_FRONTIER_DIAGNOSTICS_DIR="$temp_dir/frontier-diagnostics"
     event '协调策略：按 nav2-runtime.yaml 的进展距离和等待时间判断停滞；清图后后退、受阻则旋转，探索器等待最终结果后再选目标'
+    frontier_params="$temp_dir/robot1-frontier-runtime.yaml"
+    frontier_remaps=(-r __ns:=/robot1)
+    if [[ $joint_mapping == true ]]; then
+        frontier_params="$temp_dir/robot1/frontier-runtime.yaml"
+        frontier_remaps=(-r __ns:=/robot1 -r /explore/available_frontiers:=/robot1/explore/available_frontiers)
+    fi
     setsid ros2 run frontier_exploration_ros2 frontier_explorer --ros-args \
-        --params-file "$exploration_dir/config/frontier_exploration.yaml" \
-        -r control_exploration:=/exploration/control_exploration >"$temp_dir/explore.log" 2>&1 9>&- &
-else
-    setsid ros2 run explore_lite explore --ros-args --params-file "$explore_config" \
-        -r navigate_to_pose:=/exploration/navigate_to_pose >"$temp_dir/explore.log" 2>&1 9>&- &
+        --params-file "$frontier_params" "${frontier_remaps[@]}" >"$temp_dir/explore.log" 2>&1 9>&- &
+
 fi
 explore_pid=$!
 # Only OS process supervision remains here. The coordinator selects all mission stages.
 rescue_status=0
 if [[ $mission_enabled == true ]]; then
-    python3 - "$temp_dir/mission-processes.json" "$sim_pid" "$nav_pid" "$authority_pid" "$explore_pid" <<'PROCESS_IDENTITIES'
+    python3 - "$temp_dir/mission-processes.json" "$sim_pid" "$nav_pid" "$authority_pid" "$explore_pid" "$joint_pid" <<'PROCESS_IDENTITIES'
 import json,sys
 from pathlib import Path
 record={}
-for name,pid in zip(('simulator','navigation','authority','explorer'),sys.argv[2:]):
+for name,pid in zip(('simulator','navigation','authority','explorer','joint_mapping'),sys.argv[2:]):
+    if not pid:continue
     record[name]=dict(pid=int(pid),start_ticks=Path('/proc/'+pid+'/stat').read_text().split()[21])
 p=Path(sys.argv[1]);tmp=p.with_suffix('.tmp');tmp.write_text(json.dumps(record));tmp.replace(p)
 PROCESS_IDENTITIES
@@ -398,11 +409,11 @@ else
     done
 fi
 touch "$temp_dir/stopping"
-timeout 5s ros2 service call /navigation_authority/stop std_srvs/srv/Trigger '{}' \
+timeout 5s ros2 service call /robot1/navigation_authority/stop std_srvs/srv/Trigger '{}' \
     >"$temp_dir/authority-stop.log" 2>&1 || true
 kill -INT -- "-$explore_pid" 2>/dev/null || true
 kill -INT -- "-$nav_pid" 2>/dev/null || true
-timeout 5s ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+timeout 5s ros2 topic pub --once /robot1/cmd_vel geometry_msgs/msg/Twist \
     '{linear: {x: 0.0}, angular: {z: 0.0}}' >/dev/null 2>&1 || true
 touch "$temp_dir/final-capture"
 # The Windows observer acknowledges both captures before GUI processes exit.
@@ -418,7 +429,7 @@ for _ in {1..20}; do
     sleep .1
 done
 kill -TERM -- "-$nav_pid" 2>/dev/null || true
-timeout 5s ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+timeout 5s ros2 topic pub --once /robot1/cmd_vel geometry_msgs/msg/Twist \
     '{linear: {x: 0.0}, angular: {z: 0.0}}' >/dev/null 2>&1 || true
 if [[ -n $map_basename && $navigation_test != true ]]; then
     mkdir -p "$(dirname "$map_basename")"

@@ -14,7 +14,7 @@ def camera_model(node):
     if info is None or any(abs(v)>1e-8 for v in info.d):
         raise ValueError('Rectified CameraInfo unavailable')
     try:
-        tf=node.buffer.lookup_transform('base_footprint',info.header.frame_id,Time()).transform
+        tf=node.buffer.lookup_transform(getattr(node,'search_base_frame','base_footprint'),info.header.frame_id,Time()).transform
     except TransformException as exc:
         raise ValueError('Camera mounting transform unavailable') from exc
     p,q=tf.translation,tf.rotation
@@ -33,11 +33,14 @@ class SpatialCandidates:
     def __init__(self,positions):
         self.positions=list(positions)
         self.index=0
+        self.attempted=set()
 
     def next_view(self,robot):
-        if self.index>=len(self.positions):
+        remaining=[i for i in range(len(self.positions)) if i not in self.attempted]
+        if not remaining:
             return None
-        x,y=self.positions[self.index];self.index+=1
+        self.index=remaining[0]
+        x,y=self.positions[self.index];self.attempted.add(self.index);self.index+=1
         return dict(x=x,y=y,yaw=robot[2],strategy='spatial')
 
     def record_sweep(self,actual_pose):

@@ -38,16 +38,14 @@ public:
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(new QLabel(displayText("机器人 1 控制", "Robot 1 control"), this));
     auto *controls = new QHBoxLayout();
-    for (const auto &item : {std::make_pair(displayText("自动探索", "Autonomous exploration"), false), std::make_pair(displayText("手动接管", "Manual control"), true)}) {
-      auto *button = new QPushButton(item.first, this);
-      controls->addWidget(button);
-      connect(button, &QPushButton::clicked, this, [this, manual = item.second]() {
-        if (!mode_client_ || !mode_client_->service_is_ready()) {return;}
-        auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
-        request->data = manual;
-        mode_client_->async_send_request(request);
-      });
-    }
+    auto *manual = new QPushButton(displayText("手动接管", "Manual control"), this);
+    controls->addWidget(manual);
+    connect(manual, &QPushButton::clicked, this, [this]() {
+      if (!mode_client_ || !mode_client_->service_is_ready()) {return;}
+      auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
+      request->data = true;
+      mode_client_->async_send_request(request);
+    });
     auto *stop = new QPushButton(displayText("停止任务", "Stop task"), this);
     controls->addWidget(stop);
     connect(stop, &QPushButton::clicked, this, [this]() {
@@ -143,11 +141,11 @@ public:
     auto abstraction = getDisplayContext()->getRosNodeAbstraction().lock();
     if (!abstraction) {status_->setText("RViz ROS node unavailable"); return;}
     mode_client_ = abstraction->get_raw_node()->create_client<std_srvs::srv::SetBool>(
-      "/navigation_authority/set_manual");
+      "/robot1/navigation_authority/set_manual");
     stop_client_ = abstraction->get_raw_node()->create_client<std_srvs::srv::Trigger>(
-      "/navigation_authority/stop");
+      "/robot1/navigation_authority/stop");
     heading_client_ = abstraction->get_raw_node()->create_client<std_srvs::srv::SetBool>(
-      "/navigation_authority/set_goal_heading");
+      "/robot1/navigation_authority/set_goal_heading");
     subscription_ = abstraction->get_raw_node()->create_subscription<std_msgs::msg::String>(
       "/diagnostics/navigation_status", rclcpp::QoS(1),
       [this](std_msgs::msg::String::ConstSharedPtr message) {

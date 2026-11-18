@@ -23,7 +23,7 @@ class SimulationLaunchConfig(unittest.TestCase):
         share = ROOT/'src/edgeai_simulation'
         context = LaunchContext()
         context.launch_configurations.update(
-            robot_count='2', multi_robot='true', primary_unscoped='true',
+            robot_count='2', multi_robot='true',
             robots_file=str(share/'config/robots_midterm.yaml'),
             targets_file=str(share/'config/targets_midterm.yaml'),
             world_file=str(share/'worlds/midterm.sdf'), imu_file=str(share/'config/imu.yaml'),
@@ -35,21 +35,30 @@ class SimulationLaunchConfig(unittest.TestCase):
         with patch.object(module, 'get_package_share_directory', side_effect=package), \
                 patch.object(module.tempfile, 'mkdtemp', return_value=temporary), \
                 patch.object(module, 'Node', wraps=module.Node) as nodes, \
+                patch.object(module, 'ExecuteProcess', wraps=module.ExecuteProcess) as processes, \
                 patch.dict(os.environ, environment):
             actions = module.setup(context)
             self.node_specs = [call.kwargs for call in nodes.call_args_list]
+            self.process_specs = [call.kwargs for call in processes.call_args_list]
             return actions
 
     def test_two_robot_slam_launch_with_lazy_cloud(self):
         with tempfile.TemporaryDirectory() as temporary:
-            actions = self.construct(temporary, EDGEAI_EAGER_POINT_CLOUD='false')
+            actions = self.construct(temporary, EDGEAI_EAGER_POINT_CLOUD='false', EDGEAI_JOINT_MAPPING='false')
             directory = Path(temporary)
-            cloud = yaml.safe_load((directory/'edgeai_robot_real-cloud-bridge.yaml').read_text())
+            cloud = yaml.safe_load((directory/'robot1-cloud-bridge.yaml').read_text())
             self.assertTrue(cloud[0]['lazy'])
-            self.assertEqual(cloud[0]['ros_topic_name'], '/camera/points')
+            self.assertEqual(cloud[0]['ros_topic_name'], '/robot1/camera/points')
             self.assertFalse((directory/'robot2-cloud-bridge.yaml').exists())
             filtering = yaml.safe_load((directory/'fleet-filter.yaml').read_text())
             self.assertIn('relative_pose', filtering['fleet_scan_filter']['ros__parameters'])
+            self.assertEqual(filtering['fleet_scan_filter']['ros__parameters']['root_odom_frame'], 'robot1/odom')
+            command = next(p['cmd'] for p in self.process_specs if any('fleet_scan_filter.py' in str(a) for a in p['cmd']))
+            for remap in ('scan:=/robot1/scan', 'odom:=/robot1/odom',
+                          'scan_slam:=/robot1/scan_slam', 'robot2/odom:=/robot2/odom'):
+                self.assertIn(remap, command)
+            slam = next(n for n in self.node_specs if n.get('executable') == 'anchored_slam_toolbox')
+            self.assertEqual(slam['parameters'][0]['scan_topic'], '/robot1/scan_slam')
             self.assertTrue(actions)
             self.assertIsNotNone(ET.parse(directory/'arena.sdf').find('world'))
             clocks = [n for n in self.node_specs if n.get('name') in ('clock_bridge', 'simulation_clock')]
@@ -87,7 +96,7 @@ class SimulationLaunchConfig(unittest.TestCase):
     def test_eager_cloud_does_not_create_lazy_bridge(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.construct(temporary, EDGEAI_EAGER_POINT_CLOUD='true')
-            self.assertFalse((Path(temporary)/'edgeai_robot_real-cloud-bridge.yaml').exists())
+            self.assertFalse((Path(temporary)/'robot1-cloud-bridge.yaml').exists())
 
 
 if __name__ == '__main__':

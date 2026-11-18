@@ -1,0 +1,8 @@
+# Fleet search allocation; camera geometry/time budgets stay in normal_rescue.yaml.
+reservation_radius_m: 0.40  # Concurrent search goal spacing; Nav2 still checks robot bodies.
+# Failed-view history is separate from simultaneous robot reservations.
+history_match_radius_m: 0.10
+navigation_timeout_s: 90.0
+max_navigation_attempts: 2
+max_retry_rounds: 2
+failure_cooldown_s: 5.0

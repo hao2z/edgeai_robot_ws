@@ -28,17 +28,17 @@ def main():
     node=rclpy.create_node('edgeai_navigation_turn_check',enable_rosout=False)
     buffer=Buffer()
     listener=TransformListener(buffer,node)
-    client=ActionClient(node,NavigateToPose,'/navigate_to_pose')
-    stop=node.create_publisher(Twist,'/cmd_vel',1)
+    client=ActionClient(node,NavigateToPose,'/robot1/navigate_to_pose')
+    stop=node.create_publisher(Twist,'/robot1/cmd_vel',1)
     command=[0.,0.]
-    subscription=node.create_subscription(Twist,'/cmd_vel',
+    subscription=node.create_subscription(Twist,'/robot1/cmd_vel',
         lambda msg:command.__setitem__(slice(None),(msg.linear.x,msg.angular.z)),qos_profile_sensor_data)
     trace=[]
     handle=None
     result=dict(success=False,mode='isolated_turn_check',trace=trace)
 
     def pose():
-        t=buffer.lookup_transform('map','base_footprint',rclpy.time.Time()).transform
+        t=buffer.lookup_transform('map','robot1/base_footprint',rclpy.time.Time()).transform
         return t.translation.x,t.translation.y,math.atan2(2*(t.rotation.w*t.rotation.z+t.rotation.x*t.rotation.y),
                                                       1-2*(t.rotation.y**2+t.rotation.z**2))
     try:

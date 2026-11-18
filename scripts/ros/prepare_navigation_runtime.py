@@ -86,5 +86,13 @@ bt['default_nav_to_pose_bt_xml'] = str((source.parent/'behavior_trees/explore_re
 if os.environ.get('EDGEAI_COOPERATIVE_RESCUE') == 'true':
     from fleet_config import configure_peer_costmaps
     coop=yaml.safe_load((source.parent/'cooperative_rescue.yaml').read_text())
-    configure_peer_costmaps(config,'',coop.get('peer_costmap',{}))
+    configure_peer_costmaps(config,'robot1',coop.get('peer_costmap',{}))
+from fleet_config import namespaced_config
+config=namespaced_config(config,'robot1')
 output.write_text(yaml.safe_dump(config, sort_keys=False))
+
+frontier=yaml.safe_load((source.parent.parent.parent/'edgeai_exploration/config/frontier_exploration.yaml').read_text())['frontier_explorer']['ros__parameters']
+from edgeai_nav.fleet_config import frontier_endpoint_geometry
+frontier.update(frontier_endpoint_geometry(config))
+frontier.update(autostart=False,robot_base_frame='robot1/base_footprint',map_topic='/map',costmap_topic='/robot1/global_costmap/costmap',local_costmap_topic='/robot1/local_costmap/costmap',navigate_to_pose_action_name='/robot1/navigation/assigned_frontier_to_pose',selected_frontier_topic='/robot1/explore/selected_frontier',frontier_marker_topic='/robot1/explore/frontiers',optimized_map_topic='/robot1/explore/optimized_map',completion_event_topic='/robot1/exploration_complete')
+output.with_name('robot1-frontier-runtime.yaml').write_text(yaml.safe_dump({'/**':{'ros__parameters':frontier}}))

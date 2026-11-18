@@ -43,6 +43,13 @@ class RescueTests(unittest.TestCase):
         self.assertAlmostEqual(abs(goal['yaw']), 3.141592653589793)
         self.assertEqual(goal['target_id'], 1)
 
+    def test_rescue_selects_only_normal_targets_on_the_manifest(self):
+        registry = dict(frame_id='map', targets=[
+            dict(id=marker, type='normal', x=1., y=2., yaw=0., spread_m=.01, observations=observations)
+            for marker, observations in ((1, 20), (2, 1), (3, 2))])
+        self.c['allowed_target_ids'] = [2, 3]
+        self.assertEqual(select_goal(self.c, registry)['target_id'], 3)
+
     def test_search_selects_only_requested_cooperative_id(self):
         self.c.update(target_id=2,target_type='cooperative')
         rows=[dict(id=1,type='normal',yaw=0.,x=1.,y=2.,spread_m=.01),

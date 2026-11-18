@@ -2,15 +2,15 @@
 frontier_explorer:
   ros__parameters:
     map_topic: /map
-    costmap_topic: /global_costmap/costmap
-    local_costmap_topic: /local_costmap/costmap
-    navigate_to_pose_action_name: /exploration/navigate_to_pose
+    costmap_topic: /robot1/global_costmap/costmap
+    local_costmap_topic: /robot1/local_costmap/costmap
+    navigate_to_pose_action_name: /robot1/navigation/assigned_frontier_to_pose
     global_frame: map
-    robot_base_frame: base_footprint
-    frontier_marker_topic: /explore/frontiers
-    selected_frontier_topic: /explore/selected_frontier
-    optimized_map_topic: /explore/optimized_map
-    completion_event_topic: exploration_complete
+    robot_base_frame: robot1/base_footprint
+    frontier_marker_topic: /robot1/explore/frontiers
+    selected_frontier_topic: /robot1/explore/selected_frontier
+    optimized_map_topic: /robot1/explore/optimized_map
+    completion_event_topic: /robot1/exploration_complete
     frontier_marker_scale: 0.15
     map_qos_durability: transient_local
     map_qos_reliability: reliable
@@ -23,10 +23,10 @@ frontier_explorer:
     local_costmap_qos_depth: -1
     # 地图处理与前沿评估频率，Hz；并非每次评估都会发新目标。
     map_processing_rate_hz: 2.0
-    # 手动换位时继续计算前沿；发现候选后由任务取消换位并恢复AUTO，避免双重派发。
+    # 手动换位时继续计算前沿；发现候选后由任务取消换位并派发前沿导航，避免双重派发。
     paused_map_processing_enabled: true
-    autostart: true
-    control_service_enabled: true
+    autostart: false
+    control_service_enabled: false
     completion_event_enabled: true
     escape_enabled: true
     return_to_start_on_complete: false

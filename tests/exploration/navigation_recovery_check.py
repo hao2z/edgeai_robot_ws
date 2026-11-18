@@ -22,9 +22,9 @@ def main():
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
     node = rclpy.create_node('navigation_recovery_check')
-    client = ActionClient(node, NavigateToPose, '/navigate_to_pose')
-    get = node.create_client(GetParameters, '/controller_server/get_parameters')
-    set_ = node.create_client(SetParametersAtomically, '/controller_server/set_parameters_atomically')
+    client = ActionClient(node, NavigateToPose, '/robot1/navigate_to_pose')
+    get = node.create_client(GetParameters, '/robot1/controller_server/get_parameters')
+    set_ = node.create_client(SetParametersAtomically, '/robot1/controller_server/set_parameters_atomically')
     buffer = Buffer()
     listener = TransformListener(buffer, node)
     states, identities = [], set()
@@ -35,7 +35,7 @@ def main():
         if data.get('goal_uuid'):
             identities.add((data['generation'], data['goal_uuid']))
 
-    subscription = node.create_subscription(String, '/navigation_authority/state', state,
+    subscription = node.create_subscription(String, '/robot1/navigation_authority/state', state,
         QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
     def wait(future, timeout=5):
@@ -55,7 +55,7 @@ def main():
         while True:
             rclpy.spin_once(node, timeout_sec=.05)
             try:
-                transform = buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time()).transform
+                transform = buffer.lookup_transform('map', 'robot1/base_footprint', rclpy.time.Time()).transform
                 break
             except TransformException:
                 if time.monotonic() > deadline:

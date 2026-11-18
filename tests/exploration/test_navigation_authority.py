@@ -10,17 +10,18 @@ from authority_policy import Authority, AuthorityConfig, RecoveryEvidence
 class AuthorityTests(unittest.TestCase):
     def test_owner_gate_and_single_inflight(self):
         p = Authority()
-        self.assertIsNone(p.reserve('MANUAL'))
-        token = p.reserve('AUTO')
+        self.assertIsNone(p.reserve('AUTO'))
+        token = p.reserve('MANUAL')
         self.assertIsNotNone(token)
-        self.assertIsNone(p.reserve('AUTO'))
+        self.assertIsNone(p.reserve('MANUAL'))
         p.accepted(token)
-        self.assertIsNone(p.reserve('AUTO'))
+        self.assertIsNone(p.reserve('MANUAL'))
 
     def test_takeover_waits_for_terminal_not_cancel_ack(self):
         p = Authority()
-        token = p.reserve('AUTO')
+        token = p.reserve('MANUAL')
         p.accepted(token)
+        p.set_mode('STOPPED')
         p.set_mode('MANUAL')
         self.assertTrue(p.cancel_requested)
         self.assertEqual(p.phase, 'CANCELING')
@@ -32,7 +33,7 @@ class AuthorityTests(unittest.TestCase):
 
     def test_stop_while_sending_honors_late_acceptance(self):
         p = Authority()
-        token = p.reserve('AUTO')
+        token = p.reserve('MANUAL')
         p.set_mode('STOPPED')
         p.uncertain(token, 'no ack')
         self.assertTrue(p.accepted(token))
@@ -41,11 +42,11 @@ class AuthorityTests(unittest.TestCase):
 
     def test_timeout_and_late_old_result_do_not_release_new_task(self):
         p = Authority()
-        first = p.reserve('AUTO')
+        first = p.reserve('MANUAL')
         p.uncertain(first, 'feedback timeout')
-        self.assertIsNone(p.reserve('AUTO'))
+        self.assertIsNone(p.reserve('MANUAL'))
         p.terminal(first)
-        second = p.reserve('AUTO')
+        second = p.reserve('MANUAL')
         self.assertFalse(p.terminal(first))
         self.assertFalse(p.accepted(first))
         self.assertEqual(p.generation, second)
@@ -53,28 +54,32 @@ class AuthorityTests(unittest.TestCase):
 
     def test_same_mode_request_keeps_active_task(self):
         p = Authority()
-        token = p.reserve('AUTO')
+        token = p.reserve('MANUAL')
         p.accepted(token)
-        p.set_mode('AUTO')
+        p.set_mode('MANUAL')
         self.assertFalse(p.cancel_requested)
         self.assertEqual(p.phase, 'ACTIVE')
 
-    def test_duplicate_takeover_does_not_extend_cancel_grace(self):
+    def test_duplicate_stop_does_not_change_request_time(self):
         p = Authority()
-        token = p.reserve('AUTO')
+        token = p.reserve('MANUAL')
         p.accepted(token)
-        self.assertTrue(p.set_mode('MANUAL'))
+        self.assertTrue(p.set_mode('STOPPED'))
         p.mark_mode_request(10.0)
-        self.assertFalse(p.set_mode('MANUAL'))
-        self.assertFalse(p.should_force_cancel(10.9))
-        self.assertTrue(p.should_force_cancel(11.0))
+        self.assertFalse(p.set_mode('STOPPED'))
         self.assertEqual(p.mode_requested_at, 10.0)
 
     def test_policy_owns_endpoint_and_deadline_contract(self):
         config = AuthorityConfig()
         self.assertEqual(config.cancel_timeout_s, 5.0)
-        self.assertEqual(config.auto_action, '/exploration/navigate_to_pose')
-        self.assertEqual(config.backend_action, '/navigation_backend/navigate_to_pose')
+        self.assertEqual(config.manual_action, 'navigate_to_pose')
+        self.assertEqual(config.backend_action, 'navigation_backend/navigate_to_pose')
+
+
+class RemovedModeTests(unittest.TestCase):
+    def test_auto_mode_cannot_be_reenabled(self):
+        with self.assertRaises(ValueError):
+            Authority().set_mode('AUTO')
 
 
 class RecoveryTests(unittest.TestCase):

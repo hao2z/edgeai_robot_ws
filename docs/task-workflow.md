@@ -2,14 +2,19 @@
 
 代码归属见[模块边界](module-boundaries.md)。救援与搜寻编排安装为`edgeai_tasks`，候选计算安装为`edgeai_search`；布局变更后需重新构建。
 
-更新：2026-11-10。默认流程为robot1建图并找到全部必需目标→S1→地图交接→双机定位/C1。按固定规则调度；Shell负责启动和清理，不决定下一救援阶段。
+更新：2026-11-11。默认流程为建图并找到全部必需目标→冻结地图→顶层定位接管→S1→C1。按固定规则调度；Shell负责启动和清理，不决定下一救援阶段。
+
+2026-11-11 新增 `-JointMapping` / `--joint-mapping`：第一任务改为两机同时探索同一张公共 SLAM 地图，完成后确认两机停止，再沿用原有补搜目标、S1 和 C1 任务树。初始双边激光配准与双方入图是启动关卡；建图面积和目标完整性仍由协调树检查。公共 SLAM 故障或状态断流会终止本轮，不继续用失效定位派发任务。建图任务完成后，顶层先读取最终位姿并启用 AMCL，复用已有导航进程；S1/C1 全程保留激光定位，详见[联合建图](joint-mapping.md)。
+
+联合探索现由独立任务层节点 `fleet_exploration_coordinator` 分配前沿；两个探索器只计算候选。任务树管理单车终态、超时、有限重试及空闲车让路，顶层仅调用任务和检查阶段门槛。详细边界、诊断局限及尚未接入让路的其他任务见[任务层协调](fleet-task-coordination.md)。
 
 | 层级 | 定义位置 | 职责 |
 |---|---|---|
 | 总任务 | `src/edgeai_mission/config/integrated.xml` | 执行第一任务、S1成功后启动C1 |
-| 第一任务 | integrated.xml中的MappingAndTargetSearch、tasks/find_targets.xml | 无前沿后检查已知面积、不足则换位重启探索、逐个补搜缺失目标、保存输出 |
-| 单机救援 | `src/edgeai_mission/config/tasks/s1.xml` | 选目标/必要搜寻、选位、导航、条件检查、修正、有界重试 |
-| 双机救援 | `src/edgeai_mission/config/tasks/c1.xml` | 交接、就绪/定位有界重试、双位选择、并发导航、共同停留、重选 |
+| 第一任务 | integrated.xml中的MappingAndTargetSearch、tasks/find_targets.xml | 无前沿后检查已知面积、不足则换位重启探索、按活动车辆分配观察点补搜缺失目标、保存输出 |
+| S1救援（单机/多机共用） | `src/edgeai_mission/config/tasks/s1.xml` | 共用分配规则选任一空闲车及停车点；失败换点/换车，必要时让路；复用 S1 修正与判定 |
+| 定位接管 | `integrated.xml` 的 `EnableLocalization`、`scripts/mission_localization.py` | 顶层持有定位进程、有限启动重试、收敛后放行、退出即取消后续任务 |
+| 双机救援 | `src/edgeai_mission/config/tasks/c1.xml` | 复用定位（不重复收敛）、就绪复查、双位选择、并发导航、共同停留、重选 |
 | 任务接口 | `src/edgeai_mission/action/ExecuteTask.action`、`src/task_executor.cpp` | 可反馈、可取消的S1/C1任务执行 |
 | 单位适配 | `src/edgeai_mission/scripts/task_units.py` | 计算、派发、轮询、一次判定；复用navigation算法 |
 | 每次导航 | `src/edgeai_navigation/config/behavior_trees/explore_recovery.xml` | 规划、控制与恢复；两机及各到位策略保留共同恢复入口 |
@@ -21,7 +26,7 @@
 
 S1/C1通过任务判定后，`rescue_success_log.py`读取当前会话的Gazebo真值历史，输出每台机器人的真值距离、朝向误差、距离/朝向估计误差和目标定位误差，并核验停留时段的采样距离、朝向与位姿差分速度。C1要求两车覆盖共同停留时段。终端和`events.log`用OK/ERROR/WARN分别显示真值核验通过、未通过、无法确认；结构化明细写入对应救援结果的`success_evidence.truth_verification`及`robots[].truth`。真值记录不再依赖导航TF成功，启动时保存`truth-targets.json`以保留目标真值。核验只用于仿真评估，不向导航提供真值，也不改变任务树的估计位姿判定。
 
-前沿探索的`/exploration/navigate_to_pose`使用frontier策略：输入朝向作为候选排序/等代价时的偏好，`GridBased`比较多朝向路径；局部采用`FollowPath`和位置检查器`general_goal_checker`，到位只检查位置，不执行最终转向。普通位置点、补充换位等共用这一多朝向规划策略；显式朝向点及最终救援仍使用`GridBasedHeading`原生固定朝向规划。当前前沿朝向由探索器的出发位置到目标的方向生成，不等同于精确的未知区域表面法线。
+前沿探索的`/robotN/navigation/assigned_frontier_to_pose`使用frontier策略：输入朝向作为候选排序/等代价时的偏好，`GridBased`比较多朝向路径；局部采用`FollowPath`和位置检查器`general_goal_checker`，到位只检查位置，不执行最终转向。普通位置点、补充换位等共用这一多朝向规划策略；显式朝向点及最终救援仍使用`GridBasedHeading`原生固定朝向规划。当前前沿朝向由探索器的出发位置到目标的方向生成，不等同于精确的未知区域表面法线。
 
 多朝向入口为`smac_lattice.yaml`的`goal_heading_mode`、`goal_heading_count`、`heading_search_budget_s`、`heading_reuse`。实现参考[最新上游Smac Lattice](https://docs.nav2.org/rolling/configuration_and_development/configuration_guide/planners_plugins/smac/smac_lattice/configuring_smac_lattice/)的DEFAULT/BIDIRECTIONAL/ALL_DIRECTION模式。当前安装的Jazzy 1.3.13没有原生多目标朝向搜索，因此在`XYLatticePlanner`中作兼容：ALL_DIRECTION按`goal_heading_count`在全周分散选取原语朝向（默认4，0表示全部，当前最多16），不自动扩增候选数，各候选仍由原生Smac Lattice生成、碰撞检查；在共享2秒墙钟预算内比较返回路径，综合路程、地图代价、旋转和倒车评分。此评分参考上游analytic-expansion的路径积分，不是原生A*内部g值，也不保证全局最优；日志记录实际尝试数、可行数、分数和耗时。取消检查按原生搜索迭代周期执行，预算是协作式时间限制。
 
@@ -51,10 +56,27 @@ ros2 service call /mission/stop std_srvs/srv/Trigger '{}'
 
 建图门槛在 `src/edgeai_mission/config/mapping.yaml`：默认已知面积至少 **18 m²**。协调器订阅原始 `/map`，按所有有效已知格（空闲及障碍，0～100）数量乘分辨率平方统计；不统计未知格，不使用外接矩形面积。无前沿只是重新检查门槛的信号，不直接授权任务切换。面积达标后才进入缺失目标搜寻，达到面积也不会提前打断仍在进行的前沿探索。
 
-面积不足时，树暂停探索导航派发，并行执行`AwaitFrontier`检测和有净空的分散观察位置换位导航。`paused_map_processing_enabled: true`使探索器继续以2Hz接收地图、处理代价地图和计算前沿，但不抢占导航槽；可用候选数通过`/explore/available_frontiers`发布（-1表示数据不齐）。发现前沿后由协调器树终止换位分支，等待取消清理，再恢复AUTO派发前沿导航。任务切换规则在树中，权限节点仅执行控制槽交接。
+面积不足时，树暂停探索导航派发，并行执行`AwaitFrontier`检测和有净空的分散观察位置换位导航。`paused_map_processing_enabled: true`使探索器继续以2Hz接收地图、处理代价地图和计算前沿，但不抢占导航槽；可用候选数通过`/explore/available_frontiers`发布（-1表示数据不齐）。发现前沿后由协调器树终止换位分支，等待取消清理，再由探索任务派发前沿导航。任务切换规则在树中，权限节点仅执行控制槽交接。
 
 2026-11-10验证：协调器27项、换位适配4项及真实探索器暂停/检测/恢复测试通过，未运行新Gazebo仿真。探索器上游抢占套件仍有3项旧断言失败（涉及低收益取消及settle），在移除此轮监测改动的独立基线中同样复现；不能将完整上游回归记为全通过。
 
-最多补充3轮，换位超时由`mapping.yaml`的`reposition_timeout_s`控制（当前60秒），不重置探索总预算；换位沿用普通位置到达策略和Nav2恢复。换位超时会先取消并确认结束，再恢复前沿计算；外部取消、控制权被夺取、缺少可用观察位置、前沿监测失联、恢复AUTO失败或次数耗尽均报告失败，不进入救援。`MAPPING_AREA_READY/INSUFFICIENT`记录面积和轮次；`MAPPING_FRONTIER_AVAILABLE`记录树切换触发。换位动作记录在`mission-stage.log`、`rescue-events.jsonl`，位置保存在`mapping-supplement-positions.json`。无前沿时仅记录一次`FRONTIER_EMPTY_DIAGNOSTICS`，分层对比原图、决策图和代价筛选后的簇大小，并在`frontier-diagnostics/`保存当时的地图/代价地图/位姿，供离线重放。18 m²是当前场景的最低面积门槛，不等于完整覆盖证明。
+最多补充3轮，换位超时由`mapping.yaml`的`reposition_timeout_s`控制（当前60秒），不重置探索总预算；换位沿用普通位置到达策略和Nav2恢复。换位超时会先取消并确认结束，再恢复前沿计算；外部取消、控制权被夺取、缺少可用观察位置、前沿监测失联、恢复任务控制失败或次数耗尽均报告失败，不进入救援。`MAPPING_AREA_READY/INSUFFICIENT`记录面积和轮次；`MAPPING_FRONTIER_AVAILABLE`记录树切换触发。换位动作记录在`mission-stage.log`、`rescue-events.jsonl`，位置保存在`mapping-supplement-positions.json`。无前沿时仅记录一次`FRONTIER_EMPTY_DIAGNOSTICS`，分层对比原图、决策图和代价筛选后的簇大小，并在`frontier-diagnostics/`保存当时的地图/代价地图/位姿，供离线重放。18 m²是当前场景的最低面积门槛，不等于完整覆盖证明。
 
 2026-11-11停留判定修复：C1的短暂TF/时钟回调错序只等待数据，不立即否定已有停留证据；等待期间不推进计时。距最后有效采样超过`max_data_age_s`、时钟回退或实际距离/朝向/停车/定位条件不合格仍清零。`WAITING_DATA`新增原因、样本年龄和`dwell_retained`，避免静默重置。S1真值核验使用任务结束采样时间前的10秒窗口，边界用相邻真值插值；最多等待3墙钟秒补齐末端审计记录，不把停留前转向纳入核验，不改变导航或任务判据。
+
+建图成员、定位成员及任务成员分别写入 `mission-runtime.json` 的 `fleet`。单车建图是 `mapping_robots=[robot1]`，不限制 C1 的两车参与；非建图车从固定初始相对位姿和自身里程计获得先验，再通过 AMCL 收敛。双车建图则直接采用双方最终 SLAM 位姿。C1 不再发布初值、保存地图、关闭 SLAM 或启停定位。定位启动次数及预算在 `src/edgeai_mission/config/localization.yaml`；收敛阈值沿用 `cooperative_rescue.yaml`。独立 Part2 由它的静态地图入口预先准备定位，任务层接口一致。当前机器人适配器支持 robot1/robot2，配置成员并不表示已支持任意数量实体。
+
+定位生命周期按命名空间管理：根 `/shared_localization_manager` 管理公共
+`map_server` 与机器人1的 `amcl`，`/robot2/localization_manager` 管理本命名空间的
+`amcl`。顶层定位运行节点依次启动两组，重置时先机器人2再公共地图组；单车配置只启动根组。
+Nav2的bond使用相对话题和节点短名，不能把 `robot2/amcl` 直接塞入根组的节点列表。
+此前会话 `20261111-232015-311` 的C1接管与 `234335-804` 的提前定位交接均因此失败：
+机器人2 AMCL已激活，但根管理器等待其bond超时。真实map_server/双AMCL隔离测试已验证
+启动、重置、重启以及超过默认心跳超时窗口的持续连接；未运行新的Gazebo任务。
+
+2026-11-12 C1停留连续性修复：新视觉观测更新目标坐标后，按最新坐标重新检查两车的
+距离、朝向、停车和定位条件；全部合格则继续累计停留，不因2cm级坐标更新清零。
+实际条件不合格或有效采样中断仍按原规则重置。任务行为树与旧专项执行入口采用一致规则；
+本次未放宽救援范围、朝向或停留时间。
+
+定位接管成功后，`mission_localization` 释放初始化用的地图、雷达、里程计、权限订阅及动作客户端，仅保留定位进程监管和对方位姿发布。AMCL继续正常激光跟踪；`nomotion_update_interval_s` 只控制首次收敛时的停车强制更新。独立P2/协作测试仍先完成自身定位初始化，再执行救援任务。

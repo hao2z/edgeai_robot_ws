@@ -11,10 +11,51 @@ from rescue_success_log import success_evidence
 
 
 class TruthEvidence(unittest.TestCase):
-    def test_c1_truth_heading_is_coordinate_bearing_not_marker_normal(self):
+    def test_parking_tolerance_uses_offset_from_truth_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            pose = [0., .75, -math.pi/2]
+            rows = [dict(status='ok', sample_time=float(i), robot_world=pose,
+                         targets_world=[dict(id=1, pose=[0., 0., math.pi/2])]) for i in range(5)]
+            (directory/'truth.jsonl').write_text('\n'.join(json.dumps(row) for row in rows))
+            evidence, _ = success_evidence(directory, 's1', 1, [0., 0., math.pi/2], [pose],
+                                           [.05], [0.], .1, .25, 3., 3.5, parking_offset=(.7, 0.))
+            self.assertEqual(evidence['truth_verification']['status'], 'passed')
+            truth = evidence['robots'][0]['truth']
+            self.assertEqual(truth['position_reference'], 'parking_point')
+            self.assertAlmostEqual(truth['max_distance_m'], .05)
+
+    def test_s1_assigned_to_robot2_audits_robot2_truth_and_labels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary)
+            rows=[dict(status='ok',sample_time=float(i),robot_world=[.4,0.,math.pi],
+                       targets_world=[dict(id=1,pose=[0.,0.,0.])]) for i in range(12)]
+            (directory/'robot2-truth.jsonl').write_text('\n'.join(json.dumps(r) for r in rows))
+            evidence,messages=success_evidence(directory,'s1',1,[0.,0.,0.],[[.4,0.,math.pi]],
+                                              [.4],[0.],.5,.25,10.,10.5,robots=['robot2'])
+            self.assertEqual(evidence['truth_verification']['status'],'passed')
+            self.assertEqual(evidence['robots'][0]['robot'],'robot2')
+            self.assertIn('机器人2｜map','\n'.join(messages))
+            self.assertNotIn('机器人1','\n'.join(messages))
+
+    def test_truth_heading_is_coordinate_bearing_not_marker_normal(self):
         from rescue_success_log import heading_error
-        self.assertAlmostEqual(heading_error([1.,1.,-3*math.pi/4],[0.,0.,1.2],True),0.)
-        self.assertAlmostEqual(abs(heading_error([1.,1.,math.pi],[0.,0.,0.],True)),math.pi/4)
+        self.assertAlmostEqual(heading_error([1.,1.,-3*math.pi/4],[0.,0.,1.2]),0.)
+        self.assertAlmostEqual(abs(heading_error([1.,1.,math.pi],[0.,0.,0.])),math.pi/4)
+
+    def test_s1_and_c1_share_oblique_heading_and_reject_normal_only_heading(self):
+        for facing, expected in ((-3*math.pi/4, 'passed'), (math.pi, 'failed')):
+            with self.subTest(facing=facing), tempfile.TemporaryDirectory() as tmp:
+                directory=Path(tmp)
+                pose=[.3,.3,facing]
+                rows=[dict(truth_valid=True,sample_time=float(t),robot_world=pose,
+                           targets_world=[dict(id=1,pose=[0.,0.,0.])]) for t in range(12)]
+                for filename in ('truth.jsonl','robot2-truth.jsonl'):
+                    (directory/filename).write_text('\n'.join(json.dumps(r) for r in rows))
+                for task,count in (('s1',1),('c1',2)):
+                    evidence,_=success_evidence(directory,task,1,[0.,0.,0.],
+                        [pose]*count,[math.hypot(.3,.3)]*count,[0.]*count,.5,.25,10.,10.5)
+                    self.assertEqual(evidence['truth_verification']['status'],expected)
     def evaluate(self,task='s1',alter=None):
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)

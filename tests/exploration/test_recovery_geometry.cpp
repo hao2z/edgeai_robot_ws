@@ -45,18 +45,35 @@ TEST(RecoveryGeometry, NarrowCorridorRejectsLargeButAllowsShortExit)
   EXPECT_TRUE(motionFree(map,body(),pose,{"spin",.20}));
 }
 
-TEST(RecoveryGeometry, InteriorObstaclesUnknownAndBoundsAreNotIgnored)
+TEST(RecoveryGeometry, MatchesNativeRasterizerForInteriorEdgeUnknownAndBounds)
 {
   nav2_costmap_2d::Costmap2D map(100,100,.05,0,0,0);
   const RecoveryPose pose{2.,2.,0.};
   ASSERT_TRUE(poseFree(map,body(),pose));
-  map.setCost(40,40,254);
-  EXPECT_FALSE(poseFree(map,body(),pose));
-  EXPECT_FALSE(motionFree(map,body(),pose,{"forward",.1}));
-  map.setCost(40,40,255);
-  EXPECT_FALSE(poseFree(map,body(),pose));
-  map.setCost(40,40,0);
+  nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> native(&map);
+  for (const auto cost : {0, 100, 253, 254, 255}) {
+    for (const auto cell : {std::make_pair(40,40), std::make_pair(42,40), std::make_pair(40,43)}) {
+      map.setCost(cell.first,cell.second,cost);
+      for (const auto yaw : {0.,.2,-.5,1.57}) {
+        const double expected=native.footprintCostAtPose(2.,2.,yaw,body());
+        EXPECT_EQ(poseFree(map,body(),{2.,2.,yaw}),expected>=0. && expected<254.);
+      }
+      map.setCost(cell.first,cell.second,0);
+    }
+  }
   EXPECT_FALSE(poseFree(map,body(),{.1,2.,0.}));
+}
+
+TEST(RecoveryGeometry, InflationRanksEndpointsWithoutBecomingHardCollision)
+{
+  nav2_costmap_2d::Costmap2D map(100,100,.05,0,0,0);
+  const RecoveryPose pose{2.,2.,0.};
+  const double free_score=footprintPreference(map,body(),pose);
+  map.setCost(42,40,253);
+  EXPECT_TRUE(poseFree(map,body(),pose));
+  EXPECT_LT(footprintPreference(map,body(),pose),free_score);
+  map.setCost(42,40,254);EXPECT_FALSE(poseFree(map,body(),pose));
+  map.setCost(42,40,255);EXPECT_FALSE(poseFree(map,body(),pose));
 }
 
 TEST(RecoveryGeometry, KnownBodyAndPaddingOverlapCanExitButNewObstaclesCannot)

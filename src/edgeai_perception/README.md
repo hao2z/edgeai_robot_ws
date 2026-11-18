@@ -6,13 +6,18 @@ SLAM/Nav2. It never sends navigation goals or velocity commands. Set Linux env
 
 Configuration: `config/aruco_targets.yaml`. Development assumptions are
 DICT_4X4_50 and a 0.20 m black marker edge, NOT the 0.24 m panel. Update these
-when selecting another arena. The midterm runner overrides the edge to 0.16 m and maps ID1 to normal / ID2 to cooperative. No target truth pose or
-fixture YAML is loaded by the detector.
+when selecting another arena. The midterm runner overrides the edge to 0.16 m.
+The mission launcher supplies the ID-to-type mapping from the selected target list.
+Manual launches can set the `target_types` ROS parameter with comma-separated
+`ID:type` pairs. The detector receives no target truth poses.
 
 Inputs: `/camera/image`, `/camera/camera_info`, and image-time TF from
 `camera_optical_frame` to `odom`. OpenCV 4.6 legacy and newer detector APIs are
 supported. Square PnP candidates must have positive depth and pass size, range
-and reprojection checks. Only the latest image is processed, at 15 Hz (camera 30 Hz).
+and reprojection checks. The detector checks for new frames at 30 Hz. Simulation
+cameras default to 15 Hz and accept an EDGEAI_CAMERA_RATE override.
+In the integrated mission, each suspect detector shares the latest RGB frame
+and camera calibration with ArUco. Depth and laser subscriptions stay per robot.
 
 Outputs:
 - `/targets/observations`: `std_msgs/String` JSON containing ID, timestamp,
@@ -85,49 +90,8 @@ exited with -11 during shutdown; scan success is not a clean-shutdown claim.
 
 ## Automatic observation at open positions
 
-Normal exploration now also launches `observation_scan.py`. Configure
-`config/observation_scan.yaml`; Linux `EDGEAI_OBSERVATION_SCAN=false` disables
-this scheduler without disabling passive target detection.
-
-A candidate must meet ALL conditions:
-- AUTO navigation is IDLE after at least one successful goal; no recovery or
-  active/pending navigation is canceled for scanning.
-- Robot odometry is fresh and below 0.03 m/s and 0.05 rad/s for 0.4 simulation s.
-- Local costmap and robot TF are fresh (0.5 s); rotated costmap origins are
-  rejected. Map edge, unknown cells and lethal obstacle cells reject the disk.
-- Required clear disk radius is max(0.50 m, full-body circumscribed radius +
-  0.08 m). The runner derives body radius from BOTH actual runtime footprints,
-  including padding and the offset of the rotation axis. Costmap cells
-  intersecting the disk boundary are included. Non-lethal inflation is not
-  treated as a physical wall. Nav2 Spin independently collision-checks motion.
-- At least 30 simulation s since the last scan, at least 1.2 m from ALL previous
-  scan positions; at most eight attempts per run. Failed attempts also occupy
-  their scan location, preventing repeated scans of the same blocked place.
-
-The authority's `/navigation_authority/observation_hold` checks AUTO/IDLE
-atomically before entering STOPPED. A busy request is deferred, not canceled.
-The scheduler waits for explorer pause acknowledgement, checks geometry again,
-then runs the same scan360 task. After a known terminal result it resumes AUTO.
-Manual/stop commands change a request sequence; an intervening command cancels
-the scan and prevents automatic resume. Uncertain motion terminal state leaves
-control held. This is cooperative control admission, not a hard real-time lock.
-
-Per-run `observation-scan-runtime.yaml` captures geometry and thresholds;
-`observation.log`, `observation-scan-N.log/json` show admission and results.
-Timer policy uses simulation time; control handshake deadlines use wall
-monotonic time. Position spacing is in the current SLAM map and remains an
-approximation if the map undergoes a large correction. The scheduler does not
-yet explicitly classify rooms or estimate camera line-of-sight information gain.
-
-Open-position smoke verification: `20261029-235033-domain86-90424` selected
-map position approximately (1.094, 0.361) after the first navigation success.
-Computed body rotation radius was 0.3669 m; the 0.50 m disk gate passed. Scan
-reported status SUCCEEDED, error_code 0, angular travel 6.28785 rad, and resumed
-exploration. RViz capture after scan completion showed exploration had resumed.
-ID2 was confirmed later in the run, but this single run does not establish a
-causal improvement in target recall. Earlier test 234848 deferred all scans;
-the candidate TF lookup was corrected to use the fresh odometry timestamp
-rather than requesting an unavailable future map→base transform.
-The same open-position test recorded a Gazebo exit-code-1 warning during
-shutdown despite the wrapper's exit-code file being 0; motion scan completion
-and shutdown health are reported separately.
+Observation turns are dispatched by the mission's fleet search task, using
+`edgeai_mission/config/tasks/find_targets.xml` and `edgeai_tasks/fleet_search.py`.
+The retired AUTO observer and its pause/resume services are no longer installed.
+`scan360.py` remains a bounded startup motion test; it leaves navigation STOPPED
+and the task coordinator decides what runs next.

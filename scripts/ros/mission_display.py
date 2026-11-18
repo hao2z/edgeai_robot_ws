@@ -1,14 +1,20 @@
 """Shared names for mission events in the terminal and RViz."""
 from language import localize
 
-TASKS = dict(find_targets='搜寻全部救援目标', s1='S1 单机救援', c1='C1 双机救援')
+TASKS = dict(explore='双机协同探索', find_targets='搜寻全部救援目标', s1='S1 单机救援', c1='C1 双机救援')
 UNITS = dict(
+    poll='汇总双方导航结果', refresh_frontier_goals='检查前沿更新',
+    poll_yield='检查让路进展', diagnose_blockage='诊断空闲车阻挡',
+    select_yield='选择让路位置', dispatch_yield='派发让路导航',
+    dispatch='分配前沿目标', check_complete='检查探索完成条件',
     acquire='取得导航控制权', select_target='检查已定位目标', search_target='搜寻缺失目标',
+    select_assignment='分配救援机器人及停车点', recover_assignment='救援失败回退与重新分配',
     next_target='切换搜寻目标', check_targets='核对目标清单', select_approach='选择接近点',
     dispatch_navigation='派发导航', poll_navigation='等待导航结果',
     inside_rescue_region='核对救援范围', check_rescue='检查救援条件与停留时间',
     correct='微调救援位姿', handover='切换共享地图', wait_navigation_ready='等待双机导航就绪',
-    localize='激光定位', prepare_target='核对 C1 位置', select_parking='选择双机停车点',
+    localize='激光定位', activate_localization='启动共享地图与双车定位', reset_localization='重置失败的定位启动',
+    prepare_target='核对 C1 位置', select_parking='选择双机停车点',
     select_parking_locked='重新选择未到位车辆的停车点', record_success='记录任务成功',
     quiesce='结束探索动作', save_map='保存地图', mapping_supplement='补充建图',
     cancel_navigation='取消导航', cancel_all_navigation='取消双机导航')
@@ -16,11 +22,21 @@ PHASES = dict(
     STARTING='启动任务调度', WAITING_EXPLORATION='等待探索器就绪', EXPLORING='探索建图',
     FRONTIERS_EXHAUSTED='暂时没有可用前沿', MAPPING_FRONTIER_AVAILABLE='重新发现可用前沿',
     OBSERVATION_SUPPRESSED_TARGETS_LOCATED='目标已齐，跳过观察转圈',
+    LOCALIZATION_STARTING='建图完成，启动定位', LOCALIZATION_READY='定位已就绪，允许后续任务',
+    LOCALIZATION_FAILED='定位接管失败',
     MAPPING_AREA_READY='建图面积达标', MAPPING_AREA_INSUFFICIENT='建图面积不足或地图过期')
 
 
 def _mission_description(data):
     phase = data.get('phase', '')
+    # These are BT checks, not evidence that a robot actually yielded/moved.
+    # Keep real assignments/results in fleet events and failures visible here.
+    if (phase == 'TASK_FEEDBACK' and data.get('success') is not False
+            and data.get('details', {}).get('success') is not False
+            and data.get('unit') in ('poll', 'poll_yield', 'refresh_frontier_goals',
+                'diagnose_blockage', 'select_yield', 'dispatch_yield', 'dispatch',
+                'check_complete', 'select_target')):
+        return ''
     task = TASKS.get(data.get('task'), data.get('task', ''))
     unit = data.get('unit', data.get('step', ''))
     unit = UNITS.get(unit, unit)
@@ -28,6 +44,8 @@ def _mission_description(data):
     if phase == 'TASK_REQUESTED':
         return f'开始任务：{task}'
     if phase == 'TASK_FEEDBACK':
+        if data.get('task') == 'find_targets':
+            unit = {'dispatch':'分配观察候选点','check_complete':'核对全部目标'}.get(data.get('unit'),unit)
         return f'{task} · {unit}'
     if phase == 'TASK_STOP_UNCONFIRMED':
         return f'{task} · 未确认任务已停止'

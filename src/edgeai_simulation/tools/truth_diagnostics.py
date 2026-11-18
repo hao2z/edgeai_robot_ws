@@ -38,7 +38,7 @@ class TruthDiagnostics(Node):
     def __init__(self):
         super().__init__('simulation_truth')
         for key, default in [('world_file', ''), ('targets_file', ''), ('entity', 'edgeai_robot_real'),
-                             ('frame_prefix', ''), ('reference_frame', 'map'), ('log_directory', ''), ('shared_map', False)]:
+                             ('frame_prefix', ''), ('reference_frame', 'map'), ('log_directory', ''), ('shared_map', False), ('primary_alias', False)]:
             self.declare_parameter(key, default)
         p = lambda key: self.get_parameter(key).value
         self.entity = p('entity')
@@ -48,10 +48,10 @@ class TruthDiagnostics(Node):
         self.audit = None
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
-            name = 'truth.jsonl' if not p('frame_prefix') else self.entity+'-truth.jsonl'
+            name = 'truth.jsonl' if not p('frame_prefix') or p('primary_alias') else self.entity+'-truth.jsonl'
             self.audit = (self.directory/name).open('a', buffering=1)
         self.targets = yaml.safe_load(Path(p('targets_file')).read_text())['targets']
-        if self.directory and not p('frame_prefix'):
+        if self.directory and (not p('frame_prefix') or p('primary_alias')):
             snapshot=self.directory/'truth-targets.json'
             temporary=snapshot.with_suffix('.tmp')
             temporary.write_text(json.dumps(dict(source=p('targets_file'),targets_world=[

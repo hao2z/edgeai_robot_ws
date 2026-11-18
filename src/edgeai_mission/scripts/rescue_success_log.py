@@ -8,13 +8,14 @@ def pose_text(pose):
     return f'({pose[0]:.3f}, {pose[1]:.3f}, {math.degrees(pose[2]):.1f}°)'
 
 
-def heading_error(pose,target,face_target=False):
-    desired=math.atan2(target[1]-pose[1],target[0]-pose[0]) if face_target else target[2]+math.pi
+def heading_error(pose,target):
+    """Both rescue audits face the target coordinates, from the actual pose."""
+    desired=math.atan2(target[1]-pose[1],target[0]-pose[0])
     return math.atan2(math.sin(pose[2]-desired),math.cos(pose[2]-desired))
 
 
 def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dwell=10.,
-                   stopped_linear=.02, stopped_angular=.05,face_target=False):
+                   stopped_linear=.02, stopped_angular=.05, parking_offset=None):
     """Use only a fresh, synchronized truth record from this session."""
     path = directory/('truth.jsonl' if robot == 'robot1' else 'robot2-truth.jsonl')
     try:
@@ -67,9 +68,14 @@ def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dw
         if last:row=last
         target = next(t for t in row['targets_world'] if t['id'] == target_id)
         pose = row['robot_world']
-        distance = math.hypot(pose[0]-target['pose'][0], pose[1]-target['pose'][1])
+        center = target['pose'][:2]
+        if parking_offset is not None:
+            offset, angle = parking_offset
+            normal = target['pose'][2] + angle
+            center = [center[0] + offset * math.cos(normal), center[1] + offset * math.sin(normal)]
+        distance = math.dist(pose[:2], center)
         estimate = next((t for t in row.get('target_estimates', []) if t['id'] == target_id), {})
-        yaw_error=heading_error(pose,target['pose'],face_target)
+        yaw_error=heading_error(pose,target['pose'])
         position_ok=distance<=radius;heading_ok=abs(yaw_error)<=yaw_limit
         max_distance=distance;max_yaw=abs(yaw_error);max_linear=max_angular=0.
         for previous,current in zip(window,window[1:]):
@@ -77,21 +83,24 @@ def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dw
             if not 0<dt<=1.5:complete=False;continue
             p=current['robot_world'];q=previous['robot_world']
             actual=next(t['pose'] for t in current['targets_world'] if t['id']==target_id)
-            max_distance=max(max_distance,math.dist(p[:2],actual[:2]))
-            max_yaw=max(max_yaw,abs(heading_error(p,actual,face_target)))
+            max_distance=max(max_distance,math.dist(p[:2],center))
+            max_yaw=max(max_yaw,abs(heading_error(p,actual)))
             max_linear=max(max_linear,math.dist(p[:2],q[:2])/dt)
             max_angular=max(max_angular,abs(math.atan2(math.sin(p[2]-q[2]),math.cos(p[2]-q[2])))/dt)
         if window:
             first=window[0];actual=next(t['pose'] for t in first['targets_world'] if t['id']==target_id)
             p=first['robot_world']
-            max_distance=max(max_distance,math.dist(p[:2],actual[:2]))
-            max_yaw=max(max_yaw,abs(heading_error(p,actual,face_target)))
+            max_distance=max(max_distance,math.dist(p[:2],center))
+            max_yaw=max(max_yaw,abs(heading_error(p,actual)))
         passed=position_ok and heading_ok and max_distance<=radius and max_yaw<=yaw_limit and max_linear<stopped_linear and max_angular<stopped_angular
         status='failed' if not passed else 'passed' if complete else 'unavailable'
         return dict(available=True, sample_time_s=raw_stamp, pose_time_s=stamp if last else raw_stamp,
                     coverage_pending=history[-1]['sample_time']<stamp, robot_world=pose,
                     target_world=target['pose'], distance_m=distance, radius_m=radius,
+                    position_reference='parking_point' if parking_offset is not None else 'target_center',
+                    rescue_center_world=center,
                     position_pass=position_ok,yaw_error_rad=yaw_error,heading_pass=heading_ok,
+                    heading_reference='robot_to_target_bearing',
                     status=status,window_start_s=begin,window_end_s=stamp,
                     dwell_s=dwell,samples=len(window),
                     max_distance_m=max_distance,max_yaw_error_rad=max_yaw,
@@ -102,28 +111,35 @@ def truth_snapshot(directory, robot, stamp, target_id, radius, yaw_limit=.25, dw
 
 
 def success_evidence(directory, task, target_id, target_pose, poses, distances, errors,
-                     radius, yaw_limit, dwell, stamp, stopped_linear=.02, stopped_angular=.05,wait_s=0.):
+                     radius, yaw_limit, dwell, stamp, stopped_linear=.02, stopped_angular=.05,
+                     wait_s=0., robots=None, pump=None, parking_offset=None):
+    robots = robots if robots is not None else [f'robot{i+1}' for i in range(len(poses))]
+    if len(robots) != len(poses) or any(r not in ('robot1','robot2') for r in robots):
+        raise ValueError('Success evidence robot identities must match poses')
     rows = []
     heading = f'{task.upper()} 救援成功｜目标 {target_id}｜map 目标位姿={pose_text(target_pose)}｜连续满足 {dwell:.1f} s'
     messages = [heading]
     deadline=time.monotonic()+wait_s
     while True:
-        snapshots=[truth_snapshot(directory,f'robot{i+1}',stamp,target_id,radius,yaw_limit,dwell,
-                                  stopped_linear,stopped_angular,face_target=task=='c1') for i in range(len(poses))]
+        snapshots=[truth_snapshot(directory,robots[i],stamp,target_id,radius,yaw_limit,dwell,
+                                  stopped_linear,stopped_angular,parking_offset) for i in range(len(poses))]
         if not any(t.get('coverage_pending',False) for t in snapshots) or time.monotonic()>=deadline:break
         # Passive audit completion only: no navigation or sensor commands.
+        if pump is not None:
+            pump()
         time.sleep(.1)
     for i, pose in enumerate(poses):
-        robot = f'robot{i+1}'
+        robot = robots[i]
+        robot_label = '机器人'+robot.removeprefix('robot')
         truth = snapshots[i]
         rows.append(dict(robot=robot, frame_id='map', pose=pose, distance_m=distances[i],
                          yaw_error_rad=errors[i], truth=truth))
-        messages.append(f'机器人{i+1}｜map 位姿={pose_text(pose)}｜距离 {distances[i]:.3f} ≤ {radius:.3f} m'
+        messages.append(f'{robot_label}｜map 位姿={pose_text(pose)}｜距离 {distances[i]:.3f} ≤ {radius:.3f} m'
                         f'｜朝向误差 {abs(math.degrees(errors[i])):.1f}° ≤ {math.degrees(yaw_limit):.1f}°｜停车及停留检查通过')
         if truth['available']:
             truth['distance_error_m']=distances[i]-truth['distance_m']
             truth['yaw_estimation_error_rad']=math.atan2(math.sin(errors[i]-truth['yaw_error_rad']),math.cos(errors[i]-truth['yaw_error_rad']))
-            text = (f'机器人{i+1}｜world 真值位姿={pose_text(truth["robot_world"])}'
+            text = (f'{robot_label}｜world 真值位姿={pose_text(truth["robot_world"])}'
                     f'｜目标真值位姿={pose_text(truth["target_world"])}'
                     f'｜真值距离 {truth["distance_m"]:.3f} / {radius:.3f} m'
                     f'｜真值朝向误差 {abs(math.degrees(truth["yaw_error_rad"])):.1f}° / {math.degrees(yaw_limit):.1f}°'
@@ -134,12 +150,12 @@ def success_evidence(directory, task, target_id, target_pose, poses, distances, 
                 text += f'｜目标定位误差 {truth["target_error_m"]:.3f} m'
             messages.append(text)
             label={'passed':'通过','failed':'未通过','unavailable':'无法确认'}[truth['status']]
-            messages.append(f'真值核验：{label}｜机器人{i+1}｜{truth["samples"]}个历史样本，要求停留{dwell:.1f}s'
+            messages.append(f'真值核验：{label}｜{robot_label}｜{truth["samples"]}个历史样本，要求停留{dwell:.1f}s'
                             f'｜期间最大距离 {truth["max_distance_m"]:.3f} m'
                             f'｜最大朝向误差 {math.degrees(truth["max_yaw_error_rad"]):.1f}°'
                             f'｜采样估算最大速度 {truth["max_linear_mps"]:.3f} m/s、{truth["max_angular_rps"]:.3f} rad/s')
         else:
-            messages.append(f'真值核验：无法确认｜机器人{i+1}｜{truth["reason"]}')
+            messages.append(f'真值核验：无法确认｜{robot_label}｜{truth["reason"]}')
     statuses=[r['truth'].get('status','unavailable') for r in rows]
     status='failed' if 'failed' in statuses else 'passed' if all(s=='passed' for s in statuses) else 'unavailable'
     common_duration=None
@@ -150,4 +166,5 @@ def success_evidence(directory, task, target_id, target_pose, poses, distances, 
     return dict(task=task, target_id=target_id, frame_id='map', target_pose=target_pose,
                 sample_time_s=stamp, radius_m=radius, yaw_tolerance_rad=yaw_limit,
                 dwell_s=dwell, robots=rows,truth_verification=dict(status=status,common_duration_s=common_duration,
+                    heading_reference='robot_to_target_bearing',
                     judge='Gazebo world pose history; sampled dwell check')), messages

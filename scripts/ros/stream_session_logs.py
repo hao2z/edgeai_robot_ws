@@ -76,6 +76,7 @@ class EventReducer:
         self.sends = self.changes = 0
         self.managed_sends = self.recovery_attempts = self.recoveries_verified = 0
         self.frontier = False
+        self.frontier_robots = set()
         self.last_success = {}
         self.alignment_state = {}
         self.robots = defaultdict(Counter)
@@ -104,10 +105,11 @@ class EventReducer:
             return False
         phase = name[len(prefix):]
         data.setdefault('phase', phase)
-        failure = data.get('success') is False
+        failure = data.get('success') is False or data.get('details', {}).get('success') is False
         warning = phase in ('MAPPING_AREA_INSUFFICIENT', 'TASK_STOP_UNCONFIRMED',
                             'PLAN_REJECTED', 'PLAN_BLOCKED_BY_PARKED_PEER', 'TARGET_UNAVAILABLE')
-        level = 'ERROR' if failure else ('WARN' if warning else ('OK' if data.get('success') is True else 'INFO'))
+        level = 'ERROR' if failure or phase=='LOCALIZATION_FAILED' else ('WARN' if warning else
+            ('OK' if data.get('success') is True or phase=='LOCALIZATION_READY' else 'INFO'))
         if source == 'mission':
             description = mission_description(data, self.selected_language)
             if not description:
@@ -181,12 +183,84 @@ class EventReducer:
             self.last_progress = self.clock()
 
     def consume(self, source, line, stopping=False):
+        if source in ('fleet-exploration','target-search','rescue'):
+            try:
+                data = json.loads(line)
+            except (ValueError, TypeError):
+                data = {}
+            event = data.get('event', '')
+            if event.startswith(('FLEET_EXPLORATION_','FLEET_SEARCH_','FLEET_RESCUE_')):
+                searching = event.startswith('FLEET_SEARCH_')
+                rescuing = event.startswith('FLEET_RESCUE_')
+                phase = event.removeprefix('FLEET_RESCUE_' if rescuing else 'FLEET_SEARCH_' if searching else 'FLEET_EXPLORATION_')
+                names = dict(STARTED=('探索协调启动', 'Exploration coordination started'),
+                    ACQUIRED=('已取得双车控制权', 'Fleet navigation acquired'),
+                    ASSIGNED=('前往分配前沿', 'Navigate to assigned frontier'),
+                    ASSIGNMENT_CANCEL_REQUESTED=('取消已派发导航', 'Cancel dispatched navigation'),
+                    FRONTIER_UPDATE_REQUESTED=('前沿已更新，取消旧导航', 'Frontier updated; cancel old navigation'),
+                    FRONTIER_RELEASED=('旧前沿导航已结束，重新分配', 'Old frontier navigation ended; reallocate'),
+                    ARRIVED=('已到达前沿', 'Frontier reached'),
+                    NAV_FAILED=('前沿导航失败', 'Frontier navigation failed'),
+                    BLOCKAGE_DIAGNOSIS=('对方阻挡诊断', 'Peer blockage diagnosis'),
+                    YIELD_STARTED=('空闲机器人让路', 'Idle robot yielding'),
+                    YIELD_FINISHED=('让路结束', 'Yield navigation finished'),
+                    YIELD_UNAVAILABLE=('未找到可行让路点', 'No feasible yielding pose'),
+                    STATE=('探索分配状态', 'Exploration assignment state'),
+                    FAILED=('探索任务失败', 'Exploration task failed'),
+                    COMPLETED=('双车探索完成', 'Fleet exploration completed'),
+                    CLOSED=('探索协调结束', 'Exploration coordination closed'))
+                if searching:names.update(STARTED=('双车搜寻启动','Fleet target search started'),
+                    ASSIGNED=('前往观察候选点','Navigate to observation candidate'),
+                    ARRIVED=('搜寻动作完成','Search action completed'),
+                    SWEEP_STARTED=('转圈观察','Observation sweep started'),
+                    NAV_FAILED=('搜寻动作失败','Search action failed'),
+                    COMPLETED=('所需目标已找全','All required targets localized'),
+                    CLOSED=('双车搜寻结束','Fleet target search closed'),
+                    FAILED=('双车搜寻失败','Fleet target search failed'))
+                if rescuing:names.update(STARTED=('单机救援分配启动','Single rescue allocation started'),
+                    SELECTED=('分配单机救援停车点','Assign single rescue parking'),
+                    ASSIGNED=('前往单机救援停车点','Navigate to single rescue parking'),
+                    REASSIGN=('救援失败回退，重新分配','Rescue fallback; reallocate'),
+                    ARRIVED=('已到达救援停车点','Rescue parking reached'),
+                    NAV_FAILED=('救援导航失败','Rescue navigation failed'),
+                    TARGET_COMPLETED=('单个目标救援成功','Target rescued'),
+                    TARGET_SKIPPED=('跳过本轮无法完成的目标','Target skipped'),
+                    COMPLETED=('普通目标救援阶段结束','Normal rescue stage finished'),
+                    CLOSED=('单机救援分配结束','Single rescue allocation closed'),
+                    FAILED=('单机救援分配失败','Single rescue allocation failed'))
+                description = names.get(phase, (phase, phase))[self.selected_language == 'en']
+                if data.get('robot'):
+                    description += ' · '+data['robot']
+                if 'goal' in data:
+                    goal = data['goal']
+                    description += f" ({goal['x']:.2f}, {goal['y']:.2f})"
+                target_id = data.get('target_id', data.get('goal', {}).get('target_id'))
+                if rescuing and target_id is not None:
+                    description += f' · ID {target_id}'
+                if data.get('reason'):
+                    description += ' · '+data['reason']
+                if data.get('classification'):
+                    description += ' · '+data['classification']
+                if phase == 'STATE':
+                    description += ' · '+json.dumps(data.get('robots', {}), ensure_ascii=False)
+                level = 'INFO'
+                if phase == 'FAILED' or data.get('success') is False:
+                    level = 'ERROR'
+                elif phase in ('NAV_FAILED', 'TARGET_SKIPPED') or data.get('skipped'):
+                    level = 'WARN'
+                elif phase in ('COMPLETED', 'TARGET_COMPLETED'):
+                    level = 'OK'
+                self.emit(source, level, description, line, event=event, data=data, robot=data.get('robot'))
+                return
         match = ROS_LINE.search(line)
         node, message = match.groups() if match else ('', line)
         robot = robot_for(source, node)
-        if source in ('mission', 'cooperative') and self.task_event(source, line, message):
+        if source=='joint-mapping' and ('JOINT_EXPLORATION_STATUS:' in message or 'initial alignment confirmed' in message):
+            self.emit(source,'INFO',message,line)
             return
-        if source=='suspects' and ('SUSPECT_PROPOSED:' in line or 'SUSPECT_RETAINED:' in line):
+        if source in ('mission', 'cooperative', 'localization') and self.task_event(source, line, message):
+            return
+        if source in ('perception', 'suspects') and ('SUSPECT_PROPOSED:' in line or 'SUSPECT_RETAINED:' in line):
             self.emit(source,'INFO',line.split(']: ',1)[-1],line)
             return
         if source in ('rescue', 'target-search') and 'RESCUE_' in line:
@@ -203,7 +277,7 @@ class EventReducer:
         if source == 'perception' and ('TARGET_DECODED:' in line or 'TARGET_FOUND:' in line or 'TARGET_CONFIRMED:' in line or 'TARGET_SEARCH_READY:' in line or 'TARGET_LOCALIZATION_WAIT:' in line):
             self.emit(source, 'INFO', line.split(']: ', 1)[-1], line)
             return
-        if source in ('authority', 'cooperative-nav') and node.endswith('navigation_authority'):
+        if source in ('authority', 'cooperative-nav', 'joint-mapping') and node.endswith('navigation_authority'):
             event = re.match(r'([A-Z_]+): (.*?); task=(\d+)', message)
             if event:
                 stats = self.robots[robot]
@@ -251,11 +325,12 @@ class EventReducer:
             return
         # Candidate rejection logs also contain dispatch=(x,y); they do not
         # send a navigation action and must not inflate goal/retry counts.
-        sending = source == 'explore' and re.search(r'Sending (?:updated )?frontier goal', line)
+        sending = source in ('explore','joint-mapping') and re.search(r'Sending (?:updated )?frontier goal', line)
         goal = re.search(r'dispatch=\(([^)]+)\)', line) if sending else None
         if goal:
             self.frontier = True
-        if not goal and (source == 'cooperative-nav' and robot == 'robot2' or
+            self.frontier_robots.add(robot)
+        if not goal and (source in ('cooperative-nav','joint-mapping') and robot == 'robot2' and robot not in self.frontier_robots or
                          source == 'nav' and (not self.frontier or self.mission and
                                              self.mission[2].get('task'))):
             goal = re.search(r'Begin navigating .*? to \(([^)]+)\)', line)
@@ -284,7 +359,7 @@ class EventReducer:
                     # Expected Nav2 fallback to the sole configured plugin.
                     return
                 if '已到达导航目标' == description:
-                    if source in ('nav', 'cooperative-nav') and robot and (not node or 'bt_navigator' in node):
+                    if source in ('nav', 'cooperative-nav','joint-mapping') and robot and (not node or 'bt_navigator' in node):
                         self.arrived(source, robot, line)
                     return
                 if source == 'cooperative-nav' and '详见 nav.log' in description:
@@ -315,7 +390,7 @@ def follow(directory):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     directory = Path(directory)
     names = ('sim', 'nav', 'explore', 'rviz', 'rosout', 'watch', 'alignment', 'authority', 'perception', 'suspects',
-             'scan360', 'observation', 'target-search', 'rescue', 'cooperative', 'cooperative-nav', 'mission')
+             'scan360', 'observation', 'target-search', 'rescue', 'cooperative', 'cooperative-nav', 'mission', 'localization', 'joint-mapping', 'fleet-exploration')
     for name in names:
         (directory / f'{name}.log').touch(exist_ok=True)
     handles = {name: (directory / f'{name}.log').open(encoding='utf-8', errors='replace')

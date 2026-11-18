@@ -1,0 +1,6 @@
+# Shared open starting area in simple and competition. Gazebo world poses.
+robots:
+  - name: robot1
+    pose: [-1.25, -1.55, 0.01, 0.0, 0.0, 0.0]
+  - name: robot2
+    pose: [-1.25, -0.75, 0.01, 0.0, 0.0, 0.0]

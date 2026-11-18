@@ -6,12 +6,19 @@
 dictionary: DICT_4X4_50
 marker_size_m: 0.20  # outer BLACK square; white quiet margin is additional
 panel_size_m: 0.24
-development_rescue_geometry:
-  normal_offset_m: 0.70
-  cooperative_lateral_offset_m: 0.40
-  radius_m: 0.18
-  normal_dwell_s: 3.0
-  cooperative_dwell_s: 5.0
+rescue_rules:
+  normal:
+    normal_offset_m: 0.70
+    position_tolerance_m: 0.10  # 相对偏移后的停车点
+    dwell_s: 3.0
+    alignment_enabled: false
+    yaw_tolerance_rad: 0.25
+  cooperative:
+    radius_m: 0.70  # 两台机器人各自到标记中心的距离
+    dwell_s: 10.0
+    yaw_tolerance_rad: 0.25
+    parking_radii_m: [0.50, 0.55, 0.60]
+    position_margin_m: 0.15
 targets:
   - id: 1
     name: T1

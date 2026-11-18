@@ -1,0 +1,59 @@
+# Integrated mission opt-in: one common Karto/Ceres graph, two independent scan chains.
+# Initial pose is a coarse estimate, refined using real laser scans before either robot explores.
+initialization:
+  initial_relative_pose: [0.0, -0.60, 0.0]  # robot2 in robot1's INITIAL base frame, metres/radians
+  processing_hz: 2.0
+  timeout_s: 45.0  # Wall clock; failed/ambiguous registration fails startup explicitly.
+  # Registration and confirmation limits; covariance describes the local fit only.
+  max_scan_age_s: 1.5
+  max_pair_skew_s: 0.15
+  confirmation_count: 3
+  confirmation_interval_s: 0.4
+  confirmation_translation_m: 0.08
+  confirmation_yaw_rad: 0.06
+  peer_margin_m: 0.12
+  max_points: 180
+  min_points: 30
+  iterations: 25
+  max_correspondence_m: 0.25
+  trim_fraction: 0.8
+  min_overlap: 0.45
+  max_residual_m: 0.065
+  min_spread_m: 0.2
+  min_information_ratio: 0.025
+  max_correction_m: 0.4
+  max_correction_yaw_rad: 0.3
+  coarse_xy_m: 0.2
+  coarse_yaw_rad: 0.15
+  distinct_translation_m: 0.16
+  distinct_yaw_rad: 0.12
+  min_distinctiveness: 0.1
+  residual_floor_m: 0.005
+  normal_neighbors: 7
+  surface_planarity_ratio: 0.2
+  max_seeds: 7
+  max_refinement_step_m: 0.1
+  max_refinement_step_yaw_rad: 0.1
+  convergence_m: 1.0e-05
+  convergence_yaw_rad: 1.0e-05
+runtime:
+  max_age_s: 0.6
+  mask_margin_m: 0.05  # Additional margin beyond the shared physical footprint.
+  processing_hz: 2.0
+diagnostics:
+  processing_hz: 1.0  # Audit frequency in wall time; graph deltas checked per received revision.
+  jump_translation_m: 0.30  # Report historical-keyframe jumps; never rejects valid loop closures.
+  jump_yaw_rad: 0.25
+slam:
+  # Every source has its own scan/motion gate and bounded TF catch-up queue.
+  joint_scan_queue_size: 5
+  joint_scan_max_age_s: 2.0
+  joint_tf_wait_s: 0.5
+  joint_scan_future_tolerance_s: 0.1
+  joint_tf_publish_period_s: 0.05
+  joint_publish_poses: true
+  map_update_interval: 0.5
+  minimum_time_interval: 0.2
+  minimum_travel_distance: 0.20
+  minimum_travel_heading: 0.20
+  anchor_graph_publish_period_s: 0.5

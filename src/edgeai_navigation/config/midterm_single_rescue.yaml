@@ -3,7 +3,6 @@ enabled: true
 settle_margin_s: 1.0  # 达标后继续连续停稳1秒；真值仍核验最后10秒，不放宽阈值。
 require_confirmation: false
 goal_source: detected_target
-target_id: 1
 search_enabled: true  # 未定位S1时，在已知空闲区域补充相机观察。
 alignment_enabled: true  # 优先由Shim完成位姿；导航成功后独立检查，不达标才进行末端修正。
 alignment_step_m: 0.06  # 每步最多前进6cm；仅朝缩小位置误差的方向前进。
@@ -21,7 +20,7 @@ search_suspects:
   min_panel_side_px: 24.0
   view_half_angle_deg: 70.0
   view_angle_samples: 7
-  min_view_spacing_m: 0.30
+  min_view_spacing_m: 0.10  # Completed observation spacing; independent of fleet reservations.
   max_age_s: 8.0  # 实时候选年龄；建图保留的多帧候选不受此上限淘汰。
   min_confidence: 0.5
   known_target_radius_m: 0.30

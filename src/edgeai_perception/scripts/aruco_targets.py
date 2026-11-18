@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Observe targets without owning navigation or using Gazebo target truth."""
+import argparse
 import json
+import sys
 from collections import deque, Counter
 from pathlib import Path
 import time
@@ -9,6 +11,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -27,7 +30,7 @@ class Targets(Node):
     def __init__(self,**kwargs):
         super().__init__('aruco_targets',**kwargs)
         defaults = dict(image_topic='/camera/image', camera_info_topic='/camera/camera_info',
-                        optical_frame='camera_optical_frame', dictionary='DICT_4X4_50',
+                        optical_frame='camera_optical_frame', robot_id='', camera_robots='', dictionary='DICT_4X4_50',
                         marker_size_m=.20, processing_hz=30.0, max_image_age_s=.5,
                         min_marker_side_px=6.0, max_reprojection_error_px=2.5,
                         min_distance_m=.15, max_distance_m=5.0, confirmation_observations=3,
@@ -50,6 +53,8 @@ class Targets(Node):
         self.listener = TransformListener(self.buffer, self)
         self.latest = self.info = None
         self.last_stamp = None
+        self.camera_inputs = {}
+        self.source_stats = {}
         self.stats = Counter()
         self.processing_ms = deque(maxlen=200)
         self.decoded_ids = set()
@@ -77,8 +82,19 @@ class Targets(Node):
         self.output = Path(self.p['output_directory']) if self.p['output_directory'] else None
         if self.output:
             self.output.mkdir(parents=True, exist_ok=True)
-        self.create_subscription(Image, self.p['image_topic'], self.image, qos_profile_sensor_data)
-        self.create_subscription(CameraInfo, self.p['camera_info_topic'], self.camera, qos_profile_sensor_data)
+        robots = [r.strip() for r in self.p['camera_robots'].split(',') if r.strip()]
+        if len(set(robots)) != len(robots) or any(r not in ('robot1', 'robot2') for r in robots):
+            raise ValueError('camera_robots must contain unique robot1/robot2 names')
+        for robot in robots:
+            self.camera_inputs[robot] = dict(latest=None, info=None, last_stamp=None)
+            self.source_stats[robot] = Counter()
+            self.create_subscription(Image, '/'+robot+'/camera/image',
+                lambda m, r=robot: self.source_image(r, m), qos_profile_sensor_data)
+            self.create_subscription(CameraInfo, '/'+robot+'/camera/camera_info',
+                lambda m, r=robot: self.camera_inputs[r].update(info=m), qos_profile_sensor_data)
+        if not robots:
+            self.create_subscription(Image, self.p['image_topic'], self.image, qos_profile_sensor_data)
+            self.create_subscription(CameraInfo, self.p['camera_info_topic'], self.camera, qos_profile_sensor_data)
         self.observations = self.create_publisher(String, 'targets/observations', 10)
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.estimates = self.create_publisher(String, 'targets/estimates', qos)
@@ -119,7 +135,7 @@ class Targets(Node):
                 if not binding.get('pending_anchor'):continue
                 try:
                     anchored=self.graph.bind(stamp,binding['point'],binding['rotation'],
-                                             binding['robot_map'],frame='map')
+                                             binding['robot_map'],frame='map',robot_id=binding.get('robot_id',self.p['robot_id']) or None)
                 except ValueError:continue
                 history[index]=(stamp,anchored)
                 self.stats['anchor_attached']+=1
@@ -156,6 +172,9 @@ class Targets(Node):
         history.clear();history.extend(ordered);self.stats['position_accepted']+=1
         row.update(anchor_kind=binding['kind'],anchor_node_id=binding.get('node_id'),
                    pending_anchor=binding.get('pending_anchor',False),map_epoch=self.graph.epoch)
+        if binding.get('robot_id'):row['robot_id']=binding['robot_id']
+        for field in ('robot_id','sensor_id'):
+            if field in binding:row['anchor_'+field]=binding[field]
         self.observations.publish(String(data=json.dumps(row)))
         if self.output:
             with (self.output/'target-observations.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
@@ -206,14 +225,27 @@ class Targets(Node):
     def camera(self, msg):
         self.info = msg
 
+    def source_image(self, robot, msg):
+        self.stats['received_frames'] += 1
+        self.source_stats[robot]['received_frames'] += 1
+        self.camera_inputs[robot]['latest'] = msg
+
     def process(self):
-        if self.latest is None or self.info is None:
+        if self.camera_inputs:
+            for robot, source in self.camera_inputs.items():
+                self.process_camera(source['latest'], source['info'], robot,
+                    robot+'/camera_optical_frame', robot+'/odom', robot+'/base_footprint', source)
+        else:
+            self.process_camera(self.latest, self.info, self.p['robot_id'],
+                self.p['optical_frame'], 'odom', 'base_footprint')
+
+    def process_camera(self, msg, info, robot_id, optical_frame, odom_frame, base_frame, source=None):
+        if msg is None or info is None:
             if time.monotonic()-self.started > 10:
                 self.warn('TARGET_INPUT_MISSING: 等待相机图像/CameraInfo；检查相机是否被禁用')
             return
-        msg, info = self.latest, self.info
         stamp = Time.from_msg(msg.header.stamp)
-        if stamp.nanoseconds == self.last_stamp:
+        if stamp.nanoseconds == (source['last_stamp'] if source is not None else self.last_stamp):
             return
         now = self.get_clock().now()
         if not 0 <= (now-stamp).nanoseconds*1e-9 <= self.p['max_image_age_s']:
@@ -223,7 +255,7 @@ class Targets(Node):
         if (msg.width, msg.height) != (info.width, info.height) or info.k[0] <= 0 or info.k[4] <= 0:
             self.warn('TARGET_BAD_CALIBRATION: 图像尺寸或内参无效')
             return
-        if msg.header.frame_id != self.p['optical_frame']:
+        if msg.header.frame_id != optical_frame:
             self.warn('TARGET_FRAME_MISMATCH: 图像frame与配置光学frame不一致，拒绝定位：'+msg.header.frame_id)
             return
         if info.distortion_model not in ('plumb_bob', 'rational_polynomial', ''):
@@ -235,6 +267,7 @@ class Targets(Node):
             image = self.bridge.imgmsg_to_cv2(msg, 'mono8')
             corners, ids, rejected = self.detect(image)
             self.stats['processed_frames'] += 1
+            if source is not None:self.source_stats[robot_id]['processed_frames'] += 1
             self.stats['undecoded_quadrilaterals'] += len(rejected)
             if ids is not None:
                 self.stats['decoded_observations'] += len(ids)
@@ -242,17 +275,18 @@ class Targets(Node):
                     if int(marker_id) not in self.decoded_ids:
                         self.decoded_ids.add(int(marker_id))
                         self.get_logger().info(f'TARGET_DECODED: 图像已识别 ID={int(marker_id)}；定位仍需PnP和TF校验')
-            self.last_stamp = stamp.nanoseconds
+            if source is not None:source['last_stamp'] = stamp.nanoseconds
+            else:self.last_stamp = stamp.nanoseconds
             if ids is None:
                 self.stats['frames_without_decoded_id'] += 1
                 return
-            tf = self.buffer.lookup_transform('odom', self.p['optical_frame'], stamp)
+            tf = self.buffer.lookup_transform(odom_frame, optical_frame, stamp)
             if self.mapping:
-                base=self.buffer.lookup_transform('odom','base_footprint',stamp).transform
+                base=self.buffer.lookup_transform(odom_frame,base_frame,stamp).transform
                 robot=[base.translation.x,base.translation.y]
-                map_odom=self.buffer.lookup_transform('map','odom',stamp).transform
+                map_odom=self.buffer.lookup_transform('map',odom_frame,stamp).transform
                 robot_map=transform_point(map_odom,[*robot,0.])[:2]
-            else:map_camera=self.buffer.lookup_transform('map',self.p['optical_frame'],stamp).transform
+            else:map_camera=self.buffer.lookup_transform('map',optical_frame,stamp).transform
             k = np.array(info.k, dtype=float).reshape(3, 3)
             d = np.array(info.d, dtype=float)
             accepted_in_frame = set()
@@ -276,7 +310,7 @@ class Targets(Node):
                 camera_marker = cv2.Rodrigues(rvec)[0]
                 marker_rotation = rotation_matrix(tf.transform.rotation) @ camera_marker
                 accepted_in_frame.add(key)
-                row = dict(id=key, stamp_ns=stamp.nanoseconds, frame_id=self.p['optical_frame'],
+                row = dict(id=key, stamp_ns=stamp.nanoseconds, frame_id=optical_frame,
                            camera_position=tvec.tolist(), camera_rvec=rvec.tolist(),
                            odom_position=point.tolist(), reprojection_error_px=error)
                 if self.mapping:
@@ -290,6 +324,8 @@ class Targets(Node):
                 else:
                     binding=dict(kind='map',point=transform_point(map_camera,tvec),
                                  rotation=rotation_matrix(map_camera.rotation)@camera_marker)
+                if robot_id:binding['robot_id']=robot_id
+                if source is not None:self.source_stats[robot_id]['position_accepted_inputs'] += 1
                 self.accept(key,stamp.nanoseconds,binding,row)
         except TransformException:
             self.stats['observation_tf_unavailable'] += 1
@@ -305,7 +341,7 @@ class Targets(Node):
     def publish_diagnostics(self):
         elapsed_sim = (self.get_clock().now().nanoseconds-self.stats_started)/1e9
         elapsed_wall = time.monotonic()-self.started
-        output = dict(counters=dict(self.stats), decoded_ids=sorted(self.decoded_ids),
+        output = dict(counters=dict(self.stats), sources={r:dict(s) for r,s in self.source_stats.items()}, decoded_ids=sorted(self.decoded_ids),
                       localization_waits=dict(self.localization_waits),
                       configured_hz=self.p['processing_hz'],
                       processed_hz_sim=self.stats['processed_frames']/max(elapsed_sim, 1e-6),
@@ -317,6 +353,20 @@ class Targets(Node):
             tmp = self.output/'target-diagnostics.json.tmp'
             tmp.write_text(json.dumps(output, indent=2))
             tmp.replace(self.output/'target-diagnostics.json')
+
+    @staticmethod
+    def anchor_sources(history):
+        """JSON-safe source keys for live and frozen anchors, without losing ids."""
+        sources=[]
+        for _,binding in history:
+            node_id=binding.get('node_id',binding.get('source_node_id'))
+            if node_id is None:continue
+            source=dict(node_id=node_id)
+            for field in ('robot_id','sensor_id'):
+                if field in binding:source[field]=binding[field]
+                elif 'source_'+field in binding:source[field]=binding['source_'+field]
+            if source not in sources:sources.append(source)
+        return sorted(sources,key=lambda source:json.dumps(source,sort_keys=True))
 
     def publish(self):
         now = self.get_clock().now()
@@ -337,14 +387,15 @@ class Targets(Node):
             stale = (now.nanoseconds-history[-1][0])*1e-9 > self.p['stale_after_s']
             state = 'stale' if stale else ('confirmed' if key in self.confirmed else 'candidate')
             spread = float(np.sqrt(np.mean([np.sum((p-point)**2) for p,_ in projected])))
+            sources=self.anchor_sources(history)
             rows.append(dict(id=key, type=self.target_types.get(key, 'unknown'),
                              position=point.tolist(), orientation=orientation.tolist(),
                              x=float(point[0]), y=float(point[1]), z=float(point[2]), yaw=yaw,
                              confirmed=key in self.confirmed,
                              frame_id='map', state=state, last_observed_ns=history[-1][0],
                              observations=len(history), spread_m=spread,
-                             anchor_nodes=sorted({h[1].get('node_id',h[1].get('source_node_id')) for h in history
-                                                  if h[1].get('node_id',h[1].get('source_node_id')) is not None}),
+                             anchor_nodes=sorted({source['node_id'] for source in sources}),
+                             anchor_sources=sources,
                              pending_anchor_observations=sum(bool(h[1].get('pending_anchor')) for h in history),
                              coordinate_source=('map_observation' if any(h[1].get('pending_anchor') for h in history)
                                                 else 'slam_keyframes' if self.mapping else 'fixed_map')))
@@ -373,27 +424,57 @@ class Targets(Node):
         self.estimates.publish(String(data=json.dumps(output)))
         self.markers.publish(markers)
         if self.output:
-            used={node for row in rows for node in row['anchor_nodes']}
-            anchors=[self.graph.nodes[key] for key in sorted(used)]
-            signature=json.dumps([self.map_binding()['mode'],self.graph.epoch,anchors])
+            sources=[]
+            for row in rows:
+                for source in row['anchor_sources']:
+                    if source not in sources:sources.append(source)
+            sources.sort(key=lambda source:json.dumps(source,sort_keys=True))
+            used={(source['robot_id'],source['node_id']) if source.get('robot_id') is not None
+                  else source['node_id'] for source in sources}
+            anchors=[self.graph.nodes[key] for key in sorted(used,key=str) if key in self.graph.nodes]
+            signature=json.dumps([self.map_binding()['mode'],self.graph.epoch,anchors,sources])
             if signature!=self.last_anchor_audit:
                 self.last_anchor_audit=signature
                 with (self.output/'target-anchor-history.jsonl').open('a') as f:
-                    f.write(json.dumps(dict(stamp_ns=now.nanoseconds,map_binding=self.map_binding(),nodes=anchors))+'\n')
+                    f.write(json.dumps(dict(stamp_ns=now.nanoseconds,map_binding=self.map_binding(),
+                                            nodes=anchors,anchor_sources=sources))+'\n')
             temporary = self.output/'targets.json.tmp'
             temporary.write_text(json.dumps(output, indent=2))
             temporary.replace(self.output/'targets.json')
 
 
 def main():
-    rclpy.init()
-    node = Targets()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suspect-config', type=Path)
+    parser.add_argument('--suspect-panel-size', type=float, default=.20)
+    options, ros_args = parser.parse_known_args()
+    rclpy.init(args=[sys.argv[0], *ros_args])
+    executor = SingleThreadedExecutor()
+    nodes = []
     try:
-        rclpy.spin(node)
-    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        targets = Targets()
+        nodes.append(targets)
+        if options.suspect_config:
+            from suspect_targets import Suspects
+
+            for robot, source in targets.camera_inputs.items():
+                suspect_args = ['--ros-args', '--params-file', str(options.suspect_config),
+                                '-p', f'panel_size_m:={options.suspect_panel_size}',
+                                '-p', f'odom_frame:={robot}/odom', '-p', f'laser_topic:=/{robot}/scan']
+                if targets.output is not None:
+                    output = targets.output if robot == 'robot1' else targets.output / robot
+                    suspect_args.extend(['-p', f'output_directory:={output}'])
+                nodes.append(Suspects(camera_source=source, namespace=robot,
+                                      use_global_arguments=False, cli_args=suspect_args))
+        for node in nodes:
+            executor.add_node(node)
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
+        executor.shutdown()
+        for node in reversed(nodes):
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

@@ -2,13 +2,15 @@
 
 更新：2026-11-11。
 
+可选联合建图模式见 [联合建图](joint-mapping.md)。该模式的关键帧同时携带 `robot_id`、`sensor_id`；绑定键区分来源机器人和公共图实例，主车观测只绑定 `robot1` 的关键帧。来源不同但局部 ID 相同的节点不会串绑。既有单机数值 ID 和接口仍兼容。
+
 建图期间，ArUco历史观测绑定附近SLAM关键帧，不再用当前机器人处的map→odom重新投影全部历史观测。关键帧被回环优化修正后，其绑定的目标位置和法线一起更新，再在map坐标系融合。该方法复用SLAM Toolbox，不向SLAM优化器添加标记约束，也不使用仿真真值。
 
-`edgeai_navigation/anchored_slam_toolbox`继承异步SLAM节点，每秒发布一次`/slam_toolbox/anchor_graph`，包含关键帧ID、采集时间、原始里程计位姿和优化后的地图位姿。目标相对于关键帧的关系来自观测时刻的odom坐标，发布时使用该帧的最新map位姿。它是局部刚性近似，不能消除标记测距误差、观测与关键帧之间的里程计误差。
+`edgeai_mapping/anchored_slam_toolbox`继承异步SLAM节点，每秒发布一次`/slam_toolbox/anchor_graph`，包含关键帧ID、采集时间、原始里程计位姿和优化后的地图位姿。目标相对于关键帧的关系来自观测时刻的odom坐标，发布时使用该帧的最新map位姿。它是局部刚性近似，不能消除标记测距误差、观测与关键帧之间的里程计误差。
 
 入口：
 
-- SLAM导出：`src/edgeai_navigation/src/anchored_slam_toolbox.cpp`。
+- SLAM导出：`src/edgeai_mapping/src/anchored_slam_toolbox.cpp`。
 - 坐标计算：`src/edgeai_perception/scripts/landmark_anchors.py`。
 - 观测融合：`src/edgeai_perception/scripts/aruco_targets.py`。
 - 配置：`src/edgeai_perception/config/aruco_targets.yaml`，`map_anchoring: slam_graph`；直接使用静态地图时设为`map`。
@@ -21,7 +23,7 @@
 
 范围由`anchor_max_distance_m`控制（默认3米）。关键帧年龄不设门槛，时间差只用于距离相同时排序。找不到节点时，保留图像时刻的map坐标并继续发布，后台持续重试仍保留的观测。已删除待绑定超时和独立队列容量参数，存储统一受`max_observations_per_id`及融合窗口约束。输出中的`pending_anchor_observations`说明尚未关联的观测数量。尚未关联的旧观测无法跟随局部图优化修正，新的相机观测会补充当前位置。
 
-后台回调`anchor_processing_hz`和目标发布`target_publish_hz`均默认5Hz，配置在`src/edgeai_perception/config/aruco_targets.yaml`。SLAM图快照周期`anchor_graph_publish_period_s`默认0.5墙钟秒，配置在`src/edgeai_simulation/config/slam_toolbox.yaml`。图快照到达后立即更新关联，目标在下一次发布时反映图优化结果。图像时刻TF不可用时记录`image_time_tf_unavailable`，地图图实例更换时清除旧图目标。
+后台回调`anchor_processing_hz`和目标发布`target_publish_hz`均默认5Hz，配置在`src/edgeai_perception/config/aruco_targets.yaml`。SLAM图快照周期`anchor_graph_publish_period_s`默认0.5墙钟秒，配置在`src/edgeai_mapping/config/slam_toolbox.yaml`。图快照到达后立即更新关联，目标在下一次发布时反映图优化结果。图像时刻TF不可用时记录`image_time_tf_unavailable`，地图图实例更换时清除旧图目标。
 
 双机器人地图交接前，任务调用`/targets/finalize_map`。它请求`/slam_toolbox/finalize_anchors`暂停新扫描，生成最终地图及关键帧快照，然后固定目标坐标。服务成功后才保存地图、停止SLAM并启动AMCL。此后新观测直接存入静态map坐标，旧观测不随AMCL的map→odom变化。最终化失败时交接报错，不假称坐标已经固定。
 

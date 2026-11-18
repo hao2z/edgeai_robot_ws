@@ -19,9 +19,13 @@ Usage: bash edgeai.sh COMMAND [options]
   stop          Stop registered project sessions and simulator
   shell         Interactive project ROS shell
   build         Build explorer overlay and workspace
+  test          Quick regression; --profile ros-smoke for isolated ROS checks
   check         Check mission dependencies without launching/stopping tests
 Mission/navigation: --duration SEC --controller rpp|dwb|mppi --planner lattice|navfn
                     --domain ID --single-robot --depth-obstacles config|true|false --language zh|en
+                    --joint-mapping (integrated two-robot mapping/exploration)
+                    --targets ID:type,... --target-count N (default: selected arena)
+                    --runtime-profile debug|performance (default: debug)
 Midterm: add --language en (English) or --language zh (Chinese, default)
 See docs/linux-quickstart.md. GUI capture/window automation remains Windows-only.
 HELP
@@ -32,6 +36,7 @@ HELP
         if [[ $command == check ]]; then options+=(--check); fi
         exec bash scripts/simulation/start-autonomous-exploration.sh "${options[@]}" "$@"
         ;;
+    test) exec bash scripts/testing/run-tests.sh "$@" ;;
     midterm) exec bash scripts/simulation/start-midterm-check.sh "$@" ;;
     cooperative) exec bash scripts/simulation/start-cooperative-test.sh "$@" ;;
     simulation)

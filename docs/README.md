@@ -1,21 +1,21 @@
-# 当前文档入口
+# 文档入口与维护规则
 
-日常使用从以下指南开始；带日期的诊断和[历史目录](history/README.md)用于追溯，不作为当前默认配置说明。
+当前开发只维护与改动直接相关的一份主说明，不要求每次同步所有专题、报告和测试清单。
 
-| 内容 | 文档 |
+| 职责 | 主说明 |
 |---|---|
-| 成果、实测证据、遗留问题 | [项目状态](project-status.md) |
-| Linux安装、构建、启动 | [队员上手](linux-quickstart.md) |
-| Windows入口、停止与专项测试 | [脚本职责](windows-entrypoints.md) |
-| 比赛要求和场地 | [中期待办](competition/midterm-checklist.md)、[仿真环境](competition/midterm-environment.md) |
-| 行为树、协调与调用接口 | [任务流程](task-workflow.md) |
-| 导航与任务代码归属 | [模块边界](module-boundaries.md) |
-| S1与C1 | [单机救援](normal-rescue.md)、[协同救援](cooperative-rescue.md) |
-| 导航朝向、规划、控制、恢复 | [逐点接口](navigation-goal-policy.md)、[Smac Lattice](smac-lattice.md)、[RPP](rpp-controller.md)、[恢复](navigation-recovery.md) |
-| 各用途独立调参、C1倒车 | [导航任务配置](navigation-task-profiles.md) |
-| 救援停稳余量、统一padding、占据记录 | [本轮诊断与配置](rescue-padding-2026-11-11.md) |
-| 速度联动、手动测试 | [速度约束](navigation-speed-limits.md)、[运动测试环境](navigation-test-environment.md) |
-| 目标与地图、疑似点、视锥 | [地图绑定](target-map-anchoring.md)、[疑似目标](suspected-target-search.md)、[视锥搜寻](frustum-search.md) |
-| 双机状态、诊断、真值、性能 | [RViz状态](rviz-status.md)、[控制器诊断](controller-diagnostics.md)、[真值](simulation-truth.md)、[性能采样](simulation-performance.md) |
+| 使用、安装与启动 | [仓库说明](../README.md)、[Linux上手](linux-quickstart.md)、[Windows入口](windows-entrypoints.md) |
+| 任务与机器人协调 | [任务层协调](fleet-task-coordination.md) |
+| 导航对外接口与配置 | [分用途导航配置](navigation-task-profiles.md) |
+| 测试入口与验证范围 | [测试说明](../tests/README.md) |
 
-修改源码后先构建；配置修改在下一次启动生效。会话实际参数及运行证据保存在`tests/results/runs/`，不会随代码上传。
+实现细节调整通常只需修改代码；公共接口、启动方式或配置含义改变时，更新对应主说明即可。验证结果保存在运行目录，不为每次修改增加新报告或复制测试列表。
+
+专题资料按需查阅，不承担逐次改动同步：
+
+- 建图与目标：[联合建图](joint-mapping.md)、[目标地图绑定](target-map-anchoring.md)。
+- 调试：[运动测试](navigation-test-environment.md)、[控制器诊断](controller-diagnostics.md)、[性能](simulation-performance.md)。
+- 比赛：[原始文档与要求](competition/)、[场地](competition/midterm-environment.md)。
+- 已验证版本的结果与边界：[命名空间验证记录](native-namespace-validation.md)。
+
+日期报告已收拢到[历史目录](history/README.md)。历史文字描述当时实现，不作为当前接口或参数依据，也不随代码更新。

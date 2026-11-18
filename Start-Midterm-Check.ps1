@@ -1,7 +1,7 @@
 param(
     # Operator display/log language: zh = 中文, en = English.
     [ValidateSet('zh','en')][string]$Language = 'en',
-    [ValidateSet('all','part2')][string]$Part = 'all',
+    [ValidateSet('all','part2')][string]$Part = 'part2',
     [ValidateRange(30,3600)][int]$Duration = 780,
     [ValidateRange(0,120)][int]$VerificationSeconds = 120,
     [ValidateRange(0,232)][int]$DomainId = 86,
@@ -15,6 +15,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $env:EDGEAI_LANGUAGE = $Language
+$env:EDGEAI_JOINT_MAPPING = 'false'  # Independent P1/P2 remains the validated single-mapper demonstration.
 . (Join-Path $PSScriptRoot 'scripts/ros/windows-host-tools.ps1')
 if (-not $Backend) {
     $backendFile = Join-Path $PSScriptRoot 'runtime/ros-backend'
@@ -28,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve repository path in WSL.' }
 $options = @('--part', $Part, '--duration', $Duration, '--verification-seconds', $VerificationSeconds,
     '--domain', $DomainId, '--controller', $Controller, '--planner', $Planner,
     '--depth-obstacles', $DepthObstacles, '--language', $Language)
-& $wslExe -d $Distro -- env "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" bash "$linuxRoot/scripts/simulation/start-midterm-check.sh" @options --check
+& $wslExe -d $Distro -- env EDGEAI_JOINT_MAPPING=false "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" bash "$linuxRoot/scripts/simulation/start-midterm-check.sh" @options --check
 if ($LASTEXITCODE -ne 0) { throw "ROS backend '$Backend' failed its runtime check; no previous session was stopped." }
 if ($CheckOnly) { return }
 if (-not $InCurrentWindow) {
@@ -58,7 +59,7 @@ $observer = Start-Process $windowsPowerShell -WindowStyle Hidden -PassThru -Argu
     '-File',"`"$(Join-Path $PSScriptRoot 'scripts/capture/Observe-TestWindows.ps1')`"",'-Midterm',
     '-SessionDirectory',"`"$sessionDirectory`"")
 try {
-    & $wslExe -d $Distro -- env "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true `
+    & $wslExe -d $Distro -- env EDGEAI_JOINT_MAPPING=false "EDGEAI_LANGUAGE=$Language" "EDGEAI_ROS_BACKEND=$Backend" FORCE_COLOR=1 EDGEAI_CAPTURE_ACK=true `
         "EDGEAI_MIDTERM_SESSION_DIR=$linuxRoot/tests/results/runs/$runName" bash "$linuxRoot/scripts/simulation/start-midterm-check.sh" @options
     $result = $LASTEXITCODE
 } finally {

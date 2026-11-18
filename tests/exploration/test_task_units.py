@@ -39,22 +39,134 @@ class Client:
 
 
 class TaskUnits(unittest.TestCase):
+    def timed_single(self):
+        from edgeai_tasks.rescue_policy import Dwell
+        u=Units.__new__(Units)
+        u.check_owner=lambda:None
+        u.goal=dict(x=1.,y=0.,yaw=0.,target_id=1)
+        u.navigation_after=0.
+        clock=[1.]
+        n=NS(c=dict(alignment_enabled=False,navigation_timeout_s=180.,dwell_s=1.,
+                    max_data_age_s=.5,position_tolerance_m=.1,yaw_tolerance_rad=.25,
+                    stopped_linear_mps=.02,stopped_angular_rps=.05),navigation_started=0.)
+        n.get_clock=lambda:NS(now=lambda:NS(nanoseconds=round(clock[0]*1e9)))
+        n.latest_goal=lambda goal:dict(goal,x=1.+(.11 if round(clock[0]*10)%2 else 0.))
+        n.goal_changed=lambda a,b:abs(a['x']-b['x'])>=.1
+        n.fresh_measurement=lambda now,g:(now,dict(rescue_distance_m=.35,
+            rescue_position_limit_m=.5,yaw_error_rad=.05,linear_mps=0.,angular_rps=0.))
+        u.node=n;u.dwell=Dwell(n.c)
+        return u,n,clock
+
+    def test_s1_target_jitter_within_task_limits_does_not_restart_dwell(self):
+        u,n,clock=self.timed_single()
+        self.assertFalse(u.check_single()['complete'])
+        for i in range(1,12):
+            clock[0]=1.+i*.1
+            result=u.check_single()
+        self.assertTrue(result['complete'])
+        self.assertEqual(u.dwell.since,1.)
+        # Real violation still resets the dwell, even with the same target ID.
+        n.fresh_measurement=lambda now,g:(now,dict(rescue_distance_m=.55,
+            rescue_position_limit_m=.5,yaw_error_rad=.05,linear_mps=0.,angular_rps=0.))
+        clock[0]=2.2
+        self.assertFalse(u.check_single()['complete'])
+        self.assertIsNone(u.dwell.since)
+
+    def test_s1_callback_skew_preserves_dwell_but_long_outage_resets(self):
+        u,n,clock=self.timed_single()
+        measure=n.fresh_measurement
+        def missing(*args):raise ValueError('No fresh odometry/TF pair')
+        self.assertFalse(u.check_single()['complete'])
+        for i in range(1,12):
+            clock[0]=1.+i*.1
+            n.fresh_measurement=missing
+            pending=u.check_single()
+            self.assertTrue(pending['dwell_retained'])
+            self.assertFalse(pending['complete'])
+            self.assertFalse(u.condition_complete)
+            self.assertEqual(u.dwell.since,1.)
+            n.fresh_measurement=measure
+            done=u.check_single()
+        self.assertTrue(done['complete'])
+        # Missing data cannot itself confirm success, even after a completed sample.
+        clock[0]=2.2;n.fresh_measurement=missing
+        self.assertFalse(u.check_single()['complete'])
+        self.assertFalse(u.condition_complete)
+        clock[0]=2.7
+        self.assertFalse(u.check_single()['dwell_retained'])
+        self.assertIsNone(u.dwell.since)
+        n.fresh_measurement=measure
+        self.assertFalse(u.check_single()['complete'])
+        self.assertEqual(u.dwell.since,2.7)
+
+    def test_s1_pairs_odometry_at_common_tf_time_without_extrapolation(self):
+        from collections import deque
+        from rclpy.time import Time
+        from nav_msgs.msg import Odometry
+        from geometry_msgs.msg import TransformStamped
+        from edgeai_tasks.normal_rescue import Rescue
+        n=Rescue.__new__(Rescue)
+        n.c=dict(max_data_age_s=.5,goal_source='map_pose',position_tolerance_m=.1)
+        n.base_frame='robot1/base_footprint';n.odom_received=time.monotonic()
+        n.odom_history=deque()
+        for stamp in (1.90,1.92,1.94):
+            odom=Odometry();odom.header.stamp=Time(nanoseconds=round(stamp*1e9)).to_msg()
+            n.odom_history.append(odom)
+        tf=TransformStamped();tf.header.stamp=Time(nanoseconds=1_920_000_000).to_msg()
+        tf.transform.rotation.w=1.;tf.transform.translation.x=.03
+        calls=[]
+        def lookup(parent,child,stamp):
+            calls.append(stamp.nanoseconds)
+            if stamp.nanoseconds>1_920_000_000:raise AssertionError('Queried ahead of common TF time')
+            return tf
+        n.buffer=NS(lookup_transform=lookup)
+        stamp,measurement=n.fresh_measurement(1.96,dict(x=0.,y=0.,yaw=0.))
+        self.assertAlmostEqual(stamp,1.92)
+        self.assertAlmostEqual(measurement['rescue_distance_m'],.03)
+        self.assertEqual(calls,[0,1_920_000_000])
+        with self.assertRaisesRegex(ValueError,'No fresh odometry/TF pair'):
+            n.fresh_measurement(2.5,dict(x=0.,y=0.,yaw=0.))
+
     def timed_joint(self):
         from rclpy.time import Time
         from edgeai_tasks.cooperative_policy import JointDwell
         u=self.joint();n=u.node;clock=[1.]
         n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25)
         n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
-        n.now=lambda:clock[0];n.refresh_target=lambda:False;n.localized=lambda ns:True
+        n.now=lambda:clock[0];n.refresh_target=lambda:False;n.localized=lambda ns,**kwargs:True
         n.tf_pose=lambda *a:[.5,0.,math.pi]
         u.dwell=JointDwell(.7,1.);u.navigation_after=0.;u.last_sample=None;u.last_event=-100.
         def sample(now,stamp=None):
             clock[0]=now
             msg=Time(nanoseconds=round((now if stamp is None else stamp)*1e9)).to_msg()
-            n.odom={ns:NS(header=NS(stamp=msg),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('','robot2')}
+            n.odom={ns:NS(header=NS(stamp=msg),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('robot1','robot2')}
             n.buffer=NS(lookup_transform=lambda *a:NS(header=NS(stamp=msg)))
             return u.check_joint()
         return u,n,sample,clock
+
+    def test_c1_new_target_estimates_preserve_dwell_until_conditions_fail(self):
+        u,n,sample,_=self.timed_joint()
+        n.c['dwell_s']=1.;n.c['settle_margin_s']=0.
+        # The real refresh contract updates geometry and returns True for a
+        # significant estimate shift. Reproduce repeated 2 cm visual changes.
+        updates=[0]
+        def refresh():
+            updates[0]+=1
+            n.target['x']=.021 if updates[0]%2 else 0.
+            return True
+        n.refresh_target=refresh
+        n.tf_pose=lambda *a:[.5,0.,math.pi]
+        self.assertFalse(sample(1.)['complete'])
+        for i in range(1,12):result=sample(1.+i*.1)
+        self.assertTrue(result['complete'])
+        self.assertEqual(u.dwell.start,1.)
+        # A genuinely out-of-range latest estimate must still reset the dwell.
+        n.tf_pose=lambda *a:[.9,0.,math.pi]
+        self.assertFalse(sample(2.2)['complete'])
+        self.assertIsNone(u.dwell.start)
+        n.tf_pose=lambda *a:[.5,0.,math.pi]
+        self.assertFalse(sample(2.3)['complete'])
+        self.assertAlmostEqual(u.dwell.start,2.3)
 
     def test_c1_callback_skew_does_not_restart_confirmed_dwell(self):
         u,n,sample,_=self.timed_joint()
@@ -66,6 +178,60 @@ class TaskUnits(unittest.TestCase):
             self.assertEqual(u.dwell.start,1.)
             done=sample(now)
         self.assertTrue(done['complete'])
+
+    def test_c1_localization_callback_skew_preserves_dwell_but_quality_failure_resets(self):
+        u,n,sample,_=self.timed_joint()
+        sample(1.)
+        for i in range(1,12):
+            now=1.+i*.1
+            def missing(ns,**kwargs):raise ValueError(ns+' localization TF time unavailable')
+            n.localized=missing
+            pending=sample(now)
+            self.assertTrue(pending['dwell_retained'])
+            self.assertEqual(u.dwell.start,1.)
+            n.localized=lambda ns,**kwargs:True
+            result=sample(now)
+        self.assertTrue(result['complete'])
+        n.localized=lambda ns,**kwargs:False
+        self.assertFalse(sample(2.2)['complete'])
+        self.assertIsNone(u.dwell.start)
+
+    def test_c1_localization_outage_is_bounded(self):
+        u,n,sample,_=self.timed_joint()
+        sample(1.)
+        def missing(ns,**kwargs):raise ValueError(ns+' fresh scan/TF pair unavailable')
+        n.localized=missing
+        self.assertTrue(sample(1.2)['dwell_retained'])
+        self.assertFalse(sample(1.6)['dwell_retained'])
+        self.assertIsNone(u.dwell.start)
+
+    def test_c1_motion_still_resets_dwell_during_localization_wait(self):
+        u,n,sample,_=self.timed_joint()
+        sample(1.)
+        def missing(ns,**kwargs):
+            raise ValueError(ns+' fresh scan/TF pair unavailable')
+        n.localized=missing
+        original=n.tf_pose
+        def moving(*args):
+            for msg in n.odom.values():msg.twist.twist.linear.x=.1
+            return original(*args)
+        n.tf_pose=moving
+        result=sample(1.1)
+        self.assertFalse(result['valid'])
+        self.assertIsNone(u.dwell.start)
+
+    def test_c1_data_grace_retains_dwell_without_confirming_on_missing_data(self):
+        from edgeai_tasks.cooperative_policy import JointDwell
+        u,n,sample,_=self.timed_joint()
+        u.dwell=JointDwell(.7,1.,2.)
+        sample(1.)
+        def missing(ns,**kwargs):raise ValueError(ns+' localization TF time unavailable')
+        n.localized=missing
+        pending=sample(2.5)
+        self.assertTrue(pending['dwell_retained'])
+        self.assertFalse(pending['complete'])
+        n.localized=lambda ns,**kwargs:True
+        self.assertTrue(sample(2.6)['complete'])
 
     def test_c1_tf_wait_retries_same_sample_and_long_outage_resets(self):
         from tf2_ros import TransformException
@@ -92,16 +258,16 @@ class TaskUnits(unittest.TestCase):
         u=self.joint();n=u.node
         n.c.update(max_data_age_s=.5,yaw_tolerance_rad=.25,alignment_enabled=False)
         n.target=dict(x=0.,y=0.,yaw=0.);n.target_ready=True
-        n.now=lambda:2.;n.refresh_target=lambda:False;n.localized=lambda ns:True
+        n.now=lambda:2.;n.refresh_target=lambda:False;n.localized=lambda ns,**kwargs:True
         stamp=Time(nanoseconds=2_000_000_000).to_msg()
-        n.odom={ns:NS(header=NS(stamp=stamp),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('','robot2')}
+        n.odom={ns:NS(header=NS(stamp=stamp),twist=NS(twist=NS(linear=NS(x=0.,y=0.),angular=NS(z=0.)))) for ns in ('robot1','robot2')}
         n.buffer=NS(lookup_transform=lambda *a:NS(header=NS(stamp=stamp)))
-        poses={'base_footprint':[.5,0.,math.pi],'robot2/base_footprint':[0.,.5,0.]}
+        poses={'robot1/base_footprint':[.5,0.,math.pi],'robot2/base_footprint':[0.,.5,0.]}
         n.tf_pose=lambda frame,*a:poses[frame]
         u.dwell=JointDwell(.7,1.);u.dwell.start=1.
-        u.navigation_after=0.;u.last_sample=None;u.last_event=-100.;u.arrived={'','robot2'}
+        u.navigation_after=0.;u.last_sample=None;u.last_event=-100.;u.arrived={'robot1','robot2'}
         with self.assertRaisesRegex(UnitFailure,'heading outside tolerance'):u.check_joint()
-        self.assertEqual(u.arrived,{''});self.assertFalse(u.failed_parking)
+        self.assertEqual(u.arrived,{'robot1'});self.assertFalse(u.failed_parking)
         self.assertIsNone(u.dwell.start);self.assertFalse(u.condition_complete)
         self.assertAlmostEqual(abs(u.last['yaw_errors_rad'][1]),math.pi/2)
         poses['robot2/base_footprint'][2]=-math.pi/2;u.last_sample=None
@@ -120,8 +286,8 @@ class TaskUnits(unittest.TestCase):
         u.alignment_started=None
         n.tf_pose=lambda *a:[.5,0.,0.]
         sample(1.)
-        n.states={ns:dict(phase='IDLE') for ns in ('','robot2')}
-        n.spin={ns:object() for ns in ('','robot2')}
+        n.states={ns:dict(phase='IDLE') for ns in ('robot1','robot2')}
+        n.spin={ns:object() for ns in ('robot1','robot2')}
         n.wait=lambda predicate,*a: self.assertTrue(predicate())
         actions=[]
         n.action=lambda client,request,*a:(actions.append(request) or NS(status=4,result=NS(error_code=0)))
@@ -135,8 +301,8 @@ class TaskUnits(unittest.TestCase):
         u,n,sample,_=self.timed_joint();u.alignment_started=None
         n.tf_pose=lambda *a:[.75,0.,math.pi]
         sample(1.)
-        n.states={ns:dict(phase='IDLE') for ns in ('','robot2')}
-        n.advance={ns:object() for ns in ('','robot2')}
+        n.states={ns:dict(phase='IDLE') for ns in ('robot1','robot2')}
+        n.advance={ns:object() for ns in ('robot1','robot2')}
         n.wait=lambda predicate,*a:self.assertTrue(predicate())
         actions=[]
         n.action=lambda client,request,*a:(actions.append(request) or NS(status=4,result=NS(error_code=0)))
@@ -161,9 +327,9 @@ class TaskUnits(unittest.TestCase):
         u.navigation_deadlines={};u.condition_complete=False;u.failure_kind='initial';u.fatal_reason=None
         u.failed_parking={}
         u.has_control=True
-        u.node=NS(c=dict(navigation_timeout_s=180.,radius_m=.7,dwell_s=10.),nav={'':Client(),'robot2':Client()},
+        u.node=NS(c=dict(navigation_timeout_s=180.,radius_m=.7,dwell_s=10.),nav={'robot1':Client(),'robot2':Client()},
             handles=[],check_owner=lambda:None,goal_pose=lambda p:PoseStamped(),event=lambda *a,**kw:None,
-            states={'':dict(phase='IDLE'),'robot2':dict(phase='IDLE')},
+            states={'robot1':dict(phase='IDLE'),'robot2':dict(phase='IDLE')},
             get_clock=lambda:NS(now=lambda:NS(nanoseconds=2_000_000_000)))
         def wait(predicate,timeout):
             if not predicate():raise RuntimeError('transition not ready')
@@ -193,19 +359,19 @@ class TaskUnits(unittest.TestCase):
 
     def test_dispatches_both_without_waiting_for_first_result(self):
         u=self.joint();u.dispatch()
-        self.assertEqual(set(u.pending),{'','robot2'})
+        self.assertEqual(set(u.pending),{'robot1','robot2'})
         self.assertTrue(all(not entry[1].done() for entry in u.pending.values()))
 
     def test_failure_preserves_other_active_action_and_does_not_resend(self):
         u=self.joint();u.dispatch();healthy=u.pending['robot2'][0]
-        u.pending[''][0].finish(6,208)
+        u.pending['robot1'][0].finish(6,208)
         with self.assertRaises(UnitFailure):u.poll_navigation()
         u.cancel_navigation();u.dispatch()
         self.assertIs(u.pending['robot2'][0],healthy)
         self.assertEqual(healthy.cancellations,0)
         self.assertEqual(len(u.node.nav['robot2'].goals),1)
-        self.assertEqual(len(u.node.nav[''].goals),2)
-        self.assertEqual(u.failed_parking[''],[[0.,0.,0.]])
+        self.assertEqual(len(u.node.nav['robot1'].goals),2)
+        self.assertEqual(u.failed_parking['robot1'],[[0.,0.,0.]])
 
     def test_no_result_during_nav2_recovery_does_not_trigger_task_retry(self):
         u=self.joint();u.dispatch()
@@ -213,28 +379,28 @@ class TaskUnits(unittest.TestCase):
         self.assertEqual([h[0].cancellations for h in u.pending.values()],[0,0])
 
     def test_start_occupied_failure_does_not_blacklist_parking_goal(self):
-        u=self.joint();u.dispatch();u.pending[''][0].finish(6,ComputePathToPose.Result.START_OCCUPIED)
+        u=self.joint();u.dispatch();u.pending['robot1'][0].finish(6,ComputePathToPose.Result.START_OCCUPIED)
         with self.assertRaises(UnitFailure):u.poll_navigation()
         self.assertFalse(u.failed_parking)
 
     def test_arrived_robot_waits_while_other_navigates(self):
-        u=self.joint();u.dispatch();u.pending[''][0].finish()
+        u=self.joint();u.dispatch();u.pending['robot1'][0].finish()
         self.assertFalse(u.poll_navigation()['complete'])
         u.cancel_navigation();u.dispatch()
-        self.assertEqual(len(u.node.nav[''].goals),1)
+        self.assertEqual(len(u.node.nav['robot1'].goals),1)
         u.pending['robot2'][0].finish()
         self.assertTrue(u.poll_navigation()['complete'])
         self.assertFalse(u.condition_complete,'Navigation completion is not rescue success')
 
     def test_timeout_cancels_and_confirms_only_failed_robot(self):
-        u=self.joint();u.dispatch();late=u.pending[''][0];healthy=u.pending['robot2'][0]
-        u.navigation_deadlines['']=time.monotonic()-1
+        u=self.joint();u.dispatch();late=u.pending['robot1'][0];healthy=u.pending['robot2'][0]
+        u.navigation_deadlines['robot1']=time.monotonic()-1
         with self.assertRaisesRegex(UnitFailure,'timeout'):u.poll_navigation()
         self.assertTrue(late.future.done());self.assertEqual(late.cancellations,1)
         self.assertEqual(healthy.cancellations,0)
 
     def test_external_cancellation_is_fatal_and_sticky(self):
-        u=self.joint();u.node.deadline=time.monotonic()+30;u.dispatch();u.pending[''][0].finish(5)
+        u=self.joint();u.node.deadline=time.monotonic()+30;u.dispatch();u.pending['robot1'][0].finish(5)
         with self.assertRaises(UnitFailure) as first:u.invoke('poll_navigation')
         self.assertEqual(first.exception.category,'fatal')
         with self.assertRaises(UnitFailure) as second:u.invoke('dispatch_navigation')
@@ -281,7 +447,7 @@ class TaskUnits(unittest.TestCase):
     def test_start_occupied_without_path_cannot_pass_peer_check(self):
         from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
-        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
+        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'robot1':'root','robot2':'second'}
         n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped()
         events=[];n.event=lambda name,**kw:events.append(name)
         n.action=lambda *a:NS(status=6,result=NS(error_code=ComputePathToPose.Result.START_OCCUPIED))
@@ -290,7 +456,7 @@ class TaskUnits(unittest.TestCase):
         with patch('edgeai_tasks.cooperative_rescue.parking_pairs',return_value=[pair]):
             with self.assertRaisesRegex(RuntimeError,'preplan start occupied'):n.select_parking_pair()
         self.assertEqual(events.count('PLAN_REJECTED'),1)
-        self.assertEqual(set(n.preplan_blocked),{''})
+        self.assertEqual(set(n.preplan_blocked),{'robot1'})
 
     def test_c1_extra_settle_time_survives_dwell_reset(self):
         u=self.joint();u.node.c['settle_margin_s']=1.
@@ -341,17 +507,17 @@ class TaskUnits(unittest.TestCase):
     def test_reselect_parking_excludes_failed_goal_history(self):
         from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
-        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'':'root','robot2':'second'}
+        n.map=None;n.target={'id':2};n.footprint=[];n.c={};n.plan={'robot1':'root','robot2':'second'}
         n.tf_pose=lambda *a:[0.,0.,0.];n.goal_pose=lambda p:PoseStamped();n.event=lambda *a,**kw:None
         n.action=lambda *a:NS(status=4,result=NS(error_code=0,path=NS(header=NS(frame_id='map'),poses=[PoseStamped()])))
         failed=([.5,0.,0.],[0.,.5,0.]);next_pair=([.6,0.,0.],[0.,.5,0.])
         with patch('edgeai_tasks.cooperative_rescue.parking_pairs',return_value=[failed,next_pair]),patch('edgeai_tasks.cooperative_rescue.path_clear_of_peer',return_value=True):
-            self.assertNotEqual(n.select_parking_pair(excluded={'':[failed[0]]})[0],failed[0])
+            self.assertNotEqual(n.select_parking_pair(excluded={'robot1':[failed[0]]})[0],failed[0])
 
     def test_rejects_native_path_that_crosses_parked_peer(self):
         from edgeai_tasks.cooperative_rescue import CooperativeRescue
         n=CooperativeRescue.__new__(CooperativeRescue)
-        n.map=None;n.target={'id':2};n.c={};n.plan={'':'root','robot2':'second'}
+        n.map=None;n.target={'id':2};n.c={};n.plan={'robot1':'root','robot2':'second'}
         n.footprint=[(.15,.15),(-.15,.15),(-.15,-.15),(.15,-.15)]
         n.tf_pose=lambda frame:[-2.,0.,0.] if frame=='base_footprint' else [0.,2.,0.]
         def pose(p):

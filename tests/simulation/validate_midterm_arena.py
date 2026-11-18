@@ -31,10 +31,13 @@ for name, expected_box in expected.items():
     bounds.append((x-sx/2, x+sx/2, y-sy/2, y+sy/2))
 targets = support.load_yaml(share / 'config/targets_midterm.yaml')
 assert targets['dictionary'] == 'DICT_4X4_50' and targets['marker_size_m'] == .16
-assert [(t['id'], t['name'], t['type'], t['pose'][:3], t['rescue_radius_m'], t['dwell_s'])
+rules = targets['rescue_rules']
+assert rules['normal']['target_radius_m'] == .5 and rules['normal']['dwell_s'] == 10
+assert rules['cooperative']['radius_m'] == .7 and rules['cooperative']['dwell_s'] == 10
+assert [(t['id'], t['name'], t['type'], t['pose'][:3])
         for t in targets['targets']] == [
-            (1, 'S1', 'normal', [1, 4.1, .15], .5, 10),
-            (2, 'C1', 'cooperative', [4.1, 1, .15], .7, 10)]
+            (1, 'S1', 'normal', [1, 4.1, .15]),
+            (2, 'C1', 'cooperative', [4.1, 1, .15])]
 for target, sign in zip(targets['targets'], (-1, 1)):
     assert math.isclose(math.sin(target['pose'][5]), sign)
     assert abs(math.cos(target['pose'][5])) < 1e-9
@@ -68,6 +71,7 @@ with tempfile.TemporaryDirectory(prefix='edgeai-midterm-check-') as temp:
         assert list(map(float, include.findtext('pose').split())) == target['pose']
         disk = composed.find(f"model[@name='zone_{target['name']}_0']")
         assert list(map(float, disk.findtext('pose').split()))[:2] == target['pose'][:2]
-        assert float(disk.findtext('link/visual/geometry/cylinder/radius')) == target['rescue_radius_m']
+        radius = rules['normal']['target_radius_m'] if target['type'] == 'normal' else rules['cooperative']['radius_m']
+        assert float(disk.findtext('link/visual/geometry/cylinder/radius')) == radius
         assert disk.find('link/collision') is None
 print('PASS: midterm walls, targets, marker decoding, centred rescue radii and both start footprints')

@@ -80,7 +80,9 @@ def main():
     parser.add_argument('--duration',type=float,default=20.)
     parser.add_argument('--hz',type=float,default=10.)
     parser.add_argument('--session',type=Path)
+    parser.add_argument('--robot',choices=('robot1','robot2'),default='robot1')
     args=parser.parse_args()
+    def robot_topic(name):return '/'+args.robot+'/'+name.lstrip('/')
     if not (1<=args.duration<=120 and 1<=args.hz<=20):parser.error('duration 1..120, hz 1..20')
     root=Path(__file__).resolve().parents[2]
     session=args.session or Path((root/'runtime/latest-session.txt').read_text().strip())
@@ -99,14 +101,14 @@ def main():
     from rcl_interfaces.msg import Log
     from std_msgs.msg import String,Bool
     import yaml
-    config_path=session/'nav2-runtime.yaml'
+    config_path=(session/'robot2' if args.robot=='robot2' else session)/'nav2-runtime.yaml'
     startup=yaml.safe_load(config_path.read_text()) if config_path.is_file() else {}
     controllers=startup.get('controller_server',{}).get('ros__parameters',{})
 
     output=session/'controller-diagnostics'/f'{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}'
     output.mkdir(parents=True)
     rclpy.init()
-    node=Node('controller_short_probe',parameter_overrides=[Parameter('use_sim_time',value=True)])
+    node=Node('controller_short_probe',namespace=args.robot,parameter_overrides=[Parameter('use_sim_time',value=True)])
     values={};received={};counts=Counter();warnings=Counter();node_warnings=Counter()
     recent=deque(maxlen=20);examples={};rows=[]
     def record(name,value):
@@ -116,34 +118,34 @@ def main():
         except (ValueError,TypeError):warnings['malformed_'+name]+=1
     subscriptions=[]
     for name in VELOCITIES[:-1]:
-        subscriptions.append(node.create_subscription(Twist,'/'+name,
+        subscriptions.append(node.create_subscription(Twist,robot_topic(name),
             lambda m,key=name:record(key,[m.linear.x,m.angular.z]),qos_profile_sensor_data))
     def odometry(m):
         record('odom',[m.twist.twist.linear.x,m.twist.twist.angular.z])
         record('odom_stamp_s',m.header.stamp.sec+m.header.stamp.nanosec/1e9)
-    subscriptions.append(node.create_subscription(Odometry,'/odom',odometry,qos_profile_sensor_data))
-    subscriptions.append(node.create_subscription(String,'/navigation_authority/state',
+    subscriptions.append(node.create_subscription(Odometry,robot_topic('/odom'),odometry,qos_profile_sensor_data))
+    subscriptions.append(node.create_subscription(String,robot_topic('/navigation_authority/state'),
         lambda m:json_record('authority',m.data),QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL)))
-    subscriptions.append(node.create_subscription(String,'/navigation/rpp_tracking',
+    subscriptions.append(node.create_subscription(String,robot_topic('/navigation/rpp_tracking'),
         lambda m:json_record('rpp_tracking',m.data),qos_profile_sensor_data))
     def follow_status(m):
         if not m.status_list:return
         latest=max(m.status_list,key=lambda s:(s.goal_info.stamp.sec,s.goal_info.stamp.nanosec))
         record('follow_path_status',{'status':latest.status,'name':ACTION_STATUS.get(latest.status,'?'),
                                    'goal_id':bytes(latest.goal_info.goal_id.uuid).hex()})
-    subscriptions.append(node.create_subscription(GoalStatusArray,'/navigation_backend/follow_path/_action/status',
+    subscriptions.append(node.create_subscription(GoalStatusArray,robot_topic('/navigation_backend/follow_path/_action/status'),
         follow_status,QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL)))
     subscriptions.append(node.create_subscription(FollowPath.Impl.FeedbackMessage,
-        '/navigation_backend/follow_path/_action/feedback',lambda m:record('follow_path_feedback',
+        robot_topic('/navigation_backend/follow_path/_action/feedback'),lambda m:record('follow_path_feedback',
             {'goal_id':bytes(m.goal_id.uuid).hex(),'distance_to_goal_m':m.feedback.distance_to_goal,
              'speed_mps':m.feedback.speed}),qos_profile_sensor_data))
-    subscriptions.append(node.create_subscription(PointStamped,'/lookahead_point',
+    subscriptions.append(node.create_subscription(PointStamped,robot_topic('/lookahead_point'),
         lambda m:record('lookahead',{'frame':m.header.frame_id,'x':m.point.x,'y':m.point.y}),qos_profile_sensor_data))
-    subscriptions.append(node.create_subscription(Bool,'/is_rotating_to_heading',
+    subscriptions.append(node.create_subscription(Bool,robot_topic('/is_rotating_to_heading'),
         lambda m:record('rpp_rotating',m.data),qos_profile_sensor_data))
-    subscriptions.append(node.create_subscription(CollisionMonitorState,'/collision_monitor_state',
+    subscriptions.append(node.create_subscription(CollisionMonitorState,robot_topic('/collision_monitor_state'),
         lambda m:record('collision_monitor',{'action':m.action_type,'polygon':m.polygon_name}),qos_profile_sensor_data))
-    for name,topic in (('global_plan','/plan'),('tracking_plan','/received_global_plan')):
+    for name,topic in (('global_plan',robot_topic('/plan')),('tracking_plan',robot_topic('/received_global_plan'))):
         def plan(m,key=name):
             item={'frame':m.header.frame_id,'poses':len(m.poses)}
             if m.poses:

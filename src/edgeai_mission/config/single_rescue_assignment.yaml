@@ -1,0 +1,8 @@
+# S1 双机任务分配；与探索复用规则，其余参数继承 exploration.yaml。
+# 单目标是同一调度器的特例。上限按机器人和目标 ID 计算。
+max_navigation_attempts: 1  # 一次确认失败后，立即允许其他机器人接手。
+failure_cooldown_s: 10.0  # 墙钟；冷却只限制失败的机器人和目标。
+max_retry_rounds: 2  # 同一机器人对同一目标最多失败两次。
+assignment_timeout_s: 15.0  # 无其他可派发候选时，等待位姿/空闲状态/冷却的墙钟上限。
+navigation_timeout_s: 180.0  # 单次导航墙钟上限；救援配置的同名参数另限制仿真时间。
+# 总尝试次数、修正与停留要求仍由 normal_rescue.yaml / midterm_single_rescue.yaml 决定。

@@ -63,8 +63,20 @@ def make_world(package_share, targets_path, output_path, arena_path=None):
         ET.SubElement(include, 'name').text = target['name']
         ET.SubElement(include, 'pose').text = ' '.join(map(str, target['pose']))
         # Visual-only rescue disks do not affect lidar, collision, or autonomy.
-        zones = ([target['pose'][:2]] if 'rescue_radius_m' in target
-                 else rescue_zones(target, config))
+        rules = config.get('rescue_rules', {}).get(target['type'])
+        if rules is not None:
+            if target['type'] == 'normal' and 'target_radius_m' not in rules:
+                x, y, _, _, _, yaw = target['pose']
+                offset = rules['normal_offset_m']
+                zones = [[x + offset * math.cos(yaw), y + offset * math.sin(yaw)]]
+                radius = rules['position_tolerance_m']
+            else:
+                zones = [target['pose'][:2]]
+                radius = rules['target_radius_m' if target['type'] == 'normal' else 'radius_m']
+        elif 'rescue_radius_m' in target:
+            zones, radius = [target['pose'][:2]], target['rescue_radius_m']
+        else:
+            zones, radius = rescue_zones(target, config), config['development_rescue_geometry']['radius_m']
         for index, (x, y) in enumerate(zones):
             zone = ET.SubElement(world, 'model', name=f"zone_{target['name']}_{index}")
             ET.SubElement(zone, 'static').text = 'true'
@@ -72,8 +84,6 @@ def make_world(package_share, targets_path, output_path, arena_path=None):
             link = ET.SubElement(zone, 'link', name='zone')
             visual = ET.SubElement(link, 'visual', name='development_zone')
             cylinder = ET.SubElement(ET.SubElement(visual, 'geometry'), 'cylinder')
-            radius = (target['rescue_radius_m'] if 'rescue_radius_m' in target
-                      else config['development_rescue_geometry']['radius_m'])
             ET.SubElement(cylinder, 'radius').text = str(radius)
             ET.SubElement(cylinder, 'length').text = '0.002'
             material = ET.SubElement(visual, 'material')

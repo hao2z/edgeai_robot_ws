@@ -85,18 +85,19 @@ def parking_pairs(grid,target,footprint,config):
 
 
 class JointDwell:
-    def __init__(self,radius,duration):
+    def __init__(self,radius,duration,max_gap=.5):
         self.radius,self.duration=radius,duration;self.start=None;self.last=None
+        self.max_gap=max_gap
 
-    def awaiting_data(self,now,max_gap=.5):
+    def awaiting_data(self,now,max_gap=None):
         """Hold recent confirmed evidence during callback skew; never advance it."""
-        keep=self.last is not None and 0<=now-self.last<=max_gap
+        keep=self.last is not None and 0<=now-self.last<=(self.max_gap if max_gap is None else max_gap)
         if not keep:self.start=self.last=None
         return keep
 
     def update(self,stamp,distances,valid=True):
         if (not valid or len(distances)!=2 or not all(math.isfinite(d) and d<=self.radius for d in distances)
-                or (self.last is not None and (stamp<self.last or stamp-self.last>.5))):
+                or (self.last is not None and (stamp<self.last or stamp-self.last>self.max_gap))):
             self.start=None;self.last=stamp;return False
         if self.start is None:self.start=stamp
         self.last=stamp

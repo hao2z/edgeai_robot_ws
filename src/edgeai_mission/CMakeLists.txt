@@ -27,6 +27,6 @@ ament_target_dependencies(task_executor rclcpp rclcpp_action behaviortree_cpp st
 target_link_libraries(task_executor nlohmann_json::nlohmann_json "${task_typesupport}")
 install(TARGETS mission_coordinator DESTINATION lib/${PROJECT_NAME})
 install(TARGETS task_executor DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY config scripts DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config scripts launch DESTINATION share/${PROJECT_NAME})
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

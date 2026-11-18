@@ -16,6 +16,77 @@ spec.loader.exec_module(module)
 
 
 class SessionLoggingTest(unittest.TestCase):
+    def test_routine_checks_are_quiet_for_every_task_but_failures_remain(self):
+        records, now = [], [0.]
+        reducer = module.EventReducer(lambda *a, **kw: records.append((a, kw)), lambda: now[0])
+        for task in ('explore', 'find_targets', 's1', 'c1'):
+            reducer.consume('mission', 'MISSION_TASK_REQUESTED: '+json.dumps(dict(task=task)))
+            for unit in ('select_target', 'diagnose_blockage', 'select_yield', 'dispatch_yield', 'poll_yield'):
+                for tick in range(3):
+                    now[0] += 16
+                    reducer.consume('mission', 'MISSION_TASK_FEEDBACK: '+json.dumps(
+                        dict(task=task, unit=unit, details=dict(success=True))))
+            self.assertEqual(records[-1][1]['event'], 'MISSION_TASK_REQUESTED')
+        reducer.consume('mission', 'MISSION_TASK_FEEDBACK: '+json.dumps(dict(
+            task='s1', unit='dispatch_yield', details=dict(success=False, reason='Rejected'))))
+        self.assertEqual(records[-1][0][1], 'ERROR')
+        self.assertEqual(len(records), 5)
+
+    def test_top_level_localization_has_translated_ready_and_failure_messages(self):
+        records=[]
+        reducer=module.EventReducer(lambda *a,**kw:records.append(a),selected='en')
+        reducer.consume('mission','MISSION_LOCALIZATION_READY: {"phase":"LOCALIZATION_READY"}')
+        reducer.consume('mission','MISSION_LOCALIZATION_FAILED: {"phase":"LOCALIZATION_FAILED","reason":"AMCL failed"}')
+        self.assertEqual(records[0][1],'OK')
+        self.assertIn('Localization ready',records[0][2])
+        self.assertEqual(records[1][1],'ERROR')
+        self.assertIn('Localization handover failed',records[1][2])
+
+    def test_fleet_loop_feedback_preserves_task_status_without_false_action_labels(self):
+        records=[]
+        reducer=module.EventReducer(lambda *a,**kw:records.append(a),selected='en')
+        reducer.consume('mission','MISSION_TASK_REQUESTED: {"task":"explore"}')
+        previous = reducer.mission
+        reducer.consume('mission','MISSION_TASK_FEEDBACK: {"task":"explore","unit":"poll_yield"}')
+        self.assertEqual(len(records),1)
+        self.assertEqual(reducer.mission, previous)
+
+    def test_fleet_assignments_preserve_robot_and_failure_reason(self):
+        records=[]
+        reducer=module.EventReducer(lambda *a,**kw:records.append((a,kw)),selected='en')
+        reducer.consume('fleet-exploration',json.dumps(dict(event='FLEET_EXPLORATION_ASSIGNED',
+            robot='robot2',goal=dict(x=1.234,y=2.345))))
+        reducer.consume('fleet-exploration',json.dumps(dict(event='FLEET_EXPLORATION_NAV_FAILED',
+            robot='robot2',reason='Navigation timeout')))
+        self.assertIn('Navigate to assigned frontier',records[0][0][2])
+        self.assertEqual(records[0][1]['robot'],'robot2')
+        self.assertEqual(records[1][0][1],'WARN')
+        self.assertIn('Navigation timeout',records[1][0][2])
+
+    def test_frontier_replacements_are_readable_info_events(self):
+        for selected, expected in (('en','cancel old navigation'),('zh','取消旧导航')):
+            records=[]
+            reducer=module.EventReducer(lambda *a,**kw:records.append((a,kw)),selected=selected)
+            reducer.consume('fleet-exploration',json.dumps(dict(
+                event='FLEET_EXPLORATION_FRONTIER_UPDATE_REQUESTED',
+                robot='robot1',goal=dict(x=2.,y=3.))))
+            self.assertEqual(records[0][0][1],'INFO')
+            self.assertIn(expected,records[0][0][2])
+            self.assertEqual(records[0][1]['robot'],'robot1')
+            reducer.consume('mission','MISSION_TASK_FEEDBACK: {"task":"explore","unit":"refresh_frontier_goals"}')
+            self.assertEqual(len(records),1)
+
+    def test_s1_allocation_and_empty_assignment_fallback_are_readable(self):
+        records=[]
+        reducer=module.EventReducer(lambda *a,**kw:records.append((a,kw)),selected='en')
+        reducer.consume('rescue',json.dumps(dict(event='FLEET_RESCUE_SELECTED',
+            robot='robot2',goal=dict(x=1.,y=2.))))
+        reducer.consume('rescue',json.dumps(dict(event='FLEET_RESCUE_REASSIGN',
+            robot=None,reason='No eligible parking')))
+        self.assertIn('Assign single rescue parking',records[0][0][2])
+        self.assertEqual(records[0][1]['robot'],'robot2')
+        self.assertIn('Rescue fallback',records[1][0][2])
+
     def test_truth_verification_is_visible_with_correct_severity(self):
         records=[]
         reducer=module.EventReducer(lambda *args,**kw:records.append(args))
@@ -41,6 +112,18 @@ class SessionLoggingTest(unittest.TestCase):
         self.assertEqual(localize('已到达导航目标', 'en'), 'Navigation goal reached')
         with self.assertRaises(ValueError):
             language('sv')
+
+    def test_joint_explorer_and_authority_count_secondary_without_double_navigation_sends(self):
+        records=[]
+        reducer=module.EventReducer(lambda *a,**kw:records.append((a,kw)))
+        prefix='[INFO] [1] [robot2.'
+        reducer.consume('joint-mapping',prefix+'frontier_explorer]: Sending frontier goal (mrtsp): dispatch=(1.0, 2.0)')
+        reducer.consume('joint-mapping',prefix+'bt_navigator]: Begin navigating from current location (0, 0) to (1.0, 2.0)')
+        reducer.consume('joint-mapping',prefix+'navigation_authority]: RECOVERY_STARTED: 恢复; task=3')
+        reducer.consume('joint-mapping',prefix+'bt_navigator]: Goal succeeded')
+        self.assertEqual(reducer.robots['robot2']['goal_sends'],1)
+        self.assertEqual(reducer.robots['robot2']['recovery_attempts'],1)
+        self.assertEqual(reducer.robots['robot2']['arrivals'],1)
 
     def test_mission_stage_failure_is_visible_in_main_event_stream(self):
         records=[]

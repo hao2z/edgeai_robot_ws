@@ -45,29 +45,34 @@
           <!-- 全局安全边距下起点占用时，仅允许通过局部实时检查的退出动作。 -->
           <PlannerStartOccupied error_code="{compute_path_error_code}"/>
         </Fallback>
-        <ReactiveFallback name="RecoveryFallback">
+        <!-- 已开始的退让先执行到终态；目标更新不反复打断对方导航。 -->
+        <Fallback name="RecoveryFallback">
           <GoalUpdated/>
           <Sequence name="RecoverAndReplan">
             <!-- 恢复改变位姿后不得直接复用旧路径。也不先清空局部障碍以制造净空。 -->
             <InvalidatePath path="{path}"/>
-            <!-- 动作被服务器拒绝后继续选未尝试候选；不以Wait兜底。 -->
-            <RetryUntilSuccessful num_attempts="8" name="TryRemainingRecoveryMotions">
-              <Sequence>
-                <!-- 候选平移距离(m)、正负转角(rad)；按实时车身扫掠和净空筛选。 -->
-                <SelectRecovery goal="{goal}" distances="0.05;0.10" angles="0.20;0.35" max_age="0.35"
-                                kind="{recovery_kind}" distance="{recovery_distance}" angle="{recovery_angle}"/>
-                <Switch4 variable="{recovery_kind}" case_1="backup" case_2="forward" case_3="spin" case_4="occupied">
-                  <BackUp backup_dist="{recovery_distance}" backup_speed="0.06" time_allowance="4.0" error_code_id="{backup_code_id}"/>
-                  <DriveOnHeading dist_to_travel="{recovery_distance}" speed="0.06" time_allowance="4.0" error_code_id="{drive_on_heading_error_code}"/>
-                  <Spin spin_dist="{recovery_angle}" time_allowance="6.0" error_code_id="{spin_error_code}"/>
-                  <!-- 已知占据时，实际车身与边距重叠均不加深的低速退出。 -->
-                  <DriveOnHeading name="EscapeKnownOverlap" server_name="escape_occupied" dist_to_travel="{recovery_distance}" speed="0.03" time_allowance="8.0" error_code_id="{escape_error_code}"/>
-                  <AlwaysFailure/>
-                </Switch4>
-              </Sequence>
-            </RetryUntilSuccessful>
+            <Fallback name="PeerYieldOrLocalRecovery">
+              <!-- goal is the blocked requester's destination, NOT the peer's parking goal. -->
+              <NavigateToPose name="YieldIdlePeer" server_name="navigation/yield_peer" goal="{goal}"/>
+              <!-- 动作被服务器拒绝后继续选未尝试候选；不以Wait兜底。 -->
+              <RetryUntilSuccessful num_attempts="8" name="TryRemainingRecoveryMotions">
+                <Sequence>
+                  <!-- 候选平移距离(m)、正负转角(rad)；按实时车身扫掠和净空筛选。 -->
+                  <SelectRecovery goal="{goal}" distances="0.05;0.10" angles="0.20;0.35" max_age="0.35"
+                                  kind="{recovery_kind}" distance="{recovery_distance}" angle="{recovery_angle}"/>
+                  <Switch4 variable="{recovery_kind}" case_1="backup" case_2="forward" case_3="spin" case_4="occupied">
+                    <BackUp backup_dist="{recovery_distance}" backup_speed="0.06" time_allowance="4.0" error_code_id="{backup_code_id}"/>
+                    <DriveOnHeading dist_to_travel="{recovery_distance}" speed="0.06" time_allowance="4.0" error_code_id="{drive_on_heading_error_code}"/>
+                    <Spin spin_dist="{recovery_angle}" time_allowance="6.0" error_code_id="{spin_error_code}"/>
+                    <!-- 已知占据时，实际车身与边距重叠均不加深的低速退出。 -->
+                    <DriveOnHeading name="EscapeKnownOverlap" server_name="escape_occupied" dist_to_travel="{recovery_distance}" speed="0.03" time_allowance="8.0" error_code_id="{escape_error_code}"/>
+                    <AlwaysFailure/>
+                  </Switch4>
+                </Sequence>
+              </RetryUntilSuccessful>
+            </Fallback>
           </Sequence>
-        </ReactiveFallback>
+        </Fallback>
       </Sequence>
     </RecoveryNode>
   </BehaviorTree>

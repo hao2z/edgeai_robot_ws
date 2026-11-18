@@ -9,7 +9,6 @@ if [[ $EDGEAI_ROS_BACKEND == native ]]; then
     exit 0
 fi
 cache=${EDGEAI_NAV_CACHE:-$HOME/.cache/edgeai-open-source}
-upstream_rev=326cf8a0b487c34246bb8f3326afbcd69576dc60
 pixi="$HOME/.pixi/bin/pixi"
 check_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$cache/env"
@@ -28,29 +27,13 @@ fi
 if ! grep -q '^ros-jazzy-topic-tools[[:space:]]*=' "$cache/env/pixi.toml"; then
     "$pixi" add --manifest-path "$cache/env/pixi.toml" ros-jazzy-topic-tools
 fi
-if [[ ! -d "$cache/upstream/.git" ]]; then
-    git clone https://github.com/robo-friends/m-explore-ros2.git "$cache/upstream"
-fi
-git -C "$cache/upstream" checkout --detach "$upstream_rev"
-if [[ $(git -C "$cache/upstream" rev-parse HEAD) != "$upstream_rev" ]]; then
-    echo 'Explore Lite revision mismatch.' >&2
-    exit 1
-fi
-"$pixi" run --manifest-path "$cache/env/pixi.toml" env ROS_DISTRO=jazzy \
-    colcon --log-base "$cache/build-log" build \
-    --base-paths "$cache/upstream/explore" "$cache/upstream/explore_lite_msgs" \
-    --build-base "$cache/build" --install-base "$cache/install" \
-    --cmake-args -DBUILD_TESTING=OFF
-echo "Prepared pinned Explore Lite and Nav2 in $cache"
 frontier_rev=11864e4ac6789dc81fd71bad51e43339c01deca2
 if [[ ! -d "$cache/frontier-upstream/.git" ]]; then
     git clone https://github.com/mertgulerx/frontier_exploration_ros2.git "$cache/frontier-upstream"
 fi
 git -C "$cache/frontier-upstream" checkout --detach "$frontier_rev"
 bash "$PROJECT_ROOT/scripts/setup/build-frontier-runtime.sh"
-"$pixi" run --manifest-path "$cache/env/pixi.toml" python3 "$PROJECT_ROOT/src/edgeai_exploration/tools/prepare_frontier_config.py" \
-    "$cache/frontier-upstream/config/params.yaml" \
-    "$PROJECT_ROOT/src/edgeai_exploration/config/frontier_exploration.yaml"
 echo "Prepared frontier_exploration_ros2 at $frontier_rev"
-# Navigation parameters are maintained in config/; setup must not overwrite tuning.
+# Navigation/frontier parameters and RViz layouts are maintained in the repository.
+# Environment setup must not regenerate or overwrite them.
 EDGEAI_ENV_MANIFEST="$cache/env/pixi.toml" bash "$PROJECT_ROOT/scripts/setup/build-workspace.sh"

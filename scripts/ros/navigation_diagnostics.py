@@ -1,6 +1,7 @@
 """Read-only RViz diagnostics using one explicit TF time, never latest fallback."""
 import json
 import math
+import os
 import time
 from collections import deque
 from html import escape
@@ -44,7 +45,7 @@ def age_seconds(now_ns, stamp):
 
 
 class NavigationDiagnostics(Node):
-    def __init__(self, robot='', peer=None):
+    def __init__(self, robot='robot1', peer=None, tf_buffer=None):
         super().__init__('edgeai_navigation_diagnostics'+('_'+robot if robot else ''))
         self.robot, self.peer = robot, peer
         self.prefix = '/'+robot if robot else ''
@@ -56,17 +57,19 @@ class NavigationDiagnostics(Node):
         self.declare_parameter('log_directory', '')
         self.declare_parameter('cooperative', False)
         directory = self.get_parameter('log_directory').value
-        self.runtime_directory = Path(directory)/robot if directory and robot else None
-        self.settings = runtime_settings(self.runtime_directory if robot else directory)
+        self.runtime_directory = Path(directory)/robot if directory and robot=='robot2' else None
+        self.settings = runtime_settings(self.runtime_directory if robot=='robot2' else directory)
         if self.settings:
             self.runtime_directory = None
         self.cooperative = self.get_parameter('cooperative').value
         self.static_map_active = False
         self.mission_display = ''
-        self.buffer = Buffer(cache_time=Duration(seconds=15))
-        self.listener = TransformListener(self.buffer, self)
+        # Both robots use the same global /tf stream and the same executor.
+        # Decode/store it once; each panel still queries its own frame names.
+        self.buffer = tf_buffer if tf_buffer is not None else Buffer(cache_time=Duration(seconds=15))
+        self.listener = None if tf_buffer is not None else TransformListener(self.buffer, self)
         self.publisher = self.create_publisher(MarkerArray, self.prefix+'/diagnostics/navigation', 5)
-        self.status_publisher = (None if robot else
+        self.status_publisher = (None if robot != 'robot1' else
                                  self.create_publisher(String, '/diagnostics/navigation_status', 1))
         self.authority = None
         self.authority_received = None
@@ -107,14 +110,14 @@ class NavigationDiagnostics(Node):
                 kind, self.prefix+topic,
                 lambda message, key=name: self.record(key, message), qos))
         json_topics = [('tracking','/navigation/rpp_tracking'), ('depth_filter','/camera/depth_obstacle_status')]
-        if not robot:
+        if robot == 'robot1':
             json_topics.append(('targets','/targets/estimates'))
         for key, topic in json_topics:
             qos = (qos_profile_sensor_data if key in ('tracking','depth_filter') else
                    QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
             self.subscriptions_.append(self.create_subscription(String, self.prefix+topic,
                 lambda message,key=key:self.json_record(key,message), qos))
-        if not robot:
+        if robot == 'robot1':
             self.subscriptions_.append(self.create_subscription(
                 String, '/mission/state', self.mission_state,
                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)))
@@ -125,7 +128,7 @@ class NavigationDiagnostics(Node):
         self.initial_map_odom = None
         self.last_status = None
         self.last_log = 0.0
-        self.audit = ((Path(directory)/('alignment-'+robot+'.jsonl' if robot else 'alignment.jsonl')).open('a', encoding='utf-8', buffering=1)
+        self.audit = ((Path(directory)/('alignment-'+robot+'.jsonl' if robot=='robot2' else 'alignment.jsonl')).open('a', encoding='utf-8', buffering=1)
                       if directory else None)
         self.stopping_file = Path(directory)/'stopping' if directory else None
         # Continue to report paused simulation clocks and dead sensor publishers.
@@ -156,7 +159,7 @@ class NavigationDiagnostics(Node):
             pass
 
     def warning_log(self, message):
-        if message.name.startswith('robot2.') != bool(self.robot):
+        if message.name.startswith('robot2.') != (self.robot=='robot2'):
             return
         if message.level >= Log.WARN and any(name in message.name for name in
                 ('controller_server','planner_server','bt_navigator','behavior_server','local_costmap')):
@@ -288,8 +291,8 @@ class NavigationDiagnostics(Node):
             anchor_xy = apply_pose(self.initial_map_odom, [odom_base[:2]])[0]
             correction = math.dist(anchor_xy, base[:2])
             for key, ident, color, dashed in (
-                    ('global_footprint', 1, (.30,.56,1.) if self.robot else (0.,1.,1.), True),
-                    ('local_footprint', 2, (.45,.82,1.) if self.robot else (1.,.85,0.), False)):
+                    ('global_footprint', 1, (.30,.56,1.) if self.robot == 'robot2' else (0.,1.,1.), True),
+                    ('local_footprint', 2, (.45,.82,1.) if self.robot == 'robot2' else (1.,.85,0.), False)):
                 if key == 'global_footprint' and not self.get_parameter('show_global_outline').value:
                     continue
                 try:
@@ -305,7 +308,7 @@ class NavigationDiagnostics(Node):
             problems.append('TF at comparison time unavailable; no latest fallback')
 
         stopping = self.stopping_file is not None and self.stopping_file.exists()
-        standby = bool(self.robot and self.authority_received is None and not self.settings)
+        standby = bool(self.robot=='robot2' and self.authority_received is None and not self.settings)
         status = ('STOPPING' if stopping else 'STANDBY' if standby else
                   'WAIT/STALE' if stale or problems else 'TIME CHECK OK')
         odometry = self.messages.get('odom')
@@ -331,7 +334,8 @@ class NavigationDiagnostics(Node):
             goal = (goal.header.frame_id,p.x,p.y,math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z)))
         snapshot = dict(authority=self.authority,authority_age=authority_age, settings=self.settings,
             ages=ages,wall_ages=wall_ages,rates=rates,standby=standby,static_map=static_map,
-            camera_available=not (self.cooperative and self.robot),
+            camera_available=not (self.cooperative and self.robot == 'robot2'
+                                  and os.environ.get('EDGEAI_JOINT_MAPPING') != 'true'),
             velocities=velocities,goal=goal,tracking=self.json_messages.get('tracking'),
             tracking_age=wall-self.wall_received.get('tracking',0.),
             rotating=self.messages['rotating'].data if 'rotating' in self.messages else None,
@@ -382,7 +386,7 @@ def main():
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     if node.get_parameter('cooperative').value:
-        node.peer = NavigationDiagnostics('robot2')
+        node.peer = NavigationDiagnostics('robot2', tf_buffer=node.buffer)
         executor.add_node(node.peer)
     try:
         executor.spin()

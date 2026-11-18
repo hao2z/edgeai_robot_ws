@@ -7,6 +7,7 @@ confirms legacy Action cleanup before releasing the task slot.
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import signal
 import sys
@@ -38,18 +39,30 @@ class Units:
             from edgeai_tasks.normal_rescue import Rescue
             from edgeai_tasks.rescue_policy import validate_config,Dwell
             settings=yaml.safe_load((self.directory/'rescue-config.yaml').read_text());validate_config(settings)
+            if 'robot' in c:settings['robot']=c['robot']
             self.node=Rescue(settings,self.directory);self.dwell=Dwell(settings);self.goal=None
             self.target_index=0;self.required_targets=c.get('required_targets',[])
         else:
+            if c.get('fleet'):
+                from edgeai_tasks.mission_fleet import validate_fleet
+                validate_fleet(c['fleet'])
+                if len(c['fleet']['task_robots'].get('c1',[]))!=2:
+                    raise ValueError('C1 requires two assigned and localized robots')
             from edgeai_tasks.cooperative_rescue import CooperativeRescue
             from edgeai_tasks.cooperative_policy import JointDwell
-            settings=yaml.safe_load((root/'src/edgeai_navigation/config/cooperative_rescue.yaml').read_text())
+            settings_path = self.directory/'cooperative-rescue-config.yaml'
+            if not settings_path.is_file():
+                settings_path = root/'src/edgeai_navigation/config/cooperative_rescue.yaml'
+            settings=yaml.safe_load(settings_path.read_text())
+            for target in c.get('required_targets', []):
+                if target['type'] == 'cooperative':
+                    settings['target_id'] = target['id']
+                    break
             self.node=CooperativeRescue(self.directory,settings)
             self.node.static_test=bool(c.get('cooperative_static_test',False))
-            self.node.external_navigation=bool(c.get('external_navigation',False))
-            if self.node.external_navigation:self.node.peer_pubs={}
-            self.node.seed_enabled=False;self.node.handover_reference=str(self.directory/'mission-reference.json')
-            self.dwell=JointDwell(settings['radius_m'],settings['dwell_s']+settings.get('settle_margin_s',0.))
+            self.node.external_navigation=bool(c.get('external_navigation',False) or c.get('post_mapping_localization',False))
+            self.node.mission_localization_required=bool(c.get('post_mapping_localization',False))
+            self.dwell=JointDwell(settings['radius_m'],settings['dwell_s']+settings.get('settle_margin_s',0.),settings.get('dwell_data_grace_s',2.))
 
     def reset_dwell(self):
         self.condition_complete=False
@@ -58,7 +71,7 @@ class Units:
             self.dwell=Dwell(self.node.c)
         else:
             from edgeai_tasks.cooperative_policy import JointDwell
-            self.dwell=JointDwell(self.node.c['radius_m'],self.node.c['dwell_s']+self.node.c.get('settle_margin_s',0.))
+            self.dwell=JointDwell(self.node.c['radius_m'],self.node.c['dwell_s']+self.node.c.get('settle_margin_s',0.),self.node.c.get('dwell_data_grace_s',2.))
         self.last_sample=None
 
     def joint_target(self, registry):
@@ -97,8 +110,8 @@ class Units:
     def dispatch(self):
         n=self.node
         if self.task!='c1':
-            self.cancel_navigation(True);self.goal.update(n.latest_goal(self.goal));goals={'':self.goal}
-        else:goals=dict(zip(('','robot2'),self.selected))
+            self.cancel_navigation(True);self.goal.update(n.latest_goal(self.goal));goals={n.robot:self.goal}
+        else:goals=dict(zip(('robot1','robot2'),self.selected))
         for ns,goal in goals.items():
             if ns in self.pending or ns in self.arrived:continue
             self.check_owner()
@@ -174,7 +187,9 @@ class Units:
         if now-n.navigation_started>n.c['navigation_timeout_s']+n.c['dwell_s']+15:raise UnitFailure('Single rescue time budget exhausted')
         try:
             updated=n.latest_goal(self.goal)
-            if n.goal_changed(self.goal,updated):self.reset_dwell()
+            # Same target, newer estimate: let the measured task conditions
+            # decide continuity. Camera jitter inside the rescue region is not
+            # robot motion and must not restart an otherwise valid dwell.
             self.goal.update(updated);stamp,last=n.fresh_measurement(now,self.goal);self.last=last
             self.last['sample_time_s']=stamp
             if stamp<self.navigation_after:return dict(complete=False,needs_correction=False)
@@ -186,10 +201,14 @@ class Units:
                 distance_m=last['rescue_distance_m'],radius_m=last['rescue_position_limit_m'],
                 yaw_error_rad=last['yaw_error_rad'],dwell_s=stamp-self.dwell.since if self.dwell.since is not None else 0.)
         except (TransformException,ValueError) as error:
-            self.reset_dwell();return dict(complete=False,needs_correction=False,state='WAITING_DATA',reason=str(error))
+            retained=self.dwell.awaiting_data(now)
+            self.condition_complete=False
+            return dict(complete=False,needs_correction=False,state='WAITING_DATA',reason=str(error),
+                        dwell_retained=retained,
+                        dwell_s=self.dwell.previous-self.dwell.since if retained else 0.)
 
     def wait_joint_data(self,now,reason,**details):
-        retained=self.dwell.awaiting_data(now,self.node.c['max_data_age_s'])
+        retained=self.dwell.awaiting_data(now)
         self.condition_complete=False
         if not retained:self.last_sample=None
         elapsed=self.dwell.last-self.dwell.start if self.dwell.start is not None else 0.
@@ -199,43 +218,55 @@ class Units:
     def check_joint(self):
         from edgeai_tasks.cooperative_policy import rescue_yaw_error
         n=self.node;self.check_owner();now=n.now()
-        if n.refresh_target():self.reset_dwell()
+        # Re-evaluate both robots against the newest estimate. An estimate
+        # update alone is not a violation of the continuous rescue conditions.
+        n.refresh_target()
         try:
             stamp=min(Time.from_msg(m.header.stamp).nanoseconds for m in n.odom.values())
-            for frame in ('base_footprint','robot2/base_footprint'):
+            for frame in ('robot1/base_footprint','robot2/base_footprint'):
                 stamp=min(stamp,Time.from_msg(n.buffer.lookup_transform('map',frame,Time()).header.stamp).nanoseconds)
             age=now-stamp/1e9
             if not 0<=age<=n.c['max_data_age_s'] or stamp/1e9<self.navigation_after:
                 return self.wait_joint_data(now,'Pose sample ahead of clock' if age<0 else 'Pose sample stale or before navigation completion',
                                             sample_time_s=stamp/1e9,sample_age_s=age)
             if stamp==self.last_sample:return dict(complete=False,needs_correction=False)
-            distances=[];yaw_errors=[];poses=[];valid=n.target_ready
-            for ns in ('','robot2'):
-                p=n.tf_pose('robot2/base_footprint' if ns else 'base_footprint',Time(nanoseconds=stamp))
+            distances=[];yaw_errors=[];poses=[];reasons=[];waiting=[]
+            if not n.target_ready:waiting.append('C1 estimate unavailable')
+            for ns in ('robot1','robot2'):
+                p=n.tf_pose(ns+'/base_footprint',Time(nanoseconds=stamp))
                 poses.append(list(p))
                 distances.append(math.hypot(p[0]-n.target['x'],p[1]-n.target['y']))
                 yaw_errors.append(rescue_yaw_error(p,n.target))
                 v=n.odom[ns].twist.twist
-                valid=valid and math.hypot(v.linear.x,v.linear.y)<.02 and abs(v.angular.z)<.05 and n.localized(ns)
+                if math.hypot(v.linear.x,v.linear.y)>=.02 or abs(v.angular.z)>=.05:
+                    reasons.append(ns+' moving')
+                try:
+                    if not n.localized(ns,require_data=True):reasons.append(ns+' localization quality invalid')
+                except ValueError as error:waiting.append(str(error))
             heading_ok=[abs(e)<=n.c['yaw_tolerance_rad'] for e in yaw_errors]
+            # Missing callbacks are not evidence of motion or failed localization.
+            # Physical violations still reset immediately, even during data skew.
+            if waiting and not reasons and all(heading_ok) and all(d<=n.c['radius_m'] for d in distances):
+                return self.wait_joint_data(now,'; '.join(waiting))
+            valid=not reasons and not waiting
             self.last_sample=stamp
             done=self.dwell.update(stamp/1e9,distances,valid and all(heading_ok))
             self.last=dict(distances_m=distances,yaw_errors_rad=yaw_errors,dwell_s=n.c['dwell_s'],
                            poses=poses,sample_time_s=stamp/1e9)
             self.condition_complete=done
             if now-self.last_event>=1.:
-                self.last_event=now;n.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,in_range=[d<=n.c['radius_m'] for d in distances],dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
+                self.last_event=now;n.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,reasons=reasons+waiting,in_range=[d<=n.c['radius_m'] for d in distances],dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
             if valid and (any(d>n.c['radius_m'] for d in distances) or not all(heading_ok)):
                 if n.c.get('alignment_enabled',True):
                     return dict(complete=False,needs_correction=True,distances_m=distances,
                                 yaw_errors_rad=yaw_errors,heading_ok=heading_ok)
-                self.arrived={ns for ns,d,h in zip(('','robot2'),distances,heading_ok) if d<=n.c['radius_m'] and h}
-                for ns,pose,distance in zip(('','robot2'),self.selected,distances):
+                self.arrived={ns for ns,d,h in zip(('robot1','robot2'),distances,heading_ok) if d<=n.c['radius_m'] and h}
+                for ns,pose,distance in zip(('robot1','robot2'),self.selected,distances):
                     if distance>n.c['radius_m']:self.failed_parking.setdefault(ns,[]).append(pose)
                 reason='Outside rescue circle; reselect parking' if any(d>n.c['radius_m'] for d in distances) else 'Rescue heading outside tolerance; retry parking alignment'
                 raise UnitFailure(reason,'outside' if all(heading_ok) else 'heading')
             return dict(complete=done,needs_correction=False,distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,radius_m=n.c['radius_m'],valid=valid,
-                        dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
+                        reasons=reasons+waiting,dwell_s=stamp/1e9-self.dwell.start if self.dwell.start is not None else 0.)
         except (TransformException,ValueError) as error:
             return self.wait_joint_data(now,str(error))
 
@@ -308,7 +339,6 @@ class Units:
             self.reset_dwell();adjust(n,self.goal,self.last);self.navigation_after=n.get_clock().now().nanoseconds/1e9
         elif op=='handover':n.handover();self.has_control=True
         elif op=='wait_navigation_ready':n.wait_navigation_active()
-        elif op=='localize':n.localize()
         elif op=='prepare_target':
             n.target=self.joint_target(n.targets)
             n.target_observation_floor=n.targets.get('stamp_ns',0);n.refresh_target()
@@ -319,14 +349,33 @@ class Units:
             if self.failure_kind!='start_occupied':raise UnitFailure('Not a preplan start occupancy failure',self.failure_kind)
             self.cancel_navigation(robots=set(n.preplan_blocked))
             n.recover_preplan_start()
+        elif self.task=='c1' and op=='yield_peer':
+            return self.yield_peer()
         elif op in ('select_parking','select_parking_locked'):
-            locked={ns:self.selected[i] for i,ns in enumerate(('','robot2')) if self.selected and (ns in self.pending or ns in self.arrived)} if op.endswith('locked') else {}
+            locked={ns:self.selected[i] for i,ns in enumerate(('robot1','robot2')) if self.selected and (ns in self.pending or ns in self.arrived)} if op.endswith('locked') else {}
             self.selected=n.select_parking_pair(locked=locked,excluded=self.failed_parking,
                                                settled=self.arrived.intersection(locked))
             self.alignment_started=None
         elif op=='record_success':self.record_success()
         else:raise UnitFailure('Unregistered unit: '+op)
         return {}
+
+    def yield_peer(self):
+        from edgeai_nav.yield_client import request_peer_yield
+        n=self.node;self.check_owner()
+        failures=getattr(n,'parking_route_failures',[])
+        tried=set()
+        for failure in failures:
+            robot=failure['robot'];key=(robot,tuple(failure['goal'][:2]))
+            if key in tried:continue
+            tried.add(key)
+            result=request_peer_yield(n,robot,n.goal_pose(failure['goal']),
+                                      wait=lambda predicate,timeout:n.wait(predicate,timeout,True))
+            if result:
+                # Peer motion invalidates parking locks and the dwell window.
+                self.selected=None;self.arrived.clear();self.reset_dwell()
+                return dict(complete=True)
+        raise UnitFailure('No confirmed peer blockage released; retry C1 parking normally')
 
     def record_success(self):
         n=self.node
@@ -335,13 +384,16 @@ class Units:
         if self.task=='find_targets':
             result=dict(success=True,required_targets=self.required_targets,search_attempts=n.search_attempts)
         elif self.task=='s1':
-            result=dict(success=True,goal=self.goal,measurement=self.last,dwell_s=n.c['dwell_s'],target_id=self.goal['target_id'],task_state='completed',judge='estimated map pose',navigation_attempts=n.navigation_attempts,alignment_attempts=n.alignment_attempts)
+            result=dict(success=True,robot=getattr(n,'robot','robot1'),goal=self.goal,measurement=self.last,dwell_s=n.c['dwell_s'],target_id=self.goal['target_id'],task_state='completed',judge='estimated map pose',navigation_attempts=n.navigation_attempts,alignment_attempts=n.alignment_attempts)
         else:result=dict(success=True,target_id=n.target['id'],distances_m=self.last['distances_m'],yaw_errors_rad=self.last['yaw_errors_rad'],dwell_s=n.c['dwell_s'],goals=self.selected,alignment_attempts=getattr(self,'joint_corrections',[]))
         if self.task in ('s1','c1'):
             from rescue_success_log import success_evidence
+            parking_offset = None
             if self.task=='s1':
                 m=self.last;g=self.goal
                 offset=g.get('approach_distance_m',n.c['normal_offset_m'])
+                if n.c.get('goal_source') == 'detected_target' and 'target_radius_m' not in n.c:
+                    parking_offset = (offset, g.get('approach_angle_rad', 0.))
                 target_pose=([g['x']+offset*math.cos(g['yaw']),g['y']+offset*math.sin(g['yaw']),g['yaw']]
                              if n.c.get('goal_source')=='detected_target' else [g['x'],g['y'],g['yaw']])
                 poses=[[m['x'],m['y'],m['yaw']]];distances=[m['rescue_distance_m']];errors=[m['yaw_error_rad']]
@@ -352,12 +404,19 @@ class Units:
                 radius=n.c['radius_m'];stamp=self.last['sample_time_s']
             evidence,messages=success_evidence(self.directory,self.task,result['target_id'],target_pose,poses,distances,errors,
                                               radius,n.c['yaw_tolerance_rad'],n.c['dwell_s'],stamp,
-                                              n.c.get('stopped_linear_mps',.02),n.c.get('stopped_angular_rps',.05),wait_s=3.)
+                                              n.c.get('stopped_linear_mps',.02),n.c.get('stopped_angular_rps',.05),wait_s=3.,
+                                              robots=[getattr(n,'robot','robot1')] if self.task=='s1' else None,
+                                              pump=getattr(n, 'pump_peers', None), parking_offset=parking_offset)
             result['success_evidence']=evidence
             for message in messages:
                 if self.task=='s1':n.event('SUCCESS_POSE',message)
                 else:n.event('SUCCESS_POSE',summary=message)
-        path=self.directory/('target-search-result.json' if self.task=='find_targets' else 'rescue-result.json' if self.task=='s1' else 'cooperative-result.json');tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2));tmp.replace(path)
+        path = getattr(self, 'result_path', None) or self.directory/(
+            'target-search-result.json' if self.task=='find_targets' else
+            'rescue-result.json' if self.task=='s1' else 'cooperative-result.json')
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+        tmp.replace(path)
         self.success=True
 
     def close(self):
@@ -375,42 +434,106 @@ class Units:
         if errors:raise RuntimeError('; '.join(errors))
 
 
+def drain_data_callbacks(executor, limit):
+    """Run ready data work, returning immediately when the queue is empty.
+
+    Same single-threaded Task execution as rclpy's executor, with an explicit
+    empty-queue signal. Service callbacks and legacy nested waits run later on
+    this thread, so they never spin concurrently with this drain.
+    """
+    deadline=time.monotonic()+.005
+    worked=False
+    for _ in range(limit):
+        try:handler,_,_=executor.wait_for_ready_callbacks(timeout_sec=0.)
+        except rclpy.executors.TimeoutException:
+            # A zero-timeout generator also raises after yielding one ready
+            # batch. That does not prove DDS queues are empty: poll once more.
+            if not worked or time.monotonic()>=deadline:break
+            worked=False
+            continue
+        handler()
+        worked=True
+        error=handler.exception()
+        if error is not None:raise error
+        handler.result()
+        if time.monotonic()>=deadline:break
+
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--task',choices=('find_targets','s1','c1'),required=True);p.add_argument('--config',type=Path,required=True)
-    a=p.parse_args();c=json.loads(a.config.read_text());rclpy.init(args=['--ros-args','-p','use_sim_time:=true'])
-    units=Units(a.task,c);server=Node(a.task+'_unit_backend');result=dict(success=False)
+    p=argparse.ArgumentParser();p.add_argument('--task',choices=('explore','find_targets','s1','c1'),required=True);p.add_argument('--config',type=Path,required=True)
+    a=p.parse_args();c=json.loads(a.config.read_text())
+    root=Path(c['project_root'])
+    # Spawned backends must import the canonical source modules even when the
+    # installed package overlay predates a newly added task implementation.
+    sys.path[:0]=[str(root/'src/edgeai_mission'),str(root/'src/edgeai_navigation'),
+                  str(root/'src/edgeai_navigation/scripts'),str(root/'src/edgeai_exploration')]
+    rclpy.init(args=['--ros-args','-p','use_sim_time:=true'])
+    if a.task=='explore':
+        from edgeai_tasks.exploration import ExplorationUnits
+        units=ExplorationUnits(c)
+    elif a.task=='find_targets':
+        from edgeai_tasks.fleet_search import FleetSearchUnits
+        units=FleetSearchUnits(c)
+    elif a.task=='s1':
+        from edgeai_tasks.fleet_rescue import FleetRescueUnits
+        units=FleetRescueUnits(c, Units)
+    else:units=Units(a.task,c)
+    server=Node(a.task+'_unit_backend');result=dict(success=False)
     stopping=[False]
     def request_stop(*_):
         # Never raise inside an arbitrary rclpy C-extension call or destructor.
         # The main loop and algorithm waits stop at their next Python boundary.
-        stopping[0]=True;units.node.stop_requested=True
+        stopping[0]=True
+        for data_node in getattr(units,'data_nodes',[units.node]):data_node.stop_requested=True
     signal.signal(signal.SIGTERM,request_stop)
-    common=['cancel_navigation','cancel_all_navigation','dispatch_navigation','poll_navigation','check_rescue','record_success']
-    operations=common+(['acquire','select_target','search_target','next_target','check_targets'] if a.task=='find_targets' else ['acquire','select_target','search_target','select_approach','inside_rescue_region','correct'] if a.task=='s1' else ['handover','wait_navigation_ready','localize','prepare_target','select_parking','select_parking_locked','recover_preplan_start','correct'])
+    if a.task=='s1':
+        operations=units.operations
+    elif a.task in ('explore','find_targets'):
+        operations=['acquire','poll','dispatch','check_complete','cancel_all_navigation',
+                    'record_success','refresh_frontier_goals']
+    else:
+        operations=['cancel_navigation','cancel_all_navigation','dispatch_navigation',
+                    'poll_navigation','check_rescue','record_success','handover',
+                    'wait_navigation_ready','prepare_target','select_parking',
+                    'select_parking_locked','recover_preplan_start','correct','yield_peer']
+    audit_seen = {}
     def handle(op,response):
         try:data=dict(success=True,**units.invoke(op))
         except Exception as error:data=dict(success=False,reason=str(error),category=getattr(error,'category','failure'))
         response.success=data['success'];response.message=json.dumps(data)
-        with (units.directory/'task-unit-events.jsonl').open('a') as f:
-            f.write(json.dumps(dict(task=a.task,operation=op,wall_time=time.time(),
-                sim_time=units.node.get_clock().now().nanoseconds/1e9,**data))+'\n')
+        signature = json.dumps(data, sort_keys=True)
+        previous, stamp = audit_seen.get(op, (None, -float('inf')))
+        now = time.monotonic()
+        if (os.environ.get('EDGEAI_RUNTIME_PROFILE') != 'performance' or not data['success']
+                or signature != previous or now-stamp >= 5.):
+            audit_seen[op] = (signature, now)
+            with (units.directory/'task-unit-events.jsonl').open('a') as f:
+                f.write(json.dumps(dict(task=a.task,operation=op,wall_time=time.time(),
+                    sim_time=units.node.get_clock().now().nanoseconds/1e9,**data))+'\n')
         return response
     services=[server.create_service(Trigger,'/mission/tasks/'+a.task+'/units/'+op,lambda req,res,op=op:handle(op,res)) for op in operations]
     # Legacy algorithms spin their own data node while awaiting ROS replies.
     # The service callback must therefore use a separate executor, never the
     # global executor used by those waits (nested spin is rejected by rclpy).
     service_executor=SingleThreadedExecutor();service_executor.add_node(server)
+    # Keep data nodes registered. rclpy.spin_once(node) otherwise adds/removes
+    # each node on every poll and rebuilds the executor wait set thousands of
+    # times per second. Nested algorithm waits use this same global executor;
+    # rclpy preserves nodes which were already registered by the caller.
+    data_executor=rclpy.get_global_executor()
+    data_nodes=getattr(units,'data_nodes',[units.node])
+    for data_node in data_nodes:data_executor.add_node(data_node)
     try:
         while rclpy.ok() and not stopping[0]:
             # Drain data callbacks before the next service. One spin per 20 ms
             # cannot keep up with TF + clock + odometry + authority streams.
-            for _ in range(32):rclpy.spin_once(units.node,timeout_sec=0.)
+            drain_data_callbacks(data_executor,32*len(data_nodes))
             service_executor.spin_once(timeout_sec=.01)
-    except (KeyboardInterrupt,rclpy.executors.ExternalShutdownException):pass
+    except (KeyboardInterrupt,rclpy.executors.ExternalShutdownException,rclpy.executors.ShutdownException):pass
     finally:
         try:units.close();result['success']=units.success
         except Exception as error:result.update(success=False,reason='Cleanup failed: '+str(error))
-        saved=units.directory/('target-search-result.json' if a.task=='find_targets' else 'rescue-result.json' if a.task=='s1' else 'cooperative-result.json')
+        saved=units.directory/('exploration-result.json' if a.task=='explore' else 'target-search-result.json' if a.task=='find_targets' else 'rescue-result.json' if a.task=='s1' else 'cooperative-result.json')
         if result['success'] and saved.exists():result['task_result']=json.loads(saved.read_text())
         path=units.directory/('task-'+a.task+'-worker-result.json');path.write_text(json.dumps(result))
         service_executor.shutdown();server.destroy_node()

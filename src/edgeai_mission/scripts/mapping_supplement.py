@@ -1,8 +1,67 @@
 """Bounded repositioning through existing authority/Nav2; no rescue target logic."""
 import json
 import math
+import os
 import time
 from pathlib import Path
+
+
+def resume_exploration(node, joint=False, timeout_s=25.):
+    """Release the active mapper set to the task scheduler in a confirmed stopped state."""
+    from rclpy.qos import QoSProfile, DurabilityPolicy
+    from std_msgs.msg import String
+    from std_srvs.srv import SetBool, Trigger
+
+    dual=joint
+    peer_state={};peer_received=0.
+    subscription=peer_client=None
+    deadline=time.monotonic()+timeout_s
+    def receive(message):
+        nonlocal peer_received
+        peer_state.update(json.loads(message.data));peer_received=time.monotonic()
+    def wait(predicate, allowance):
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise RuntimeError('Task resume confirmation timeout')
+        node.wait(predicate,min(allowance,remaining))
+    try:
+        clients={'robot1':node.stop}
+        if dual:
+            subscription=node.create_subscription(String,'/robot2/navigation_authority/state',receive,
+                QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            peer_client=node.create_client(Trigger,'/robot2/navigation_authority/stop')
+            clients['robot2']=peer_client
+        def snapshots():
+            result={'robot1':(node.state or {},node.state_received)}
+            if dual:result['robot2']=(peer_state,peer_received)
+            return result
+        wait(lambda:all(clients[name].service_is_ready() and 'command_sequence' in state
+             and time.monotonic()-received<2. for name,(state,received) in snapshots().items()),10.)
+        sequences={name:state['command_sequence']+1 for name,(state,_) in snapshots().items()}
+        requested=time.monotonic()
+        mode='STOPPED'
+        futures={name:client.call_async(Trigger.Request()) for name,client in clients.items()}
+        for name,future in futures.items():
+            wait(future.done,10.)
+            if not future.result().success:raise RuntimeError(name+': authority rejected '+mode+' resume')
+        def resumed():
+            ready=True
+            for name,(state,received) in snapshots().items():
+                sequence=sequences[name]
+                if state.get('command_sequence',-1)>sequence:
+                    raise RuntimeError(name+': authority changed during '+mode+' resume')
+                phase=state.get('phase')
+                valid_phase=phase=='IDLE'
+                ready=ready and (state.get('command_sequence')==sequence and state.get('mode')==mode
+                    and state.get('explorer_paused') is True and valid_phase
+                    and not state.get('cancel_requested',False) and not state.get('fault')
+                    and not state.get('explorer_error') and received>=requested
+                    and time.monotonic()-received<2.)
+            return ready
+        wait(resumed,15.)
+        return dict(status='ready_for_exploration_task')
+    finally:
+        if subscription is not None:node.destroy_subscription(subscription)
+        if peer_client is not None:node.destroy_client(peer_client)
 
 
 def run(step, c):
@@ -11,7 +70,6 @@ def run(step, c):
     from edgeai_tasks.normal_rescue import Rescue
     from edgeai_search.search_policy import observation_positions
     from nav2_msgs.action import NavigateToPose
-    from std_srvs.srv import SetBool
     from tf2_ros import TransformException
 
     directory=Path(c['directory'])
@@ -26,16 +84,10 @@ def run(step, c):
         if step=='resume_exploration':
             if c['backend']!='frontier':
                 raise RuntimeError('Mapping incomplete: automatic exploration restart requires frontier backend')
-            node.wait(lambda:node.state is not None and node.manual.service_is_ready(),10.)
-            sequence=node.state['command_sequence']+1
-            future=node.manual.call_async(SetBool.Request(data=False));node.wait(future.done,10.)
-            if not future.result().success:raise RuntimeError('Authority rejected AUTO resume')
-            def resumed():
-                if node.state['command_sequence']>sequence:raise RuntimeError('Authority changed during AUTO resume')
-                return (node.state['command_sequence']==sequence and node.state['mode']=='AUTO'
-                        and not node.state['explorer_paused'])
-            node.wait(resumed,15.)
-            return
+            joint=bool(c.get('joint_mapping',False)) or os.environ.get('EDGEAI_JOINT_MAPPING')=='true'
+            result=resume_exploration(node,joint)
+            if joint:node.event('MAPPING_READY_FOR_EXPLORATION_TASK',json.dumps(result))
+            return result
         node.acquire_control()
         pose=None
         def ready():

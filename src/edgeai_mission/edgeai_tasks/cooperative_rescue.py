@@ -1,306 +1,45 @@
 #!/usr/bin/env python3
-"""S1 handover, laser localization and concurrent C1 arrival with joint dwell."""
+"""Concurrent C1 navigation and rescue checks using mission-owned localization."""
 import argparse
-from collections import deque
 import json
 import math
-import os
 from pathlib import Path
 import signal
-import subprocess
 import time
 
 import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionClient
 from rclpy.time import Time
-from rclpy.qos import QoSProfile, DurabilityPolicy, qos_profile_sensor_data
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, TransformStamped
-from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
-from std_srvs.srv import SetBool, Trigger, Empty
-from lifecycle_msgs.srv import ChangeState, GetState
-from lifecycle_msgs.msg import State, Transition
 from nav2_msgs.action import NavigateToPose, ComputePathToPose, Spin, DriveOnHeading, BackUp
 from nav2_msgs.srv import GetCostmap
-from tf2_ros import Buffer, TransformListener, TransformException, TransformBroadcaster
+from tf2_ros import TransformException
 import yaml
 
-from edgeai_tasks.cooperative_policy import (compose, relative, cell, parking_pairs, JointDwell,
-                                rescue_yaw_error, path_clear_of_peer)
-from edgeai_nav.fleet_config import namespaced_config, configure_peer_costmaps, parking_geometry
+from edgeai_tasks.cooperative_policy import relative, parking_pairs, JointDwell, rescue_yaw_error, path_clear_of_peer
+from edgeai_nav.fleet_config import parking_geometry
 
 
 class PreplanStartOccupied(RuntimeError):
     category='start_occupied'
 
 
-def validate_preplan_recovery(settings):
-    if not settings.get('enabled',False):return
-    for key in ('speed_mps','time_allowance_s','action_timeout_s','min_progress_m','min_progress_rad'):
-        if not math.isfinite(float(settings.get(key,0.))) or settings.get(key,0.)<=0:
-            raise ValueError('Invalid preplan_recovery.'+key)
-    motions=settings.get('motions',[])
-    if not motions:raise ValueError('preplan_recovery.motions is empty')
-    for motion in motions:
-        kind=motion.get('kind')
-        if kind not in ('spin','backup','forward','escape'):raise ValueError('Unknown preplan recovery motion')
-        value=float(motion.get('angle_rad' if kind=='spin' else 'distance_m',0.))
-        if not math.isfinite(value) or value==0 or (kind=='backup' and value>0) or (kind=='forward' and value<0):
-            raise ValueError('Invalid preplan recovery motion direction/distance')
+from edgeai_tasks.localization_runtime import LocalizationRuntime,pose_value,validate_preplan_recovery
 
 
-def pose_value(p):
-    q=p.orientation
-    return [p.position.x,p.position.y,math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))]
-
-
-class CooperativeRescue(Node):
+class CooperativeRescue(LocalizationRuntime):
     def __init__(self,directory,config,*,node_name='cooperative_rescue'):
-        super().__init__(node_name)
-        self.directory,self.c=Path(directory),config
-        margin=float(config.get('settle_margin_s',0.))
-        if not math.isfinite(margin) or margin<0:raise ValueError('Invalid settle_margin_s')
-        validate_preplan_recovery(config.get('preplan_recovery',{}))
-        self.buffer=Buffer();self.listener=TransformListener(self.buffer,self)
-        self.seed_broadcaster=TransformBroadcaster(self);self.seed_enabled=True
-        self.mapping_start_pose=None
-        self.odom={};self.initial_odom={};self.scan={};self.localization={};self.states={}
-        self.scan_history={'':deque(maxlen=10),'robot2':deque(maxlen=10)};self.scan_matches={}
-        self.map=None;self.process=None;self.log=None;self.handles=[];self.sequences={}
-        self.state_received={};self.nomotion={};self.closing=False
-        self.deadline=float('inf');self.initialized=False;self.last_report=0.
-        self.measurement_after=0.
-        self.state_pub=self.create_publisher(String,'/cooperative_rescue/state',
-            QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.initial_pubs={};self.nav={};self.plan={};self.spin={};self.manual={};self.stop={}
-        self.escape={};self.backup={};self.preplan_blocked={};self.preplan_recovery_history={}
-        self.peer_poses_enabled=False;self.peer_pubs={}
-        for ns in ('','robot2'):
-            topic=lambda name:'/'+(ns+'/' if ns else '')+name
-            self.create_subscription(Odometry,topic('odom'),lambda m,n=ns:self.receive_odom(n,m),qos_profile_sensor_data)
-            self.create_subscription(LaserScan,topic('scan'),lambda m,n=ns:self.receive_scan(n,m),qos_profile_sensor_data)
-            self.create_subscription(PoseWithCovarianceStamped,topic('amcl_pose'),
-                lambda m,n=ns:self.localization.update({n:m}),QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-            self.create_subscription(String,topic('navigation_authority/state'),
-                lambda m,n=ns:self.receive_state(n,m),
-                QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-            self.initial_pubs[ns]=self.create_publisher(PoseWithCovarianceStamped,topic('initialpose'),1)
-            if self.c.get('peer_costmap',{}).get('enabled',True):
-                self.peer_pubs[ns]=self.create_publisher(PoseStamped,'/cooperative_rescue/peer_pose/'+(ns or 'robot1'),1)
-            self.nav[ns]=ActionClient(self,NavigateToPose,topic('navigation/cooperative_to_pose'))
-            self.plan[ns]=ActionClient(self,ComputePathToPose,topic('navigation_backend/compute_path_to_pose'))
-            self.spin[ns]=ActionClient(self,Spin,topic('navigation_backend/spin'))
-            self.escape[ns]=ActionClient(self,DriveOnHeading,topic('navigation_backend/escape_occupied'))
-            self.backup[ns]=ActionClient(self,BackUp,topic('navigation_backend/backup'))
-            if not hasattr(self,'advance'):self.advance={}
-            self.advance[ns]=ActionClient(self,DriveOnHeading,topic('navigation_backend/drive_on_heading'))
-            self.manual[ns]=self.create_client(SetBool,topic('navigation_authority/set_manual'))
-            self.stop[ns]=self.create_client(Trigger,topic('navigation_authority/stop'))
-            self.nomotion[ns]=self.create_client(Empty,topic('request_nomotion_update'))
-        self.create_subscription(OccupancyGrid,'/map',lambda m:setattr(self,'map',m),
-            QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.create_timer(.25,self.update_at_rest)
-        self.create_timer(.2,self.publish_initial_estimate)
-        if self.peer_pubs:self.create_timer(.10,self.publish_peer_poses)
+        super().__init__(directory,config,node_name=node_name)
+        # C1 consumes prepared localization; it never starts or stops AMCL.
+        self.peer_pubs={}
 
-    def publish_peer_poses(self):
-        if not self.peer_poses_enabled or self.closing:return
-        now=self.get_clock().now()
-        max_age=self.c.get('peer_costmap',{}).get('max_age_s',.5)
-        for ns,pub in self.peer_pubs.items():
-            sample=self.localization.get(ns)
-            if sample is None:continue
-            cov=sample.pose.covariance
-            if not (all(0<=cov[i]<=self.c['max_std_xy_m']**2 for i in (0,7)) and
-                    0<=cov[35]<=self.c['max_std_yaw_rad']**2):continue
-            try:tf=self.buffer.lookup_transform('map',(ns+'/' if ns else '')+'base_footprint',Time())
-            except TransformException:continue
-            stamp=Time.from_msg(tf.header.stamp)
-            if not -.25<=(now-stamp).nanoseconds/1e9<=max_age or not stamp.nanoseconds:continue
-            msg=PoseStamped();msg.header.frame_id='map';msg.header.stamp=min(stamp,now).to_msg()
-            t=tf.transform.translation
-            msg.pose.position.x,msg.pose.position.y,msg.pose.position.z=t.x,t.y,t.z
-            msg.pose.orientation=tf.transform.rotation;pub.publish(msg)
-
-    def publish_initial_estimate(self):
-        if not self.seed_enabled or len(self.initial_odom)!=2:return
-        if self.mapping_start_pose is None:
-            try:self.mapping_start_pose=compose(self.tf_pose('odom'),self.initial_odom[''])
-            except TransformException:return
-            self.event('INITIAL_REFERENCE',robot1_start_map=self.mapping_start_pose,
-                       relative_prior=self.c['initial_relative_pose'])
-        root_start=self.mapping_start_pose
-        map_odom2=compose(compose(root_start,self.c['initial_relative_pose']),relative(self.initial_odom['robot2'],[0.,0.,0.]))
-        msg=TransformStamped();msg.header.frame_id='map';msg.child_frame_id='robot2/odom'
-        msg.header.stamp=self.get_clock().now().to_msg()
-        msg.transform.translation.x,msg.transform.translation.y=map_odom2[:2]
-        msg.transform.rotation.z=math.sin(map_odom2[2]/2);msg.transform.rotation.w=math.cos(map_odom2[2]/2)
-        self.seed_broadcaster.sendTransform(msg)
-
-    def update_at_rest(self):
-        if self.process is None or self.closing:return
-        for client in self.nomotion.values():
-            if client.service_is_ready():client.call_async(Empty.Request())
-
-    def receive_state(self,ns,msg):
-        self.states[ns]=json.loads(msg.data);self.state_received[ns]=time.monotonic()
-
-    def receive_odom(self,ns,msg):
-        self.odom[ns]=msg;self.initial_odom.setdefault(ns,pose_value(msg.pose.pose))
-
-    def receive_scan(self,ns,msg):
-        self.scan[ns]=msg;self.scan_history[ns].append(msg)
-
-    def event(self,phase,**data):
-        record=dict(phase=phase,sim_time=self.now(),**data)
-        self.state_pub.publish(String(data=json.dumps(record,ensure_ascii=False)))
-        with (self.directory/'cooperative-events.jsonl').open('a',encoding='utf-8') as f:
-            f.write(json.dumps(record,ensure_ascii=False)+'\n')
-        self.get_logger().info('COOPERATIVE_'+phase+': '+json.dumps(data,ensure_ascii=False))
-
-    def now(self):return self.get_clock().now().nanoseconds/1e9
-
-    def check_owner(self):
-        for ns,seq in self.sequences.items():
-            state=self.states.get(ns,{})
-            age=time.monotonic()-self.state_received.get(ns,0)
-            if age>2.:
-                raise RuntimeError(f'{ns or "robot1"}: authority state stale ({age:.2f}s)')
-            if state.get('command_sequence')!=seq or state.get('mode')!='MANUAL':
-                raise RuntimeError(f'{ns or "robot1"}: navigation ownership changed '
-                    f'(expected sequence={seq}, observed={state.get("command_sequence")}, mode={state.get("mode")})')
-
-    def acquire_manual(self,ns):
-        # A service may become ready before its first transient state arrives.
-        # Wait for that baseline; never accept an old sequence after the request.
-        self.wait(lambda:self.manual[ns].service_is_ready() and ns in self.states and
-                  time.monotonic()-self.state_received.get(ns,0)<2.,40.)
-        expected=self.states[ns]['command_sequence']+1
-        self.service(self.manual[ns],SetBool.Request(data=True))
-        def acquired():
-            state=self.states.get(ns,{})
-            if state.get('command_sequence',-1)>expected:
-                raise RuntimeError(f'{ns or "robot1"}: navigation ownership changed during handover')
-            return (state.get('command_sequence')==expected and state.get('mode')=='MANUAL' and
-                    state.get('phase')=='IDLE' and time.monotonic()-self.state_received.get(ns,0)<2.)
-        self.wait(acquired,15.)
-        self.sequences[ns]=expected
-        self.event('AUTHORITY_ACQUIRED',robot=ns or 'robot1',sequence=expected)
-
-    def wait(self,predicate,timeout=15.,ownership=False):
-        end=min(self.deadline,time.monotonic()+timeout)
-        while rclpy.ok() and time.monotonic()<end:
-            if getattr(self,'stop_requested',False) and not self.closing:raise KeyboardInterrupt()
-            rclpy.spin_once(self,timeout_sec=.05)
-            if ownership:self.check_owner()
-            if not self.closing and self.process is not None and self.process.poll() is not None:
-                raise RuntimeError('Cooperative navigation launch exited')
-            if predicate():return
-        raise RuntimeError('Cooperative phase timeout')
-
-    def service(self,client,request,timeout=15.):
-        self.wait(client.service_is_ready,timeout)
-        future=client.call_async(request);self.wait(future.done,timeout)
-        response=future.result()
-        if hasattr(response,'success') and not response.success:
-            transition=getattr(getattr(request,'transition',None),'id',None)
-            raise RuntimeError(f'Service failed: {client.srv_name}; transition={transition}; '+getattr(response,'message',''))
-        return response
-
-    def stop_slam(self,name='/slam_toolbox'):
-        state_client=self.create_client(GetState,name+'/get_state')
-        change_client=self.create_client(ChangeState,name+'/change_state')
-        transitions={State.PRIMARY_STATE_ACTIVE:(Transition.TRANSITION_DEACTIVATE,State.PRIMARY_STATE_INACTIVE),
-            State.PRIMARY_STATE_INACTIVE:(Transition.TRANSITION_CLEANUP,State.PRIMARY_STATE_UNCONFIGURED),
-            State.PRIMARY_STATE_UNCONFIGURED:(Transition.TRANSITION_UNCONFIGURED_SHUTDOWN,State.PRIMARY_STATE_FINALIZED)}
-        try:
-            for _ in range(4):
-                state=self.service(state_client,GetState.Request()).current_state
-                if state.id==State.PRIMARY_STATE_FINALIZED:
-                    self.event('SLAM_STOPPED',node=name,state=state.label)
-                    return
-                if state.id not in transitions:
-                    raise RuntimeError(f'{name}: unexpected lifecycle state {state.id} ({state.label})')
-                transition,expected=transitions[state.id]
-                self.event('SLAM_TRANSITION',node=name,from_state=state.label,transition=transition)
-                request=ChangeState.Request();request.transition.id=transition
-                self.service(change_client,request)
-                after=self.service(state_client,GetState.Request()).current_state
-                if after.id!=expected:
-                    raise RuntimeError(f'{name}: transition {transition} ended in {after.label}, expected state {expected}')
-            raise RuntimeError(f'{name}: lifecycle shutdown did not finish')
-        finally:
-            self.destroy_client(state_client);self.destroy_client(change_client)
-
-    def tf_pose(self,frame,stamp=None):
-        tf=self.buffer.lookup_transform('map',frame,stamp or Time())
-        return pose_value(type('Pose',(),dict(position=tf.transform.translation,orientation=tf.transform.rotation))())
-
-    def laser_match(self,ns):
-        if self.map is None:return 0.
-        scan=None
-        # Scan and TF arrive independently. Select a fresh transformable sample,
-        # rather than calling an otherwise healthy localization invalid each tick.
-        for candidate in reversed(self.scan_history[ns]):
-            stamp=Time.from_msg(candidate.header.stamp)
-            if not 0<=self.now()-stamp.nanoseconds/1e9<=self.c['max_data_age_s']:continue
-            key=(stamp.nanoseconds,id(self.map))
-            cached=self.scan_matches.get(ns)
-            if cached is not None and cached[0]==key:return cached[1]
-            try:p=self.tf_pose(candidate.header.frame_id,stamp)
-            except TransformException:continue
-            scan=candidate;break
-        if scan is None:return 0.
-        matched=total=0;step=max(1,len(scan.ranges)//60)
-        resolution=self.map.info.resolution
-        reach=math.ceil(self.c['scan_match_distance_m']/resolution)
-        offsets=[(i*resolution,j*resolution) for i in range(-reach,reach+1) for j in range(-reach,reach+1)
-                 if math.hypot(i*resolution,j*resolution)<=self.c['scan_match_distance_m']]
-        for i in range(0,len(scan.ranges),step):
-            distance=scan.ranges[i]
-            if not math.isfinite(distance) or not scan.range_min<distance<scan.range_max:continue
-            angle=p[2]+scan.angle_min+i*scan.angle_increment
-            x,y=p[0]+distance*math.cos(angle),p[1]+distance*math.sin(angle)
-            total+=1
-            matched+=any(cell(self.map,x+dx,y+dy)>=65 for dx,dy in offsets)
-        ratio=matched/total if total>=15 else 0.
-        self.scan_matches[ns]=(key,ratio)
-        return ratio
-
-    def localized(self,ns):
-        sample=self.localization.get(ns)
-        if sample is None:return False
-        stamp=Time.from_msg(sample.header.stamp).nanoseconds/1e9
-        cov=sample.pose.covariance
-        if not (0<=self.now()-stamp<=self.c['max_data_age_s'] and
-                all(0<=cov[i]<=self.c['max_std_xy_m']**2 for i in (0,7)) and
-                0<=cov[35]<=self.c['max_std_yaw_rad']**2):return False
-        return self.laser_match(ns)>=self.c['min_scan_match_ratio']
-
-    def action(self,client,request,timeout):
-        self.wait(client.server_is_ready,15.,True)
-        sent=client.send_goal_async(request);self.wait(sent.done,10.,True)
-        handle=sent.result()
-        if not handle.accepted:raise RuntimeError('Cooperative action rejected')
-        self.handles.append(handle)
-        result=handle.get_result_async()
-        try:self.wait(result.done,timeout,True)
-        except BaseException:
-            canceled=handle.cancel_goal_async()
-            old_deadline=self.deadline;self.deadline=max(self.deadline,time.monotonic()+8.)
-            try:self.wait(lambda:canceled.done() and result.done(),8.)
-            finally:self.deadline=old_deadline
-            raise
-        self.handles.remove(handle)
-        return result.result()
-
-    def goal_pose(self,pose):
-        msg=PoseStamped();msg.header.frame_id='map';msg.header.stamp=self.get_clock().now().to_msg()
-        msg.pose.position.x,msg.pose.position.y=map(float,pose[:2])
-        msg.pose.orientation.z=math.sin(pose[2]/2);msg.pose.orientation.w=math.cos(pose[2]/2)
-        return msg
+    def handover(self):
+        if getattr(self,'mission_localization_required',False):
+            state=json.loads((self.directory/'localization-state.json').read_text())
+            if not state.get('ready'):raise RuntimeError('Mission localization is not ready')
+        self.deadline=time.monotonic()+self.c['wall_timeout_s']
+        self.targets=json.loads((self.directory/'cooperative-targets.json').read_text())
+        for ns in ('robot1','robot2'):self.acquire_manual(ns)
+        self.initialized=True
+        self.event('HANDOVER_REQUESTED',source='prepared localization')
 
     def navigate(self,ns,pose):
         for attempt in range(self.c['navigation_retries']+1):
@@ -313,9 +52,10 @@ class CooperativeRescue(Node):
             if terminal.status!=6:raise RuntimeError('Cooperative navigation canceled')
         raise RuntimeError(f'{ns or "robot1"}: navigation retries exhausted')
 
+
     def navigate_pair(self,pair):
         """Dispatch both goals before waiting; retry each robot independently."""
-        pending={};attempts={ns:0 for ns in ('','robot2')}
+        pending={};attempts={ns:0 for ns in ('robot1','robot2')}
         def dispatch(ns,pose):
             self.wait(lambda:self.states.get(ns,{}).get('phase')=='IDLE' and self.nav[ns].server_is_ready(),15.,True)
             attempts[ns]+=1
@@ -326,7 +66,7 @@ class CooperativeRescue(Node):
             if not handle.accepted:raise RuntimeError(f'{ns or "robot1"}: cooperative goal rejected')
             self.handles.append(handle)
             pending[ns]=(pose,handle,handle.get_result_async(),time.monotonic()+self.c['navigation_timeout_s'])
-        for ns,pose in zip(('','robot2'),pair):dispatch(ns,pose)
+        for ns,pose in zip(('robot1','robot2'),pair):dispatch(ns,pose)
         while pending:
             self.wait(lambda:True,1.,True)
             for ns,(pose,handle,future,end) in list(pending.items()):
@@ -342,202 +82,6 @@ class CooperativeRescue(Node):
                 dispatch(ns,pose)
         self.measurement_after=self.now()
 
-    def handover(self):
-        if getattr(self,'external_navigation',False):
-            self.deadline=time.monotonic()+self.c['wall_timeout_s']
-            self.targets=json.loads((self.directory/'cooperative-targets.json').read_text())
-            for ns in ('','robot2'):self.acquire_manual(ns)
-            self.initialized=True
-            self.event('HANDOVER_REQUESTED',source='prepared Part2 navigation')
-            return
-        if getattr(self,'static_test',False):
-            self.deadline=time.monotonic()+self.c['wall_timeout_s']
-            self.targets=json.loads((self.directory/'cooperative-targets.json').read_text())
-            poses=json.loads((self.directory/'cooperative-test-initial.json').read_text())
-            self.event('TEST_SETUP',map='static truth map',targets='known world coordinates',localization='AMCL',initial_poses=poses)
-            self.start_localization(*poses)
-            return
-        if getattr(self,'handover_reference',None):
-            reference=json.loads(Path(self.handover_reference).read_text())
-            self.mapping_start_pose=reference['mapping_start_pose']
-            self.initial_odom['robot2']=reference['initial_odom2']
-            self.event('HANDOVER_REQUESTED',source='mission_coordinator')
-        else:
-            self.event('WAITING_S1')
-            path=self.directory/'rescue-result.json'
-            self.wait(lambda:path.is_file(),86400.)
-            result=json.loads(path.read_text())
-            if not result.get('success'):raise RuntimeError('S1 failed; cooperative rescue not started')
-        self.deadline=time.monotonic()+self.c['wall_timeout_s']
-        def handover_ready():
-            if len(self.odom)!=2 or self.map is None or self.now()<=0:return False
-            # This worker may now start only after S1: map and odom can arrive
-            # before the newly-created TF buffer has the complete root tree.
-            try:self.tf_pose('base_footprint')
-            except TransformException:return False
-            return True
-        self.wait(handover_ready,15.)
-        root_pose=self.tf_pose('base_footprint')
-        # Keep robot1's odometry drift out of the stationary follower's prior.
-        if self.mapping_start_pose is None:
-            raise RuntimeError('Mapping-start reference missing for robot2 initialization')
-        root_start=self.mapping_start_pose
-        second=compose(compose(root_start,self.c['initial_relative_pose']),
-                       relative(self.initial_odom['robot2'],pose_value(self.odom['robot2'].pose.pose)))
-        self.event('HANDOVER',initial_poses=[root_pose,second])
-        self.finalize_targets()
-        save=subprocess.run(['ros2','run','nav2_map_server','map_saver_cli','-f',str(self.directory/'cooperative-map'),
-            '--ros-args','-p','use_sim_time:=true'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=30.)
-        (self.directory/'cooperative-map-save.log').write_text(save.stdout)
-        if save.returncode:raise RuntimeError('Final map save failed')
-        # Target positions must belong to this final map, not the pre-S1 snapshot.
-        self.targets=json.loads((self.directory/'targets.json').read_text())
-        (self.directory/'cooperative-targets.json').write_text(json.dumps(self.targets,indent=2))
-        self.stop_slam()
-        self.seed_enabled=False
-        self.start_localization(root_pose,second)
-
-    def finalize_targets(self):
-        client=self.create_client(Trigger,'/targets/finalize_map')
-        try:
-            result=self.service(client,Trigger.Request(),15.)
-            binding=json.loads(result.message)
-            if not binding.get('finalized') or binding.get('mode')!='fixed_map':
-                raise RuntimeError('Target map finalization not confirmed')
-            self.event('TARGET_MAP_FINALIZED',**binding)
-        finally:self.destroy_client(client)
-
-    def start_localization(self,root_pose,second):
-        folder=self.directory/'robot2';folder.mkdir(exist_ok=True)
-        nav=yaml.safe_load((self.directory/'nav2-runtime.yaml').read_text())
-        nav2=namespaced_config(nav,'robot2')
-        configure_peer_costmaps(nav2,'robot2',self.c.get('peer_costmap',{}))
-        (folder/'nav2-runtime.yaml').write_text(yaml.safe_dump(nav2,sort_keys=False))
-        self.log=(self.directory/'cooperative-nav.log').open('w')
-        os.environ.setdefault('CYCLONEDDS_URI','<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>')
-        self.process=subprocess.Popen(['ros2','launch','edgeai_navigation','cooperative_navigation.launch.py',
-            'directory:='+str(self.directory)],stdout=self.log,stderr=subprocess.STDOUT,start_new_session=True)
-        if getattr(self,'handover_reference',None):
-            # Let the parent coordinator clean up this owned launch group even
-            # if the transitional Python worker is forcefully terminated.
-            owned=dict(pid=self.process.pid,start_ticks=Path(f'/proc/{self.process.pid}/stat').read_text().split()[21])
-            path=self.directory/'mission-owned-navigation.json';tmp=path.with_suffix('.tmp')
-            tmp.write_text(json.dumps(owned));tmp.replace(path)
-        for ns,pose in zip(('','robot2'),(root_pose,second)):
-            state_client=self.create_client(GetState,'/'+(ns+'/' if ns else '')+'amcl/get_state')
-            try:self.wait_amcl_active(state_client)
-            finally:self.destroy_client(state_client)
-            self.wait(lambda n=ns:self.initial_pubs[n].get_subscription_count()>0,30.)
-            self.wait(lambda:self.now()>0 and ns in self.odom and self.map is not None,20.)
-            msg=PoseWithCovarianceStamped();msg.header.frame_id='map';msg.header.stamp=self.get_clock().now().to_msg()
-            msg.pose.pose=self.goal_pose(pose).pose
-            msg.pose.covariance[0]=msg.pose.covariance[7]=self.c['initial_std_xy_m']**2
-            msg.pose.covariance[35]=self.c['initial_std_yaw_rad']**2
-            self.initial_pubs[ns].publish(msg)
-            self.event('INITIAL_POSE_SENT',robot=ns or 'robot1',pose=pose,
-                       std_xy_m=self.c['initial_std_xy_m'],std_yaw_rad=self.c['initial_std_yaw_rad'])
-            self.acquire_manual(ns)
-        self.initialized=True
-
-    def wait_amcl_active(self,client):
-        # The first GetState response may be lost while AMCL is being configured.
-        # Retry read-only discovery within one budget, before publishing initialpose.
-        active_by=min(self.deadline,time.monotonic()+40.)
-        last='state unavailable'
-        while time.monotonic()<active_by:
-            future=None
-            try:
-                self.wait(client.service_is_ready,min(2.,active_by-time.monotonic()))
-                future=client.call_async(GetState.Request())
-                self.wait(future.done,min(2.,max(0.,active_by-time.monotonic())))
-                state=future.result().current_state
-                if state.id==State.PRIMARY_STATE_ACTIVE:
-                    self.event('AMCL_ACTIVE',service=client.srv_name)
-                    return
-                last=state.label
-            except RuntimeError as error:
-                if self.process is not None and self.process.poll() is not None:raise
-                last=str(error)
-                if future is not None and not future.done():
-                    client.remove_pending_request(future)
-            pause=min(.2,max(0.,active_by-time.monotonic()))
-            next_poll=time.monotonic()+pause
-            if pause:self.wait(lambda:time.monotonic()>=next_poll,pause+.1)
-        raise RuntimeError(f'AMCL activation timeout: {client.srv_name}; last={last}')
-
-    def wait_navigation_active(self,timeout=45.):
-        """Action discovery and authority IDLE do not imply lifecycle activation."""
-        names=['/map_server']+[
-            '/'+(ns+'/' if ns else '')+name
-            for ns in ('','robot2')
-            for name in ('amcl','controller_server','planner_server','behavior_server',
-                         'velocity_smoother','collision_monitor','bt_navigator')]
-        clients={name:self.create_client(GetState,name+'/get_state') for name in names}
-        deadline=min(self.deadline,time.monotonic()+timeout);waiting=None
-        def budget():
-            remaining=deadline-time.monotonic()
-            if remaining<=0:raise RuntimeError('Cooperative navigation activation timeout')
-            return remaining
-        try:
-            while True:
-                self.wait(lambda:all(c.service_is_ready() for c in clients.values()),budget(),True)
-                futures={name:c.call_async(GetState.Request()) for name,c in clients.items()}
-                self.wait(lambda:all(f.done() for f in futures.values()),budget(),True)
-                inactive={name:f.result().current_state.label for name,f in futures.items()
-                          if f.result().current_state.id!=State.PRIMARY_STATE_ACTIVE}
-                if not inactive:
-                    self.event('NAVIGATION_READY',nodes=names);return
-                if inactive!=waiting:
-                    self.event('NAVIGATION_WAITING',inactive=inactive);waiting=inactive
-                next_poll=time.monotonic()+.2
-                self.wait(lambda:time.monotonic()>=next_poll,budget(),True)
-        finally:
-            for client in clients.values():self.destroy_client(client)
-
-    def localize(self):
-        self.peer_poses_enabled=False
-        self.event('LOCALIZING')
-        stable=None;last=None;last_poses=None;begin=time.monotonic();next_motion=begin+5.
-        while time.monotonic()-begin<self.c['localization_timeout_s']:
-            self.wait(lambda:True,1.,True)
-            now=self.now()
-            # Ask AMCL to consume scans at rest as well; this does not move the robot.
-            if now-self.last_report>=.5:
-                self.last_report=now
-                good=all(self.localized(ns) for ns in ('','robot2'))
-                poses=[pose_value(self.localization[n].pose.pose) for n in ('','robot2')] if good else None
-                moved=poses is not None and last_poses is not None and any(
-                    math.dist(a[:2],b[:2])>.05 or abs(relative(a,b)[2])>.08 for a,b in zip(last_poses,poses))
-                if not good or moved or (last is not None and now<last):stable=None
-                elif stable is None:stable=now
-                last=now;last_poses=poses
-                if stable is not None and now-stable>=self.c['localization_stable_s']:
-                    self.peer_poses_enabled=True;self.publish_peer_poses()
-                    self.event('LOCALIZED',poses=poses,scan_match=[self.laser_match(n) for n in ('','robot2')]);return
-            if time.monotonic()>=next_motion and not self.localized('robot2'):
-                next_motion=time.monotonic()+10.
-                # Native Spin retains full swept-footprint collision checking.
-                request=Spin.Goal(target_yaw=.35);request.time_allowance.sec=6
-                terminal=self.action(self.spin['robot2'],request,12.)
-                self.event('LOCALIZATION_MOTION',status=terminal.status,error=terminal.result.error_code)
-        diagnostics=self.localization_diagnostics()
-        self.event('LOCALIZATION_FAILED',robots=diagnostics)
-        raise RuntimeError('Laser localization did not converge: '+json.dumps(diagnostics))
-
-    def localization_diagnostics(self):
-        result={}
-        for ns in ('','robot2'):
-            sample=self.localization.get(ns);scan=self.scan.get(ns)
-            row=dict(amcl_pose=sample is not None,scan=scan is not None)
-            if sample is not None:
-                row.update(pose=pose_value(sample.pose.pose),
-                    age_s=self.now()-Time.from_msg(sample.header.stamp).nanoseconds/1e9,
-                    std_xy_m=[math.sqrt(max(0.,sample.pose.covariance[i])) for i in (0,7)],
-                    std_yaw_rad=math.sqrt(max(0.,sample.pose.covariance[35])))
-            try:row['scan_match']=self.laser_match(ns) if scan is not None else None
-            except (TransformException,ValueError,RuntimeError) as error:row['scan_match_error']=str(error)
-            result[ns or 'robot1']=row
-        return result
 
     def refresh_target(self,force=False):
         """Use the live map-frame estimate; handover files remain audit snapshots."""
@@ -589,6 +133,7 @@ class CooperativeRescue(Node):
         self.target=target;self.target_ready=True
         return changed
 
+
     def record_occupied_costmap(self,ns,pose,error):
         """One bounded crop per robot/5 sim seconds; no extra subscriptions."""
         recorded=getattr(self,'occupied_recorded',{})
@@ -606,7 +151,7 @@ class CooperativeRescue(Node):
             x0,x1=max(0,cx-reach),min(info.size_x,cx+reach+1)
             y0,y1=max(0,cy-reach),min(info.size_y,cy+reach+1)
             from edgeai_tasks.cooperative_policy import footprint_clear,separated
-            peer=self.tf_pose('base_footprint' if ns else 'robot2/base_footprint')
+            peer=self.tf_pose(('robot2' if ns=='robot1' else 'robot1')+'/base_footprint')
             record=dict(sim_time=self.now(),robot=ns or 'robot1',error=error,pose=pose,
                         peer_pose=peer,physical_bodies_separated=separated(pose,peer,self.footprint,0.),
                         padded_bodies_separated=separated(pose,peer,self.footprint,self.c.get('footprint_padding_m',.01)),
@@ -622,6 +167,7 @@ class CooperativeRescue(Node):
         except (RuntimeError,ValueError,OSError,TransformException) as error:
             self.event('OCCUPIED_DIAGNOSTIC_UNAVAILABLE',robot=ns or 'robot1',reason=str(error))
         finally:self.destroy_client(client)
+
 
     def recover_preplan_start(self):
         settings=self.c.get('preplan_recovery',{})
@@ -658,10 +204,12 @@ class CooperativeRescue(Node):
             if not moved:raise PreplanStartOccupied(f'{ns or "robot1"}: no remaining safe preplan recovery with progress')
         self.preplan_blocked={}
 
+
     def select_parking_pair(self,locked=None,excluded=None,settled=()):
         self.preplan_blocked={}
+        self.parking_route_failures=[]
         pairs=parking_pairs(self.map,self.target,self.footprint,self.c)
-        robots=('','robot2')
+        robots=('robot1','robot2')
         poses={ns:self.tf_pose((ns+'/' if ns else '')+'base_footprint') for ns in robots}
         settled=set(settled)
         # Candidate generation is unordered. Test both robot assignments.
@@ -669,15 +217,15 @@ class CooperativeRescue(Node):
         if excluded:
             pairs=[pair for pair in pairs if not any(
                 math.dist(pair[i][:2],old[:2])<.04
-                for i,ns in enumerate(('','robot2')) for old in excluded.get(ns,[]))]
+                for i,ns in enumerate(('robot1','robot2')) for old in excluded.get(ns,[]))]
         if locked:
             from edgeai_tasks.cooperative_policy import footprint_clear,separated
             constrained=[]
             for pair in pairs:
                 pair=[list(p) for p in pair]
-                if any(math.dist(pair[i][:2],pose[:2])>.10 for i,ns in enumerate(('','robot2'))
+                if any(math.dist(pair[i][:2],pose[:2])>.10 for i,ns in enumerate(('robot1','robot2'))
                        for key,pose in locked.items() if ns==key):continue
-                for i,ns in enumerate(('','robot2')):
+                for i,ns in enumerate(('robot1','robot2')):
                     if ns in locked:pair[i]=list(locked[ns])
                 if (all(footprint_clear(self.map,p,self.footprint,self.c.get('footprint_padding_m',.01)) for p in pair) and
                     math.dist(pair[0][:2],pair[1][:2])>=self.c['min_separation_m'] and
@@ -700,6 +248,7 @@ class CooperativeRescue(Node):
                     plan=self.action(self.plan[ns],ComputePathToPose.Goal(goal=self.goal_pose(p),planner_id='GridBasedCooperative'),15.)
                     result=plan.result
                     if plan.status!=4 or result.error_code!=0 or not result.path.poses or result.path.header.frame_id!='map':
+                        self.parking_route_failures.append(dict(robot=ns,goal=list(p)))
                         self.event('PLAN_REJECTED',robot=ns or 'robot1',start=poses[ns],goal=p,error=result.error_code,
                                    message=getattr(result,'error_msg','') or 'No usable path in map frame')
                         if result.error_code in (205,206):self.record_occupied_costmap(ns,poses[ns],result.error_code)
@@ -712,6 +261,7 @@ class CooperativeRescue(Node):
                 if path is None:
                     okay=False;break
                 if not path_clear_of_peer([poses[ns],*path,p],parked,self.footprint,margin):
+                    self.parking_route_failures.append(dict(robot=ns,goal=list(p)))
                     self.event('PLAN_BLOCKED_BY_PARKED_PEER',robot=ns or 'robot1',goal=p,
                                peer=peer or 'robot1',peer_pose=parked,clearance_m=margin)
                     okay=False;break
@@ -720,8 +270,9 @@ class CooperativeRescue(Node):
         self.event('PARKING_SELECTED',target_id=self.target['id'],goals=selected)
         return selected
 
+
     def execute(self):
-        self.handover();self.wait_navigation_active();self.localize()
+        self.handover();self.wait_navigation_active()
         target=next((t for t in self.targets['targets'] if t['id']==self.c['target_id'] and t.get('yaw') is not None),None)
         if target is None:raise RuntimeError('C1 not localized during mapping; target search required')
         self.target=target
@@ -734,24 +285,25 @@ class CooperativeRescue(Node):
         self.navigate_pair(selected)
         self.refresh_target(force=True)
         self.event('JOINT_DWELL',target_id=target['id'])
-        dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.));last_event=-100.;last_sample=None;repairs=0
+        dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.),self.c.get('dwell_data_grace_s',2.));last_event=-100.;last_sample=None;repairs=0
         while time.monotonic()<self.deadline:
             self.wait(lambda:True,1.,True);now=self.now();distances=[];valid=True
-            if self.refresh_target():dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.))
+            # Preserve valid dwell across new observations, as in the task BT.
+            self.refresh_target()
             target=self.target
             # Compare at one common, fresh odometry timestamp.
             stamp=min(Time.from_msg(m.header.stamp).nanoseconds for m in self.odom.values())
             try:
-                for frame in ('base_footprint','robot2/base_footprint'):
+                for frame in ('robot1/base_footprint','robot2/base_footprint'):
                     stamp=min(stamp,Time.from_msg(self.buffer.lookup_transform('map',frame,Time()).header.stamp).nanoseconds)
             except TransformException as error:
-                retained=dwell.awaiting_data(now,self.c['max_data_age_s'])
+                retained=dwell.awaiting_data(now)
                 if now-last_event>=1.:
                     last_event=now;self.event('JOINT_STATUS',valid=False,reason='TF unavailable: '+str(error),
                         dwell_retained=retained,dwell_s=dwell.last-dwell.start if dwell.start is not None else 0.)
                 continue
             if not 0<=now-stamp/1e9<=self.c['max_data_age_s']:
-                retained=dwell.awaiting_data(now,self.c['max_data_age_s'])
+                retained=dwell.awaiting_data(now)
                 if now-last_event>=1.:
                     last_event=now;self.event('JOINT_STATUS',valid=False,reason='Pose sample stale or from future',
                         dwell_retained=retained,dwell_s=dwell.last-dwell.start if dwell.start is not None else 0.)
@@ -760,25 +312,34 @@ class CooperativeRescue(Node):
             if stamp/1e9<self.measurement_after:
                 dwell.update(stamp/1e9,[],False)
                 continue
-            reasons=[];yaw_errors=[];heading_ok=[]
+            reasons=[];waiting=[];yaw_errors=[];heading_ok=[]
             try:
-                for ns in ('','robot2'):
-                    p=self.tf_pose('robot2/base_footprint' if ns else 'base_footprint',Time(nanoseconds=stamp))
+                for ns in ('robot1','robot2'):
+                    p=self.tf_pose(ns+'/base_footprint',Time(nanoseconds=stamp))
                     distances.append(math.dist(p[:2],[target['x'],target['y']]))
                     yaw_errors.append(rescue_yaw_error(p,target))
                     heading_ok.append(abs(yaw_errors[-1])<=self.c['yaw_tolerance_rad'])
                     v=self.odom[ns].twist.twist
                     if math.hypot(v.linear.x,v.linear.y)>=.02 or abs(v.angular.z)>=.05:
                         reasons.append((ns or 'robot1')+' moving')
-                    if not self.localized(ns):reasons.append((ns or 'robot1')+' localization invalid')
-                if not self.target_ready:reasons.append('C1 estimate unavailable')
+                    try:
+                        if not self.localized(ns,require_data=True):reasons.append(ns+' localization quality invalid')
+                    except ValueError as error:waiting.append(str(error))
+                if not self.target_ready:waiting.append('C1 estimate unavailable')
+                if waiting and not reasons and all(heading_ok) and all(d<=self.c['radius_m'] for d in distances):
+                    retained=dwell.awaiting_data(now)
+                    if now-last_event>=1.:
+                        last_event=now;self.event('JOINT_STATUS',valid=False,reason='; '.join(waiting),
+                            dwell_retained=retained,dwell_s=dwell.last-dwell.start if dwell.start is not None else 0.)
+                    continue
                 last_sample=stamp
-                valid=not reasons
+                valid=not reasons and not waiting
             except TransformException:
-                dwell.awaiting_data(now,self.c['max_data_age_s'])
+                dwell.awaiting_data(now)
                 continue
             if any(d>self.c['radius_m'] for d in distances):reasons.append('Outside rescue circle')
             if not all(heading_ok):reasons.append('Rescue heading outside tolerance')
+            reasons.extend(waiting)
             done=dwell.update(stamp/1e9,distances,valid and len(heading_ok)==2 and all(heading_ok))
             if now-last_event>=1.:
                 last_event=now;self.event('JOINT_STATUS',distances_m=distances,yaw_errors_rad=yaw_errors,heading_ok=heading_ok,valid=valid,
@@ -796,39 +357,18 @@ class CooperativeRescue(Node):
                 selected=self.select_parking_pair()
                 self.navigate_pair(selected)
                 self.refresh_target(force=True)
-                dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.))
+                dwell=JointDwell(self.c['radius_m'],self.c['dwell_s']+self.c.get('settle_margin_s',0.),self.c.get('dwell_data_grace_s',2.))
         raise RuntimeError('Joint rescue completion timeout')
 
-    def close(self):
-        self.closing=True;self.deadline=time.monotonic()+35.
-        for handle in self.handles:
-            try:
-                future=handle.cancel_goal_async();self.wait(future.done,5.)
-            except Exception:pass
-        for ns,seq in self.sequences.items():
-            if self.states.get(ns,{}).get('command_sequence')==seq:
-                try:
-                    self.service(self.stop[ns],Trigger.Request(),5.)
-                    self.wait(lambda n=ns:self.states.get(n,{}).get('phase')=='IDLE' and
-                              self.states[n].get('mode')=='STOPPED',5.)
-                except Exception:pass
-        if self.process is not None and self.process.poll() is None:
-            os.killpg(self.process.pid,signal.SIGINT)
-            try:self.process.wait(timeout=12.)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid,signal.SIGTERM);self.process.wait(timeout=8.)
-        if self.log:self.log.close()
+
 
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--directory',required=True);parser.add_argument('--config',required=True)
     parser.add_argument('--static-test',action='store_true',help='Use prepared static map and target coordinates; skip S1/SLAM handover')
-    parser.add_argument('--handover-reference',help='Explicit coordinator handover; do not independently wait for S1')
     args,ros_args=parser.parse_known_args();rclpy.init(args=ros_args)
     node=CooperativeRescue(args.directory,yaml.safe_load(Path(args.config).read_text()))
     node.static_test=args.static_test
-    node.handover_reference=args.handover_reference
-    if args.static_test or args.handover_reference:node.seed_enabled=False
     signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(KeyboardInterrupt()))
     result=dict(success=False)
     try:result=node.execute()

@@ -74,11 +74,11 @@ def setup(context):
             ExecuteProcess(cmd=['python3','-u',str(share/'tools/navigation_truth_localization.py'),
                                 '--ros-args','-p','use_sim_time:=true'],output='screen')])
     raw_xml = xacro.process_file(str(description_share / 'urdf/edgeai_robot_real.urdf.xacro')).toxml()
-    camera_rate = os.environ.get('EDGEAI_CAMERA_RATE', '30')
+    camera_rate = os.environ.get('EDGEAI_CAMERA_RATE', '15')
     try:
         camera_rate = str(max(5.0, min(30.0, float(camera_rate))))
     except ValueError:
-        camera_rate = '30'
+        camera_rate = '15'
     raw_xml = re.sub(r'(<sensor name="rgbd_camera"[^>]*>.*?<update_rate>)[^<]+(</update_rate>)',
                      rf'\g<1>{camera_rate}\g<2>', raw_xml, count=1, flags=re.S)
     # Diagnostic switches are environment-only so the normal competition
@@ -99,14 +99,13 @@ def setup(context):
                     gazebo.remove(sensor)
         raw_xml = ET.tostring(root, encoding='unicode')
     for robot in fleet:
-        primary_unscoped = LaunchConfiguration('primary_unscoped').perform(context).lower() == 'true'
-        ns = robot['name'] if multi and not (primary_unscoped and robot is fleet[0]) else ''
+        ns = robot['name']
         prefix = ns + '/' if ns else ''
         entity = ns or 'edgeai_robot_real'
         topic = lambda name: '/' + prefix + name
         robot_xml=raw_xml
         robot_disabled=set(disabled_sensors)
-        if primary_unscoped and robot is not fleet[0]:
+        if os.environ.get('EDGEAI_JOINT_MAPPING')!='true' and robot is not fleet[0]:
             # The waiting/localizing follower needs lidar, not a second RGB-D renderer.
             robot_disabled.add('rgbd_camera')
             root=ET.fromstring(robot_xml)
@@ -166,7 +165,7 @@ def setup(context):
             bridge_parameters['config_file'] = str(cloud_config)
         arguments = [f'{topic(name)}@{ros}[{gz}' for name, (ros, gz) in bridge_types.items()]
         arguments.append(f'{topic("cmd_vel")}@geometry_msgs/msg/Twist]gz.msgs.Twist')
-        remaps = [(topic('tf'), '/tf')] if multi else []
+        remaps = [(topic('tf'), '/tf')]
         if truth:
             gz_pose = f'/model/{entity}/pose'
             arguments.append(f'{gz_pose}@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V')
@@ -181,33 +180,40 @@ def setup(context):
                 '-p', 'world_file:='+str(world_path),
                 '-p', 'targets_file:='+LaunchConfiguration('targets_file').perform(context),
                 '-p', 'entity:='+entity, '-p', 'frame_prefix:='+(prefix or "''"),
-                '-p', 'shared_map:='+str(primary_unscoped).lower(),
-                '-p', 'reference_frame:='+('map' if navigation_test or LaunchConfiguration('slam').perform(context).lower() == 'true' else 'odom'),
-                '-p', 'log_directory:='+(os.environ.get('EDGEAI_TRUTH_DIRECTORY') or "''")], output='screen'))
+                '-p', 'primary_alias:='+str(robot is fleet[0]).lower(),
+                '-p', 'shared_map:='+'true',
+                '-p', 'reference_frame:='+('map' if navigation_test or os.environ.get('EDGEAI_JOINT_MAPPING')=='true' or LaunchConfiguration('slam').perform(context).lower() == 'true' else 'odom'),
+                '-p', 'log_directory:='+(os.environ.get('EDGEAI_TRUTH_DIRECTORY') or "''"),
+], output='screen'))
         if (LaunchConfiguration('slam').perform(context).lower() == 'true' and
-                (not primary_unscoped or robot is fleet[0])):
-            params = support.load_yaml(share / 'config/slam_toolbox.yaml')['slam_toolbox']['ros__parameters']
-            params.update(use_sim_time=True, map_frame=prefix + 'map', odom_frame=prefix + 'odom',
+                robot is fleet[0]):
+            params = support.load_yaml(Path(get_package_share_directory('edgeai_mapping')) / 'config/slam_toolbox.yaml')['slam_toolbox']['ros__parameters']
+            params.update(use_sim_time=True, map_frame='map', odom_frame=prefix + 'odom',
                           base_frame=prefix + 'base_footprint', scan_topic=topic('scan'))
-            if primary_unscoped and multi and count==2:
+            if count==2:
                 nav_share=Path(get_package_share_directory('edgeai_navigation'))
                 filtered=support.load_yaml(nav_share/'config/fleet_scan_filter.yaml')
                 filtered.pop('localization',None)
-                # One source for the initial relative pose used by filter and localization.
-                filtered['relative_pose']=support.load_yaml(nav_share/'config/cooperative_rescue.yaml')['initial_relative_pose']
+                filtered['root_odom_frame']=prefix+'odom'
+                from edgeai_nav.geometry import relative
+                start, peer = (robot['pose'] for robot in fleet)
+                filtered['relative_pose'] = relative([*start[:2], start[5]], [*peer[:2], peer[5]])
                 args=['python3','-u',str(nav_share/'scripts/fleet_scan_filter.py'),'--ros-args','-p','use_sim_time:=true']
-                args.extend(['-r','robot2/odom:=/'+fleet[1]['name']+'/odom'])
+                args.extend(['-r','odom:='+topic('odom'),
+                             '-r','scan:='+topic('scan'),
+                             '-r','scan_slam:='+topic('scan_slam'),
+                             '-r','robot2/odom:=/'+fleet[1]['name']+'/odom'])
                 filter_file=world_dir/'fleet-filter.yaml'
                 filter_file.write_text(yaml.safe_dump({'fleet_scan_filter':{'ros__parameters':filtered}}))
                 args.extend(['--params-file',str(filter_file)])
                 actions.append(ExecuteProcess(cmd=args,output='screen'))
                 params['scan_topic']=topic('scan_slam')
-            actions.append(Node(package='edgeai_navigation', executable='anchored_slam_toolbox',
-                                namespace=ns, name='slam_toolbox', parameters=[params],
-                                remappings=[('/map', topic('map')), ('/map_metadata', topic('map_metadata'))],
+            actions.append(Node(package='edgeai_mapping', executable='anchored_slam_toolbox',
+                                name='slam_toolbox', parameters=[params],
+                                remappings=[('/map','/map'),('/map_metadata','/map_metadata')],
                                 output='screen'))
             actions.append(Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
-                                namespace=ns, name='slam_lifecycle_manager',
+                                name='slam_lifecycle_manager',
                                 parameters=[{'use_sim_time': True, 'autostart': True,
                                              'node_names': ['slam_toolbox'], 'bond_timeout': 0.0}]))
         if LaunchConfiguration('rviz').perform(context).lower() == 'true':
@@ -233,7 +239,6 @@ def generate_launch_description():
     share = Path(get_package_share_directory('edgeai_simulation'))
     return LaunchDescription([
         DeclareLaunchArgument('multi_robot', default_value='false'),
-        DeclareLaunchArgument('primary_unscoped', default_value='false'),
         DeclareLaunchArgument('robot_count', default_value='1'),
         DeclareLaunchArgument('robots_file', default_value=str(share / 'config/robots_midterm.yaml')),
         DeclareLaunchArgument('use_robot_pose', default_value='true'),

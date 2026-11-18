@@ -7,6 +7,7 @@
 ```powershell
 .\Start-Midterm-Check.ps1 -Language en
 .\Start-Autonomous-Mission.ps1 -Language en
+.\Start-Autonomous-Mission.ps1 -JointMapping  # 双机激光配准、公共SLAM、并行前沿探索（新模式）
 # 中文：-Language zh；导航测试、协作测试、纯仿真入口也支持同一参数。
 ```
 

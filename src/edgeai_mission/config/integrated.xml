@@ -6,6 +6,8 @@
       <Fallback>
         <Inverter><RescueEnabled/></Inverter>
         <Sequence>
+          <!-- Localization belongs to the mission and stays alive through S1/C1. -->
+          <RetryUntilSuccessful num_attempts="{localization_attempts}"><EnableLocalization/></RetryUntilSuccessful>
           <ExecuteTask task="s1"/>
           <Fallback>
             <Inverter><CooperativeEnabled/></Inverter>
@@ -22,13 +24,8 @@
         <Fallback>
           <MappingAccepted/>
           <Sequence>
-            <ReactiveSequence name="ExploreWithTargetObservationGate">
-              <Fallback>
-                <Sequence><AllRequiredTargetsLocated/><SuppressObservation/></Sequence>
-                <AlwaysSuccess/>
-              </Fallback>
-              <AwaitExploration/>
-            </ReactiveSequence>
+            <AwaitMappingReady/>
+            <ExecuteTask task="explore"/>
             <Fallback>
               <MapAreaSufficient/>
               <Sequence>

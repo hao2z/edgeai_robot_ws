@@ -12,6 +12,7 @@ case "$edgeai_display_platform" in
     native) ;;
     wslg)
         export DISPLAY=${DISPLAY:-:0} QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-xcb}
+        export QT_XCB_GL_INTEGRATION=${QT_XCB_GL_INTEGRATION:-xcb_glx}
         export GALLIUM_DRIVER=${EDGEAI_GALLIUM_DRIVER:-${GALLIUM_DRIVER:-d3d12}}
         export MESA_D3D12_DEFAULT_ADAPTER_NAME=${MESA_D3D12_DEFAULT_ADAPTER_NAME:-NVIDIA}
         ;;

@@ -1,4 +1,6 @@
 #include <iostream>
+#include <map>
+#include <cstdlib>
 #include "mission_process.hpp"
 #include "behaviortree_cpp/bt_factory.h"
 #include "rclcpp/rclcpp.hpp"
@@ -21,19 +23,29 @@ public:
   std::string feedback_phase;
   std::string logged_operation;
   Clock::time_point feedback_at{};
+  std::map<std::string, std::pair<std::string, Clock::time_point>> feedback_seen;
   void feedback(const std::string & phase, const Json & details=Json::object())
   {
+    const auto now=Clock::now();
+    const auto profile=std::getenv("EDGEAI_RUNTIME_PROFILE");
+    const auto interval=std::chrono::seconds(profile && std::string(profile)=="performance" ? 5 : 1);
+    const auto payload=details.dump();
+    const auto key=phase+(details.empty() ? ":start" : ":result");
+    auto previous=feedback_seen.find(key);
+    if(previous!=feedback_seen.end() && previous->second.first==payload &&
+       now-previous->second.second<interval && details.value("success",true)) {return;}
     if(phase==feedback_phase && details.empty()) {return;}
     if(phase==feedback_phase && Clock::now()-feedback_at<std::chrono::seconds(1) &&
        !details.value("complete",false) && details.value("success",true)) {return;}
     feedback_phase=phase;feedback_at=Clock::now();
+    feedback_seen[key]={payload,now};
     auto message=std::make_shared<Task::Feedback>();message->phase=phase;message->details_json=details.dump();active->publish_feedback(message);
   }
   TaskExecutor() : Node("task_executor")
   {
     config=declare_parameter<std::string>("config", "");
     task=declare_parameter<std::string>("task_name", "s1");
-    if(task!="find_targets" && task!="s1" && task!="c1") {throw std::runtime_error("Unregistered task");}
+    if(task!="explore" && task!="find_targets" && task!="s1" && task!="c1") {throw std::runtime_error("Unregistered task");}
     c=readJson(config);directory=c.at("directory").get<std::string>();
     server=rclcpp_action::create_server<Task>(this,"/mission/tasks/"+task+"/execute",
       [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const Task::Goal> goal) {
@@ -58,10 +70,10 @@ public:
   BT::NodeStatus onStart() override
   {
     op=getInput<std::string>("operation").value();started=Clock::now();pending.reset();
-    client=n.create_client<std_srvs::srv::Trigger>("/mission/tasks/"+n.task+"/units/"+op);
+    if(!client) {client=n.create_client<std_srvs::srv::Trigger>("/mission/tasks/"+n.task+"/units/"+op);}
     n.feedback(op);
     if(op!=n.logged_operation) {
-      RCLCPP_INFO(n.get_logger(),"TASK_UNIT_STARTED: %s/%s",n.task.c_str(),op.c_str());n.logged_operation=op;
+      RCLCPP_DEBUG(n.get_logger(),"TASK_UNIT_STARTED: %s/%s",n.task.c_str(),op.c_str());n.logged_operation=op;
     }
     return BT::NodeStatus::RUNNING;
   }
@@ -154,8 +166,9 @@ int main(int argc,char ** argv)
         if(!tree) {
           n->reason.clear();finished=false;okay=false;begin=Clock::now();
           fs::remove(n->directory/("task-"+n->task+"-worker-result.json"));
+          if(n->task=="explore") {fs::remove(n->directory/"exploration-result.json");}
           n->worker.launch({"python3","-u",n->c.at("unit_worker_script").get<std::string>(),
-              "--task",n->task,"--config",n->config.string()},n->directory/(n->task=="find_targets"?"target-search.log":n->task=="s1"?"rescue.log":"cooperative.log"));
+              "--task",n->task,"--config",n->config.string()},n->directory/(n->task=="explore"?"fleet-exploration.log":n->task=="find_targets"?"target-search.log":n->task=="s1"?"rescue.log":"cooperative.log"));
           writeJson(n->directory/("task-"+n->task+"-worker-process.json"),{{"pid",n->worker.pid},{"start_ticks",processStart(n->worker.pid)}});
           tree.emplace(factory.createTreeFromFile(n->c.at("task_trees").at(n->task).get<std::string>()));
           tree->rootBlackboard()->set("complete",false);tree->rootBlackboard()->set("needs_correction",false);

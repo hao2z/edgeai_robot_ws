@@ -111,11 +111,11 @@ def adjust_joint(units):
     attempts=getattr(units,'joint_corrections',[])
     if now-units.alignment_started>n.c.get('alignment_timeout_s',60.) or len(attempts)>=n.c.get('alignment_max_actions',40):
         raise RescueAttemptFailed('Joint correction budget exhausted','correction')
-    for i,ns in enumerate(('','robot2')):
+    for i,ns in enumerate(('robot1','robot2')):
         stamp=Time.from_msg(n.odom[ns].header.stamp)
         if not 0<=now-stamp.nanoseconds/1e9<=n.c['max_data_age_s']:
             return units.wait_joint_data(now,'Correction waiting for fresh odometry')
-        try:pose=n.tf_pose('robot2/base_footprint' if ns else 'base_footprint',stamp)
+        try:pose=n.tf_pose(ns+'/base_footprint',stamp)
         except TransformException as error:return units.wait_joint_data(now,str(error))
         parking=units.selected[i]
         yaw=math.atan2(n.target['y']-parking[1],n.target['x']-parking[0])

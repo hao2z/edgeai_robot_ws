@@ -27,7 +27,12 @@ from edgeai_tasks.search_log import search_text, goal_text
 
 class Rescue(Node):
     def __init__(self, config, directory):
-        super().__init__('normal_rescue')
+        self.robot = config.get('robot', 'robot1')
+        if self.robot not in ('robot1', 'robot2'):
+            raise ValueError('Unknown rescue robot: '+str(self.robot))
+        prefix = '/'+self.robot
+        self.base_frame = self.robot+'/base_footprint'
+        super().__init__('normal_rescue_'+self.robot)
         self.c, self.directory = config, Path(directory)
         self.state = self.odom = None
         self.odom_history = deque(maxlen=100)
@@ -51,23 +56,23 @@ class Rescue(Node):
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(String, '/navigation_authority/state', self.authority, qos)
-        self.create_subscription(Odometry, '/odom', self.odometry, qos_profile_sensor_data)
+        self.create_subscription(String, prefix+'/navigation_authority/state', self.authority, qos)
+        self.create_subscription(Odometry, prefix+'/odom', self.odometry, qos_profile_sensor_data)
         self.create_subscription(OccupancyGrid, '/map', self.map_received, qos)
         if (config.get('search_frustum',{}).get('enabled',False)
                 or config.get('search_suspects',{}).get('enabled',False)):
-            self.create_subscription(CameraInfo, '/camera/camera_info', self.camera_info_received,
+            self.create_subscription(CameraInfo, prefix+'/camera/camera_info', self.camera_info_received,
                                      qos_profile_sensor_data)
         self.create_subscription(String, '/targets/estimates', self.targets_received, qos)
-        self.create_subscription(String, '/targets/suspected', self.suspects_received, qos)
-        self.client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
-        self.heading_client = ActionClient(self, NavigateToPose, '/navigation/heading_to_pose')
-        self.rescue_client = ActionClient(self, NavigateToPose, '/navigation/rescue_to_pose')
-        self.plan_client = ActionClient(self, ComputePathToPose, '/navigation_backend/compute_path_to_pose')
-        self.spin_client = ActionClient(self, Spin, '/navigation_backend/spin')
-        self.advance_client = ActionClient(self, DriveOnHeading, '/navigation_backend/drive_on_heading')
-        self.manual = self.create_client(SetBool, '/navigation_authority/set_manual')
-        self.stop = self.create_client(Trigger, '/navigation_authority/stop')
+        self.create_subscription(String, prefix+'/targets/suspected', self.suspects_received, qos)
+        self.client = ActionClient(self, NavigateToPose, prefix+'/navigate_to_pose')
+        self.heading_client = ActionClient(self, NavigateToPose, prefix+'/navigation/heading_to_pose')
+        self.rescue_client = ActionClient(self, NavigateToPose, prefix+'/navigation/rescue_to_pose')
+        self.plan_client = ActionClient(self, ComputePathToPose, prefix+'/navigation_backend/compute_path_to_pose')
+        self.spin_client = ActionClient(self, Spin, prefix+'/navigation_backend/spin')
+        self.advance_client = ActionClient(self, DriveOnHeading, prefix+'/navigation_backend/drive_on_heading')
+        self.manual = self.create_client(SetBool, prefix+'/navigation_authority/set_manual')
+        self.stop = self.create_client(Trigger, prefix+'/navigation_authority/stop')
 
     def authority(self, msg):
         self.state = json.loads(msg.data)
@@ -127,6 +132,7 @@ class Rescue(Node):
         deadline = min(self.deadline, time.monotonic()+timeout)
         while rclpy.ok() and time.monotonic() < deadline:
             if getattr(self,'stop_requested',False) and not getattr(self,'closing',False):raise KeyboardInterrupt()
+            if hasattr(self, 'pump_peers'):self.pump_peers()
             rclpy.spin_once(self, timeout_sec=.05)
             if check_owner:
                 self.check_owner()
@@ -145,13 +151,20 @@ class Rescue(Node):
             raise ValueError('Odometry stale')
         # TF and odometry arrive asynchronously. Use the newest paired sample,
         # within the age bound, instead of resetting dwell on a millisecond TF delay.
+        # Skip odometry ahead of the latest common TF time instead of issuing
+        # an extrapolation exception for every newer sample in the history.
+        frame = getattr(self, 'base_frame', 'base_footprint')
+        latest = self.buffer.lookup_transform('map', frame, Time()).header.stamp
+        latest_ns = Time.from_msg(latest).nanoseconds
         for odom in reversed(self.odom_history):
             stamp = Time.from_msg(odom.header.stamp)
             sample_time = stamp.nanoseconds/1e9
             if not 0 <= now-sample_time <= self.c['max_data_age_s']:
                 continue
+            if latest_ns and stamp.nanoseconds > latest_ns:
+                continue
             try:
-                tf = self.buffer.lookup_transform('map', 'base_footprint', stamp).transform
+                tf = self.buffer.lookup_transform('map', frame, stamp).transform
             except TransformException:
                 continue
             q, p = tf.rotation, tf.translation
@@ -184,7 +197,7 @@ class Rescue(Node):
             return approach_goal(nominal,self.c,goal['approach_angle_rad'],goal['approach_distance_m'])
         return nominal
 
-    def choose_approach(self,goal,exclude_current=False,started=None):
+    def choose_approach(self,goal,exclude_current=False,started=None,candidates=None):
         from edgeai_tasks.rescue_approach import approaches, approach_goal, failure_reason, should_change_approach
         from edgeai_tasks.cooperative_policy import footprint_clear
         registry=self.read_target_registry()
@@ -197,7 +210,7 @@ class Rescue(Node):
         footprint=json.loads(geometry['footprint'])
         pad=float(geometry.get('footprint_padding',.01))
         preferred=approach_goal(nominal,self.c,goal.get('approach_angle_rad',0.),goal.get('approach_distance_m'))
-        for candidate in [preferred]+approaches(nominal,self.c):
+        for candidate in ([preferred]+approaches(nominal,self.c) if candidates is None else candidates):
             if len(self.approach_attempts)-self.approach_round_start>=self.c.get('approach_selection',{}).get('max_candidates',12):break
             same=math.hypot(candidate['x']-goal['x'],candidate['y']-goal['y'])<.04
             if exclude_current and same:continue
@@ -241,7 +254,7 @@ class Rescue(Node):
                 record['retryable']=True
                 self.approach_transient_failures+=1
                 self.wait_to_retry(goal,started if started is not None else self.get_clock().now().nanoseconds/1e9)
-                return self.choose_approach(goal,exclude_current,started)
+                return self.choose_approach(goal,exclude_current,started,candidates=candidates)
             if terminal.status!=GoalStatus.STATUS_ABORTED or not should_change_approach(code):
                 raise RuntimeError(f'Approach planning requires {failure_reason(code)} handling: error={code}')
         raise RescueAttemptFailed('Rescue approach candidates exhausted; target estimate may be inconsistent with map','approach',208)
@@ -479,10 +492,10 @@ class Rescue(Node):
                                 sim_time_s=now, target_id=goal['target_id'], target_type='normal',
                                 robots=['robot1'], task_state='completed', judge='estimated map pose; development rules')
             except (TransformException, ValueError):
-                dwell.update(now, 0, 0, 0, 0, fresh=False)
+                dwell.awaiting_data(now)
                 if not last or now-last.get('logged_at', -100) > 5:
                     last['logged_at'] = now
-                    self.event('WAITING_DATA', '等待新鲜且时间对齐的里程计/TF，停留计时重置')
+                    self.event('WAITING_DATA', '等待新鲜且时间对齐的里程计/TF；短暂缺数保留计时，超时清零')
         raise RuntimeError('Wall timeout during dwell')
 
     def finish(self):
@@ -492,7 +505,7 @@ class Rescue(Node):
                 self.wait(future.done, timeout=5.0)
             except RuntimeError:
                 pass
-        # Never restore AUTO or override a new operator command.
+        # Never override a new operator command.
         if self.expected_sequence is not None and self.state and self.state.get('command_sequence') == self.expected_sequence:
             if self.stop.service_is_ready():
                 future = self.stop.call_async(Trigger.Request())

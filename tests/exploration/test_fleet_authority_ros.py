@@ -16,7 +16,7 @@ from navigation_authority import NavigationAuthority
 
 class FleetAuthority(unittest.TestCase):
     def test_robot2_goal_reaches_only_robot2_backend(self):
-        rclpy.init(args=['--ros-args','-r','__ns:=/robot2','-p','allow_auto:=false'])
+        rclpy.init(args=['--ros-args','-r','__ns:=/robot2'])
         with tempfile.TemporaryDirectory() as directory:
             authority=NavigationAuthority(directory,mode='MANUAL',tree='')
             backend=Node('fleet_test_backend');client_node=Node('fleet_test_client',use_global_arguments=False)
@@ -27,6 +27,7 @@ class FleetAuthority(unittest.TestCase):
             server=ActionServer(backend,NavigateToPose,'navigation_backend/navigate_to_pose',execute_callback=execute)
             robot2=ActionClient(client_node,NavigateToPose,'/robot2/navigation/rescue_to_pose')
             root=ActionClient(client_node,NavigateToPose,'/navigation/rescue_to_pose')
+            legacy=ActionClient(client_node,NavigateToPose,'/robot2/exploration/navigate_to_pose')
             executor=SingleThreadedExecutor()
             for node in (authority,backend,client_node):executor.add_node(node)
             def until(predicate):
@@ -35,7 +36,8 @@ class FleetAuthority(unittest.TestCase):
                 self.assertTrue(predicate())
             try:
                 until(lambda:robot2.server_is_ready() and authority.backend.server_is_ready())
-                self.assertFalse(root.server_is_ready())
+                until(lambda:not root.server_is_ready())
+                self.assertFalse(legacy.server_is_ready())
                 request=NavigateToPose.Goal();request.pose.header.frame_id='map'
                 request.pose.pose.position.x=2.;request.pose.pose.orientation.w=1.
                 sent=robot2.send_goal_async(request);until(sent.done)
@@ -43,7 +45,7 @@ class FleetAuthority(unittest.TestCase):
                 result=sent.result().get_result_async();until(result.done)
                 self.assertEqual(result.result().status,4)
                 self.assertEqual(calls,[2.])
-                self.assertFalse(authority.explorer_sync)
+                self.assertFalse(hasattr(authority,'explorer'))
             finally:
                 executor.shutdown();server.destroy()
                 for node in (authority,backend,client_node):node.destroy_node()

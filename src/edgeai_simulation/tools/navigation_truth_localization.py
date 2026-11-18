@@ -21,14 +21,14 @@ from truth_geometry import compose,inverse,planar
 class TruthLocalization(Node):
     def __init__(self):
         super().__init__('navigation_truth_localization')
-        self.declare_parameter('entity','edgeai_robot_real')
+        self.declare_parameter('entity','robot1')
         self.entity=self.get_parameter('entity').value
         self.buffer=Buffer(cache_time=Duration(seconds=3));self.listener=TransformListener(self.buffer,self)
         self.broadcaster=TransformBroadcaster(self);self.pending=deque(maxlen=12)
         self.pose_pub=self.create_publisher(PoseStamped,'/navigation_test/robot_pose',1)
         self.status_pub=self.create_publisher(String,'/navigation_test/status',1)
         self.last_status=0.;self.received=0.
-        self.create_subscription(TFMessage,'/truth/poses',self.receive,qos_profile_sensor_data)
+        self.create_subscription(TFMessage,'/robot1/truth/poses',self.receive,qos_profile_sensor_data)
         self.create_timer(.05,self.tick)
         self.get_logger().info('NAVIGATION_TEST: 真值定位启用，map等于仿真world；本模式不使用SLAM/AMCL')
 
@@ -43,11 +43,11 @@ class TruthLocalization(Node):
         for sample in reversed(self.pending):
             stamp=Time.from_msg(sample.header.stamp)
             if not 0<=(now-stamp).nanoseconds/1e9<.25:continue
-            try:odom=self.buffer.lookup_transform('odom','base_footprint',stamp).transform
+            try:odom=self.buffer.lookup_transform('robot1/odom','robot1/base_footprint',stamp).transform
             except TransformException:continue
             world=planar(sample.transform.translation,sample.transform.rotation)
             transform=compose(world,inverse(planar(odom.translation,odom.rotation)))
-            tf=TransformStamped();tf.header.frame_id='map';tf.child_frame_id='odom';tf.header.stamp=sample.header.stamp
+            tf=TransformStamped();tf.header.frame_id='map';tf.child_frame_id='robot1/odom';tf.header.stamp=sample.header.stamp
             tf.transform.translation.x,tf.transform.translation.y=transform[:2]
             tf.transform.rotation.z=math.sin(transform[2]/2);tf.transform.rotation.w=math.cos(transform[2]/2)
             self.broadcaster.sendTransform(tf)

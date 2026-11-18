@@ -2,6 +2,8 @@
 # Source this helper; the repository is the only editable source tree.
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PROJECT_ROOT
+# Share the same discovery capacity with missions, CLI tools and ROS shells.
+export CYCLONEDDS_URI=${CYCLONEDDS_URI:-'<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>'}
 export EDGEAI_ROS_BACKEND=${EDGEAI_ROS_BACKEND:-$(cat "$PROJECT_ROOT/runtime/ros-backend" 2>/dev/null || echo native)}
 if [[ $EDGEAI_ROS_BACKEND == native ]]; then
     export EDGEAI_BUILD_ROOT=${EDGEAI_BUILD_ROOT:-$HOME/.cache/edgeai-native-build}

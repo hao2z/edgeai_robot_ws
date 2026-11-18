@@ -112,7 +112,7 @@ class StatusROS(unittest.TestCase):
                 depth_pub = node.create_publisher(PointCloud2,'/camera/obstacle_points',10)
                 state_pub = node.create_publisher(String,'/navigation_authority/state',
                     QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-                authority = dict(mode='AUTO',phase='ACTIVE',generation=1,following_path=False,
+                authority = dict(mode='MANUAL',phase='ACTIVE',generation=1,following_path=False,
                                  arrival_policy='position',distance_remaining=1.2)
                 def send():
                     clock=Clock();clock.clock.sec=10

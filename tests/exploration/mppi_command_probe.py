@@ -8,7 +8,7 @@ from geometry_msgs.msg import Twist
 def main():
     rclpy.init()
     node = rclpy.create_node('mppi_command_probe')
-    output = node.create_publisher(Twist, '/cmd_vel_nav', 10)
+    output = node.create_publisher(Twist, '/robot1/cmd_vel_nav', 10)
     last = [0.0, True]
 
     def receive(message):
@@ -21,7 +21,7 @@ def main():
                               raw=[message.linear.x,message.angular.z],
                               modified=[command.linear.x,command.angular.z])), flush=True)
 
-    subscription = node.create_subscription(Twist, '/cmd_vel_mppi_raw', receive, 10)
+    subscription = node.create_subscription(Twist, '/robot1/cmd_vel_mppi_raw', receive, 10)
 
     def watchdog():
         if not last[1] and time.monotonic()-last[0] > .5:

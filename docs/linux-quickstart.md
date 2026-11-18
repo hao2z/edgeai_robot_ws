@@ -22,6 +22,8 @@ bash edgeai.sh check
 
 主任务、中期检查和手动导航测试支持 `--language en` / `--language zh`，默认中文。例如 `bash edgeai.sh midterm --language en`。其他子进程继承 `EDGEAI_LANGUAGE`，也可使用 `EDGEAI_LANGUAGE=en bash edgeai.sh cooperative`。项目可读事件和自定义 RViz 面板随语言切换，原始 ROS 日志保持原文。
 
+联合建图集成任务：`bash edgeai.sh mission --joint-mapping`，参数和接口见 [联合建图](joint-mapping.md)。这是独立启用的新模式；不带选项保持原单机建图流程，中期检查 P1/P2 入口不启用它。
+
 | 命令 | 用途 |
 |---|---|
 | `bash edgeai.sh mission` | 默认完整任务：RPP、Smac Lattice、中期场地、双机器人；探索阶段3600秒墙钟上限 |
@@ -57,7 +59,7 @@ bash edgeai.sh cooperative --filter-check
 - 原生Linux保留已有 `DISPLAY`、`WAYLAND_DISPLAY`、`XAUTHORITY` 和GPU驱动设置；WSL自动应用WSLg默认值。排查自动检测时可显式设置 `EDGEAI_DISPLAY_PLATFORM=native` 或 `wslg`。
 - Windows自动截图、窗口最大化和终端窗口关闭没有Linux等效；Linux日志照常保存，截图手动完成。当前仅做入口和环境检查，尚未在队员的原生Ubuntu桌面完成图形验收。
 
-任务流程、验证与遗留问题见 [项目状态](project-status.md) 和 [开发记录](development-record-2026-11-07.md)。
+任务流程、验证与遗留问题见 [项目状态](project-status.md) 和 [开发记录](history/development-record-2026-11-07.md)。
 
 ## 任务树与结果
 

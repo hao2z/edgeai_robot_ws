@@ -2,8 +2,6 @@
 enabled: true  # 探索自然完成后执行一次；时间到/进程失败不会启动救援。
 require_confirmation: false  # 一次有效定位即可救援；多帧确认仅记录质量，不作为门槛。
 goal_source: detected_target  # detected_target 或 map_pose
-# -1：选择已定位普通目标中观测数最多者；指定 ID 可固定目标。
-target_id: -1
 search_enabled: true
 search_suspects:
   enabled: false  # 中期场景默认启用；其他目标尺寸需配置检测节点。

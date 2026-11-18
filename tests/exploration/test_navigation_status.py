@@ -10,7 +10,7 @@ from navigation_status import render
 
 
 def sample():
-    return dict(authority=dict(mode='AUTO',phase='ACTIVE',generation=7,owner='AUTO',
+    return dict(authority=dict(mode='MANUAL',phase='ACTIVE',generation=7,owner='MANUAL',
                 arrival_policy='position',following_path=True,distance_remaining=1.2),
                 authority_age=.1, settings=dict(depth_enabled=True),
                 ages={k:.1 for k in ('scan','odom','depth_cloud','local_costmap')},

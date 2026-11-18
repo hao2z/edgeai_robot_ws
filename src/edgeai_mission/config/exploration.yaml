@@ -1,0 +1,18 @@
+# 探索任务的多机器人协调；顶层任务协调器不参与逐点分配。
+reservation_radius_m: 0.7  # 共享前沿池的目标预留间距；两车均可领取任意来源的未预留候选。
+completion_hold_s: 1.0  # 候选来源均新鲜、没有可重试的前沿且导航全部结束后的确认时间。
+max_candidate_age_s: 1.5
+frontier_match_radius_m: 0.6  # 旧目标附近仍有候选则继续，容忍前沿投影点漂移。
+frontier_update_hold_s: 1.0  # 墙钟；多个新鲜快照连续不含旧前沿后取消；断流不触发。
+frontier_min_navigation_s: 4.0  # 墙钟；下发后至少保留这么久，避免频繁换点。
+max_navigation_attempts: 2  # 同一候选的失败尝试上限；Nav2内部恢复独立执行。
+failure_cooldown_s: 6.0
+max_retry_rounds: 2
+arrival_cooldown_s: 2.0  # 到达后留出地图更新时间，避免反复下发同一近点。
+max_candidate_arrivals: 3  # 同一区域到达后仍无变化，报告问题而非假称探索完成。
+navigation_timeout_s: 90.0  # 墙钟；超时先取消并确认终态，不能直接复用执行槽。
+acceptance_timeout_s: 5.0
+cancel_timeout_s: 8.0
+authority_max_age_s: 2.0
+settle_s: 0.5
+# 空闲车退让统一由导航恢复树处理：edgeai_navigation/config/peer_yield.yaml。

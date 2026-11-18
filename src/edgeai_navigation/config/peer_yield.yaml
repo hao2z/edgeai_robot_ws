@@ -1,0 +1,15 @@
+lightweight: true  # Subscribe to TF and odometry only during a yield request.
+input_timeout_s: 2.0
+max_data_age_s: 0.5
+yielding:  # 导航树和C1预规划共用；仅移动已停止且空闲的另一台车。
+  enabled: true
+  yield_body_radius_m: 0.22  # 仅用于阻塞诊断近似；实际移动须通过原生规划和矩形车身检查。
+  yield_min_distance_m: 0.5
+  yield_max_distance_m: 2.0
+  yield_requester_clearance_m: 0.6
+  yield_route_clearance_m: 0.55
+  yield_sample_spacing_m: 0.2
+  yield_max_candidates: 12
+  yield_max_cells: 20000
+  yield_max_attempts: 2  # 每台机器人同一控r制权阶段内的退让尝试上限。
+  yield_navigation_timeout_s: 90.0  # 墙钟秒；同时受调用方取消约束。

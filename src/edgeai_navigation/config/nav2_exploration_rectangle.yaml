@@ -376,7 +376,7 @@ collision_monitor:
       time_before_collision: 0.3
       simulation_time_step: 0.1
       # 触发此碰撞区域所需的最少传感器点数。
-      min_points: 1
+      min_points: 8
       visualize: false
       enabled: true
     # 本层传感器输入 ID 列表；每个 ID 在下方有独立配置。

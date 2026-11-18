@@ -1,14 +1,15 @@
-<root BTCPP_format="4" main_tree_to_execute="FindRequiredTargets">
-  <BehaviorTree ID="FindRequiredTargets">
+<root BTCPP_format="4" main_tree_to_execute="FindRequiredTargetsFleet">
+  <BehaviorTree ID="FindRequiredTargetsFleet">
     <Sequence>
       <TaskUnit operation="acquire"/>
       <UntilDone>
         <Sequence>
-          <Fallback><TaskUnit operation="select_target"/><TaskUnit operation="search_target"/></Fallback>
-          <TaskUnit operation="next_target"/>
+          <TaskUnit operation="poll"/>
+          <TaskUnit operation="dispatch"/>
+          <TaskUnit operation="check_complete"/>
         </Sequence>
       </UntilDone>
-      <TaskUnit operation="check_targets"/>
+      <TaskUnit operation="cancel_all_navigation"/>
       <TaskUnit operation="record_success"/>
     </Sequence>
   </BehaviorTree>

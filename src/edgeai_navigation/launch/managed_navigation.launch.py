@@ -31,13 +31,20 @@ def setup(context):
         for name, value in params['depth_obstacle_filter']['ros__parameters'].items():
             args.extend(['-p', name+':='+json.dumps(value)])
         depth_actions.append(ExecuteProcess(cmd=args, output='screen'))
+    yielding_actions = []
+    if namespace == 'robot1':
+        script = Path(get_package_share_directory('edgeai_navigation'))/'scripts/peer_yield_server.py'
+        yielding_actions.append(ExecuteProcess(cmd=['python3','-u',str(script),
+            '--ros-args','-p','use_sim_time:='+LaunchConfiguration('use_sim_time').perform(context)],
+            output='screen'))
     return [
+        *yielding_actions,
         *depth_actions,
         GroupAction([
             PushRosNamespace(namespace),
             SetRemap(src="/tf", dst="/tf"),
             SetRemap(src="/tf_static", dst="/tf_static"),
-            SetRemap(src='controller_server:cmd_vel', dst='/cmd_vel_mppi_raw',
+            SetRemap(src='controller_server:cmd_vel', dst='/'+namespace+'/cmd_vel_mppi_raw',
                      condition=IfCondition(LaunchConfiguration('mppi_invert_linear'))),
             # MPPI's predicted optimal path uses the existing local-plan display
             # and diagnostic subscribers. DWB already publishes local_plan.
@@ -53,7 +60,7 @@ def setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('namespace', default_value=''),
+        DeclareLaunchArgument('namespace', default_value='robot1'),
         DeclareLaunchArgument('params_file'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('mppi_invert_linear', default_value='false'),

@@ -32,7 +32,7 @@ TF 发布线程停顿而仿真继续推进，就可能超出 DWB 的 0.3 秒变�
 
 RViz 的 SLAM 年龄是 `/map` 消息年龄，不是 map→odom TF 年龄。`map_update_interval: 0.5` 控制栅格重绘；源码使用扫描时间戳标记地图，故采样年龄还包含扫描与传输延迟。0.3 秒本身不足以判定异常。
 
-相关配置在 `src/edgeai_simulation/config/slam_toolbox.yaml`：
+相关配置在 `src/edgeai_mapping/config/slam_toolbox.yaml`：
 
 | 参数 | 当前值 | 作用 |
 |---|---:|---|

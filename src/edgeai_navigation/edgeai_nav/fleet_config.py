@@ -2,6 +2,26 @@
 from copy import deepcopy
 import json
 import math
+from pathlib import Path
+
+
+def frontier_endpoint_geometry(config):
+    """Give the exporter the padded global footprint and native lattice angles."""
+    grid = config['global_costmap']['global_costmap']['ros__parameters']
+    padding = float(grid.get('footprint_padding') or 0.)
+    planner = config['planner_server']['ros__parameters']
+    lattice = planner.get('GridBasedFrontier', planner['GridBased']).get('lattice_filepath')
+    headings = [i * math.tau / 16 for i in range(16)]
+    if lattice:
+        headings = json.loads(Path(lattice).read_text())['lattice_metadata']['heading_angles']
+    points = json.loads(grid.get('footprint') or '[]')
+    if points:
+        footprint = [float(v) + (math.copysign(padding, v) if v else 0.) for pt in points for v in pt]
+    else:
+        radius = (float(grid['robot_radius']) + padding) / math.cos(math.pi / 16)
+        footprint = [v * radius for i in range(16)
+                     for v in (math.cos(i * math.tau / 16), math.sin(i * math.tau / 16))]
+    return dict(frontier_footprint=footprint, frontier_heading_angles=list(map(float, headings)))
 
 
 def parking_geometry(config, settings):
@@ -26,21 +46,25 @@ def configure_peer_costmaps(config, namespace, settings):
         if 'peer_footprint' not in plugins:
             plugins.insert(plugins.index('inflation_layer'), 'peer_footprint')
         costmap['peer_footprint']=dict(plugin='edgeai_navigation::PeerFootprintLayer',
-            pose_topic='/cooperative_rescue/peer_pose/'+('robot1' if namespace else 'robot2'),
+            pose_topic='/cooperative_rescue/peer_pose/'+('robot2' if namespace.strip('/') == 'robot1' else 'robot1'),
             bounds=[min(xs),max(xs),min(ys),max(ys)],padding_m=float(global_map.get('footprint_padding',0.)),
             max_age_s=float(settings.get('max_age_s',.5)))
 
 
-def namespaced_config(config, namespace):
+def namespaced_config(config, namespace, source_namespace=''):
     namespace=namespace.strip('/')
     if not namespace or '/' in namespace:
         raise ValueError('Expected one robot namespace')
-    def visit(value):
-        if isinstance(value,dict):return {k:visit(v) for k,v in value.items()}
-        if isinstance(value,list):return [visit(v) for v in value]
+    def visit(value,key=''):
+        if isinstance(value,dict):return {k:visit(v,k) for k,v in value.items()}
+        if isinstance(value,list):return [visit(v,key) for v in value]
         if isinstance(value,str):
-            if value in ('base_footprint','base_link','odom'):
-                return namespace+'/'+value
+            for frame in ('base_footprint','base_link','odom','camera_optical_frame','lidar_link'):
+                if not key.endswith('_topic') and value == ((source_namespace.strip('/')+'/') if source_namespace else '')+frame:
+                    return namespace+'/'+frame
+            if source_namespace and value.startswith('/'+source_namespace.strip('/')+'/'):
+                return '/'+namespace+value[len(source_namespace.strip('/'))+1:]
+            if value in ('/tf','/tf_static','/clock') or value.startswith(('/targets/','/joint_mapping/','/cooperative_rescue/')):return value
             if value=='map' or value=='/map':return '/map' if value.startswith('/') else 'map'
             if value.startswith('/') and not value.startswith(('/opt/','/home/','/mnt/')):
                 return '/'+namespace+value

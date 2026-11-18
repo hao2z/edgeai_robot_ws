@@ -23,8 +23,18 @@ def stop_orphan_lock_holders():
             if not domain.isdigit():
                 continue
             lock = str(Path.home()/f'.cache/edgeai-autonomous-{domain}.lock')
-            if not any(os.readlink(fd) == lock for fd in (process/'fd').iterdir()):
-                continue
+            holds_lock = any(os.readlink(fd) == lock for fd in (process/'fd').iterdir())
+            if not holds_lock:
+                # Launch children close fd 9; ROS may later reuse that number.
+                # Recover them only through the saved PID + start-time identity.
+                session = Path(os.fsdecode(env.get(b'EDGEAI_SESSION_DIR', b'')))
+                if not session.is_absolute() or not session.resolve().is_relative_to((root/'tests/results/runs').resolve()):
+                    continue
+                identities = json.loads((session/'mission-processes.json').read_text())
+                ticks = (process/'stat').read_text().split()[21]
+                if not any(isinstance(record, dict) and record.get('pid') == pid
+                           and str(record.get('start_ticks')) == ticks for record in identities.values()):
+                    continue
             group = os.getpgid(pid)
             # Kill only the isolated project launch groups, never a terminal group.
             leader = Path('/proc')/str(group)
@@ -32,7 +42,7 @@ def stop_orphan_lock_holders():
             if b'ros2\0launch\0edgeai_' not in command:
                 continue
             groups[group] = (leader/'stat').read_text().split()[21]
-        except (FileNotFoundError, PermissionError, ProcessLookupError):
+        except (OSError, ValueError, AttributeError):
             continue
     for group, identity in groups.items():
         print(f'Stopping orphan project launch group: {group}', flush=True)

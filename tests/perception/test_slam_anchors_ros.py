@@ -28,7 +28,7 @@ class SlamAnchorsROS(unittest.TestCase):
         for parent,child in [('odom','base_footprint'),('base_footprint','laser')]:
             t=TransformStamped();t.header.frame_id=parent;t.child_frame_id=child;t.transform.rotation.w=1.;transforms.append(t)
         tf.sendTransform(transforms)
-        binary=Path(get_package_prefix('edgeai_navigation'))/'lib/edgeai_navigation/anchored_slam_toolbox'
+        binary=Path(get_package_prefix('edgeai_mapping'))/'lib/edgeai_mapping/anchored_slam_toolbox'
         try:
             with tempfile.TemporaryDirectory() as temporary:
                 with (Path(temporary)/'slam.log').open('w+') as log:

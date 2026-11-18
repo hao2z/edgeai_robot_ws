@@ -19,7 +19,7 @@ The old Pixi environment under `~/.cache/edgeai-open-source` is an explicit
 comparison backend. No preloaded arena map is given to exploration.
 
 最新目标探测、途中扫描测试与截图见
-[2026-10-30 基线报告](../mapping-target-search-baseline-2026-10-30.md)。
+[2026-10-30 基线报告](mapping-target-search-baseline-2026-10-30.md)。
 
 ## 导航参数基线（2026-10-29）
 

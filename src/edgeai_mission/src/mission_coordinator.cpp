@@ -49,8 +49,9 @@ public:
   int available_frontiers = -1;
   Clock::time_point frontier_received{};
   std::string reason, phase = "STARTING";
-  Child observation;
-  Child search_task_server, single_task_server, joint_task_server;
+  Child localization;
+  bool localization_ready = false;
+  Child exploration_task_server, search_task_server, single_task_server, joint_task_server;
   Json supervised_processes;
   Clock::time_point next_health_check{};
   std::optional<Pose> initial1, initial2, start_map;
@@ -58,12 +59,13 @@ public:
   std::unique_ptr<tf2_ros::TransformListener> listener;
   std::unique_ptr<tf2_ros::TransformBroadcaster> broadcaster;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr observation_gate;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr target_subscription;
-  bool all_targets_located = false, observation_suppressed = false;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr completion;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr frontier_subscription;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr joint_subscription;
+  Clock::time_point joint_received{};
+  std::string joint_failure;
+  bool joint_seen=false, joint_finalized=false;
   std::vector<rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> odoms;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service;
   rclcpp::TimerBase::SharedPtr seed_timer;
@@ -72,38 +74,23 @@ public:
   {
     config = declare_parameter<std::string>("config", "");
     c = readJson(config); directory = c.at("directory").get<std::string>();
-    seed_enabled = c.value("initial_pose_seed", true);
-    fs::create_directories(directory);
-    state = create_publisher<std_msgs::msg::String>("/mission/state", rclcpp::QoS(1).transient_local());
-    if (c.at("observation").get<bool>() && c.at("rescue_enabled").get<bool>()) {
-      observation_gate = create_publisher<std_msgs::msg::Bool>("/mission/observation_suppressed", rclcpp::QoS(1).transient_local());
-      target_subscription = create_subscription<std_msgs::msg::String>("/targets/estimates", rclcpp::QoS(1).transient_local(),
-        [this](std_msgs::msg::String::ConstSharedPtr m) {
-          if (observation_suppressed) {return;}
-          all_targets_located = false;
+    seed_enabled = c.value("initial_pose_seed", true) && !c.value("joint_mapping",false);
+    if (c.value("joint_mapping",false)) {
+      joint_subscription=create_subscription<std_msgs::msg::String>("/joint_mapping/status",rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::String::ConstSharedPtr message) {
           try {
-            const auto registry = Json::parse(m->data);
-            if (registry.at("frame_id") != "map") {return;}
-            const auto & required = c.at("required_targets");
-            const auto & estimates = registry.at("targets");
-            if (!required.is_array() || required.empty() || !estimates.is_array()) {return;}
-            const bool confirm = c.value("target_observation_require_confirmation", false);
-            const auto valid = [](const Json & row, const char * key) {
-              return row.contains(key) && row[key].is_number() && std::isfinite(row[key].get<double>());
-            };
-            all_targets_located = std::all_of(required.begin(), required.end(), [&](const auto & target) {
-              return std::any_of(estimates.begin(), estimates.end(), [&](const auto & row) {
-                return row.is_object() && row.contains("id") && row["id"] == target.at("id") &&
-                  row.contains("type") && row["type"] == target.at("type") &&
-                  valid(row, "x") && valid(row, "y") && valid(row, "yaw") &&
-                  (!confirm || (row.contains("confirmed") && row["confirmed"] == true));
-              });
-            });
-          } catch (const Json::exception &) {}  // No usable localization snapshot yet.
+            auto status=Json::parse(message->data);joint_received=Clock::now();joint_seen=true;
+            joint_finalized=status.value("finalized",false);
+            joint_failure=status.value("failure_reason",std::string());
+          } catch (const Json::exception &) {joint_failure="Invalid joint SLAM status";}
         });
     }
-    completion = create_subscription<std_msgs::msg::Empty>("/exploration_complete", rclcpp::QoS(1).transient_local(),
-      [this](std_msgs::msg::Empty::ConstSharedPtr) {exploration_done = true;});
+    fs::create_directories(directory);
+    state = create_publisher<std_msgs::msg::String>("/mission/state", rclcpp::QoS(1).transient_local());
+    if(!c.value("joint_mapping",false)) {
+      completion = create_subscription<std_msgs::msg::Empty>("/robot1/exploration_complete", rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::Empty::ConstSharedPtr) {exploration_done = true;});
+    }
     map_subscription = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", rclcpp::QoS(1).transient_local(),
       [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr m) {
         const double r = m->info.resolution;
@@ -123,10 +110,10 @@ public:
     buffer = std::make_unique<tf2_ros::Buffer>(get_clock());
     listener = std::make_unique<tf2_ros::TransformListener>(*buffer, this, false);
     broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(this);
-    for (const std::string ns : {"", "robot2/"}) {
+    for (const std::string ns : {"robot1/", "robot2/"}) {
       odoms.push_back(create_subscription<nav_msgs::msg::Odometry>("/"+ns+"odom", rclcpp::SensorDataQoS(),
         [this, ns](nav_msgs::msg::Odometry::ConstSharedPtr m) {
-          auto & p = ns.empty() ? initial1 : initial2;
+          auto & p = ns == "robot1/" ? initial1 : initial2;
           if (!p) {p = Pose{m->pose.pose.position.x, m->pose.pose.position.y, tf2::getYaw(m->pose.pose.orientation)};}
         }));
     }
@@ -146,9 +133,10 @@ public:
     if (!c.at("cooperative").get<bool>() || !seed_enabled || !initial1 || !initial2 || now().nanoseconds() == 0) {return;}
     if (!start_map) {
       try {
-        const auto t = buffer->lookupTransform("map", "odom", tf2::TimePointZero).transform;
+        const auto t = buffer->lookupTransform("map", "robot1/odom", tf2::TimePointZero).transform;
         start_map = compose({t.translation.x, t.translation.y, tf2::getYaw(t.rotation)}, *initial1);
-        writeJson(directory/"mission-reference.json", {{"mapping_start_pose", *start_map}, {"initial_odom2", *initial2}});
+        writeJson(directory/"mission-reference.json", {{"mapping_start_pose", *start_map},
+          {"initial_odoms",{{"robot1",*initial1},{"robot2",*initial2}}}, {"initial_odom2", *initial2}});
         event("INITIAL_REFERENCE", {{"robot1_start_map", *start_map}});
       } catch (const tf2::TransformException &) {return;}
     }
@@ -163,6 +151,16 @@ public:
   {
     if (Clock::now() < next_health_check) {return true;}
     next_health_check = Clock::now()+std::chrono::milliseconds(250);
+    if (localization_ready && localization.done()) {
+      reason="Mission localization runtime exited";return false;
+    }
+    if(c.value("joint_mapping",false)) {
+      if(exploration_task_server.done()) {reason="Exploration task server exited";return false;}
+      if(!joint_failure.empty()) {reason="Joint SLAM failure: "+joint_failure;return false;}
+      if(joint_seen && !joint_finalized && Clock::now()-joint_received>std::chrono::seconds(5)) {
+        reason="Joint SLAM status stopped updating";return false;
+      }
+    }
     if(c.at("rescue_enabled").get<bool>() && search_task_server.done()) {reason="Target search task server exited";return false;}
     if(c.at("rescue_enabled").get<bool>() && single_task_server.done()) {reason="S1 task server exited";return false;}
     if(c.at("rescue_enabled").get<bool>() && c.at("cooperative").get<bool>() && joint_task_server.done()) {reason="C1 task server exited";return false;}
@@ -172,7 +170,7 @@ public:
       supervised_processes = readJson(path);  // Atomic, immutable launch identities; not read on every tick.
     }
     for (const auto & item : supervised_processes.items()) {
-      if (item.key() == "explorer" && exploration_done) {continue;}
+      if (item.key() == "explorer" && exploration_done && !c.value("joint_mapping",false)) {continue;}
       auto proc = fs::path("/proc")/std::to_string(item.value().at("pid").get<int>())/"stat";
       std::ifstream f(proc); std::string line;
       if (!std::getline(f, line)) {reason = "Required process exited: " + item.key(); return false;}
@@ -205,54 +203,26 @@ public:
   }
 };
 
-class AwaitExploration : public BT::StatefulActionNode
+// Startup readiness only. Joint navigation and completion live in ExecuteTask.
+class AwaitMappingReady : public BT::StatefulActionNode
 {
   Coordinator & n;
-  Clock::time_point launched, started;
-  bool ready = false, finishing = false;
+  Clock::time_point launched;
 public:
-  AwaitExploration(const std::string & name, const BT::NodeConfig & config, Coordinator & node)
-  : StatefulActionNode(name, config), n(node) {}
+  AwaitMappingReady(const std::string & name,const BT::NodeConfig & config,Coordinator & node)
+  : StatefulActionNode(name,config),n(node) {}
   static BT::PortsList providedPorts() {return {};}
   BT::NodeStatus onStart() override
-  {ready = finishing = false; launched = Clock::now(); n.event("WAITING_EXPLORATION"); return BT::NodeStatus::RUNNING;}
+  {launched=Clock::now();n.event("WAITING_MAPPING_READY");return onRunning();}
   BT::NodeStatus onRunning() override
   {
-    if (!ready) {
-      if (!fs::exists(n.directory/"ready")) {
-        if (Clock::now()-launched > std::chrono::seconds(90)) {n.reason = "Startup readiness timeout"; return BT::NodeStatus::FAILURE;}
-        return BT::NodeStatus::RUNNING;
-      }
-      ready = true; started = Clock::now();
-      n.event("EXPLORING");
-      if (!n.exploration_started) {n.exploration_started = started;}
-      if (n.c.at("observation").get<bool>()) {
-        fs::path root = n.c.at("project_root").get<std::string>();
-        n.observation.launch({"python3", "-u", (root/"src/edgeai_perception/scripts/observation_scan.py").string(),
-          "--ros-args", "--params-file", (n.directory/"observation-scan-runtime.yaml").string()}, n.directory/"observation.log");
-      }
-    }
-    if (n.c.at("backend") == "lite" && !n.exploration_done) {
-      std::ifstream f(n.directory/"explore.log");
-      std::string text((std::istreambuf_iterator<char>(f)), {});
-      n.exploration_done = text.find("No frontiers found, stopping") != std::string::npos;
-      if (text.find("All frontiers traversed/tried out, stopping") != std::string::npos) {
-        n.reason = "Exploration exhausted attempted/blacklisted frontiers"; return BT::NodeStatus::FAILURE;
-      }
-    }
-    if (std::chrono::duration<double>(Clock::now()-*n.exploration_started).count() > n.c.at("exploration_timeout_s").get<double>()) {
-      n.reason = "Exploration time limit; not exploration success"; return BT::NodeStatus::FAILURE;
-    }
-    if (n.exploration_done) {
-      if (!finishing) {finishing = true; n.observation.requestStop(); n.event("FRONTIERS_EXHAUSTED");}
-      return n.observation.stopped() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::RUNNING;
-    }
-    if (n.c.at("observation").get<bool>() && n.observation.done()) {
-      n.reason = "Observation scheduler exited unexpectedly"; return BT::NodeStatus::FAILURE;
+    if(fs::exists(n.directory/"ready")) {n.event("MAPPING_READY");return BT::NodeStatus::SUCCESS;}
+    if(Clock::now()-launched>std::chrono::seconds(90)) {
+      n.reason="Startup readiness timeout";return BT::NodeStatus::FAILURE;
     }
     return BT::NodeStatus::RUNNING;
   }
-  void onHalted() override {n.observation.stop();}
+  void onHalted() override {}
 };
 
 class MissionStage : public BT::StatefulActionNode
@@ -287,6 +257,68 @@ public:
     return okay ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
   }
   void onHalted() override {child.stop();}
+};
+
+// This process outlives individual tasks: C1 must never restart S1's localization.
+class EnableLocalization : public BT::StatefulActionNode
+{
+  Coordinator & n;
+  Clock::time_point started;
+  std::string state_read_error;
+public:
+  EnableLocalization(const std::string & name,const BT::NodeConfig & config,Coordinator & node)
+  : StatefulActionNode(name,config),n(node) {}
+  static BT::PortsList providedPorts() {return {};}
+  BT::NodeStatus onStart() override
+  {
+    // Legacy/custom mission configs retain their explicitly selected workflow.
+    if(!n.c.value("post_mapping_localization",false)) {return BT::NodeStatus::SUCCESS;}
+    if(n.localization_ready) {return BT::NodeStatus::SUCCESS;}
+    n.localization.stop();
+    n.stopOwnedProcess(n.directory/"mission-owned-navigation.json","CLEANUP_FAILED_LOCALIZATION");
+    n.seed_enabled=false;started=Clock::now();state_read_error.clear();
+    fs::remove(n.directory/"localization-state.json");
+    n.event("LOCALIZATION_STARTING");
+    n.localization.launch({"python3","-u",n.c.at("localization_worker_script").get<std::string>(),
+      "--config",n.config.string()},n.directory/"localization.log");
+    return BT::NodeStatus::RUNNING;
+  }
+  BT::NodeStatus onRunning() override
+  {
+    const auto path=n.directory/"localization-state.json";
+    Json state=Json::object();
+    // A live status file is replaced by another process. A transient open/read
+    // failure must stay within the BT startup timeout, not bypass its retries.
+    try {
+      if(fs::exists(path)) {
+        state=readJson(path);
+        if(!state.is_object()) {throw std::runtime_error("Localization state is not an object");}
+      }
+      state_read_error.clear();
+    } catch(const std::exception & error) {
+      if(state_read_error!=error.what()) {
+        n.event("LOCALIZATION_STATE_RETRY",{{"reason",error.what()}});
+      }
+      state_read_error=error.what();state=Json::object();
+    }
+    const bool exited=n.localization.done();
+    if(exited || state.value("phase",std::string())=="FAILED" ||
+       std::chrono::duration<double>(Clock::now()-started).count()>
+         n.c.value("localization",Json::object()).value("startup_timeout_s",240.)) {
+      n.reason="Localization: "+state.value("reason",exited ? "Runtime exited" :
+        (state_read_error.empty() ? "Startup timeout" : "Startup timeout; "+state_read_error));
+      n.localization.stop();
+      n.stopOwnedProcess(n.directory/"mission-owned-navigation.json","CLEANUP_FAILED_LOCALIZATION");
+      n.event("LOCALIZATION_FAILED",{{"reason",n.reason}});
+      return BT::NodeStatus::FAILURE;
+    }
+    if(state.value("ready",false)) {
+      n.localization_ready=true;n.reason.clear();n.event("LOCALIZATION_READY",{{"result",state}});
+      return BT::NodeStatus::SUCCESS;
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+  void onHalted() override {n.localization.stop();}
 };
 
 // Task switching belongs to the coordinator tree, never the velocity/authority layer.
@@ -332,10 +364,11 @@ public:
   BT::NodeStatus onStart() override
   {
     task=getInput<std::string>("task").value();started=Clock::now();sent={};result={};handle.reset();
-    if(task!="find_targets" && task!="s1" && task!="c1") {throw std::runtime_error("Unregistered task");}
-    if(task=="c1" && n.c.value("demonstration_part", "integrated") != "part2") {
-      if(!n.start_map) {n.reason="Missing mapping-start reference";return BT::NodeStatus::FAILURE;}
-      n.seed_enabled=false;
+    if(task!="explore" && task!="find_targets" && task!="s1" && task!="c1") {throw std::runtime_error("Unregistered task");}
+    if(task=="explore") {
+      n.exploration_done=false;
+      if(!n.exploration_started) {n.exploration_started=started;}
+      n.event("EXPLORING",{{"source","exploration_task"}});
     }
     client=rclcpp_action::create_client<Action>(&n,"/mission/tasks/"+task+"/execute");
     n.event("TASK_REQUESTED",{{"task",task}});return BT::NodeStatus::RUNNING;
@@ -363,6 +396,7 @@ public:
     if(result.wait_for(std::chrono::seconds(0))!=std::future_status::ready) {return BT::NodeStatus::RUNNING;}
     const auto terminal=result.get();bool okay=terminal.code==rclcpp_action::ResultCode::SUCCEEDED && terminal.result->success;
     n.event("TASK_FINISHED",{{"task",task},{"success",okay},{"reason",terminal.result->reason}});
+    if(task=="explore" && okay) {n.exploration_done=true;n.event("FRONTIERS_EXHAUSTED",{{"source","exploration_task"}});}
     if(!okay) {n.reason=task+": "+terminal.result->reason;}
     return okay?BT::NodeStatus::SUCCESS:BT::NodeStatus::FAILURE;
   }
@@ -391,6 +425,10 @@ int main(int argc, char ** argv)
   bool success = false;
   try {
     n = std::make_shared<Coordinator>();
+    {
+      auto binary=n->c.value("task_server_executable",(fs::read_symlink("/proc/self/exe").parent_path()/"task_executor").string());
+      n->exploration_task_server.launch({binary,"--ros-args","-p","config:="+n->config.string(),"-p","task_name:=explore","-r","__node:=explore_task_executor"},n->directory/"exploration-task.log");
+    }
     if(n->c.at("rescue_enabled").get<bool>()) {
       auto binary=n->c.value("task_server_executable",(fs::read_symlink("/proc/self/exe").parent_path()/"task_executor").string());
       n->search_task_server.launch({binary,"--ros-args","-p","config:="+n->config.string(),"-p","task_name:=find_targets","-r","__node:=find_targets_task_executor"},n->directory/"find-targets-task.log");
@@ -398,24 +436,14 @@ int main(int argc, char ** argv)
       if(n->c.at("cooperative").get<bool>()) {n->joint_task_server.launch({binary,"--ros-args","-p","config:="+n->config.string(),"-p","task_name:=c1","-r","__node:=c1_task_executor"},n->directory/"c1-task.log");}
     }
     BT::BehaviorTreeFactory f;
-    f.registerBuilder<AwaitExploration>("AwaitExploration", [&n](auto & name, auto & config) {return std::make_unique<AwaitExploration>(name, config, *n);});
+    f.registerBuilder<AwaitMappingReady>("AwaitMappingReady", [&n](auto & name, auto & config) {return std::make_unique<AwaitMappingReady>(name, config, *n);});
     f.registerBuilder<MissionStage>("MissionStage", [&n](auto & name, auto & config) {return std::make_unique<MissionStage>(name, config, *n);});
+    f.registerBuilder<EnableLocalization>("EnableLocalization", [&n](auto & name, auto & config) {return std::make_unique<EnableLocalization>(name, config, *n);});
     f.registerBuilder<AwaitFrontier>("AwaitFrontier", [&n](auto & name, auto & config) {return std::make_unique<AwaitFrontier>(name, config, *n);});
     f.registerBuilder<ExecuteTask>("ExecuteTask",[&n](const auto & name,const auto & config){return std::make_unique<ExecuteTask>(name,config,*n);});
     f.registerSimpleCondition("RescueEnabled", [&n](BT::TreeNode &) {return n->c.at("rescue_enabled").get<bool>() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;});
+    f.registerSimpleCondition("JointMappingEnabled", [&n](BT::TreeNode &) {return n->c.value("joint_mapping",false) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;});
     f.registerSimpleCondition("CooperativeEnabled", [&n](BT::TreeNode &) {return n->c.at("cooperative").get<bool>() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;});
-    f.registerSimpleCondition("AllRequiredTargetsLocated", [&n](BT::TreeNode &) {
-      return n->all_targets_located ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
-    });
-    f.registerSimpleAction("SuppressObservation", [&n](BT::TreeNode &) {
-      if (!n->observation_suppressed) {
-        n->observation_suppressed = true;
-        std_msgs::msg::Bool message; message.data = true;
-        n->observation_gate->publish(message);
-        n->event("OBSERVATION_SUPPRESSED_TARGETS_LOCATED", {{"required_targets", n->c.at("required_targets")}});
-      }
-      return BT::NodeStatus::SUCCESS;
-    });
     f.registerSimpleCondition("MapAreaSufficient", [&n](BT::TreeNode &) {
       const double required = n->c.value("mapping", Json::object()).value("min_known_area_m2", 18.0);
       const bool fresh = n->valid_map && Clock::now()-n->map_received < std::chrono::seconds(5);
@@ -437,6 +465,7 @@ int main(int argc, char ** argv)
     });
     auto blackboard = BT::Blackboard::create();
     blackboard->set("mapping_attempts", n->c.value("mapping", Json::object()).value("supplement_attempts", 3)+1);
+    blackboard->set("localization_attempts", n->c.value("localization",Json::object()).value("startup_attempts",2));
     tree.emplace(f.createTreeFromFile(n->c.at("tree").get<std::string>(), blackboard));
     auto begin = Clock::now();
     while (rclcpp::ok()) {
@@ -458,13 +487,13 @@ int main(int argc, char ** argv)
   if (n) {n->event("FINISHED", {{"success", success}, {"completed_wall_monotonic_s", completed_wall}});}
   if (tree) {tree->haltTree();}
   if (n) {
-    n->observation.stop();
-    n->search_task_server.stop();n->single_task_server.stop();n->joint_task_server.stop();
-    for(const std::string task:{"find_targets","s1","c1"}) {n->stopOwnedProcess(n->directory/("task-"+task+"-worker-process.json"),"CLEANUP_ORPHAN_TASK_BACKEND");}
+    n->exploration_task_server.stop();n->search_task_server.stop();n->single_task_server.stop();n->joint_task_server.stop();
+    n->localization.stop();
+    for(const std::string task:{"explore","find_targets","s1","c1"}) {n->stopOwnedProcess(n->directory/("task-"+task+"-worker-process.json"),"CLEANUP_ORPHAN_TASK_BACKEND");}
     n->stopOwnedProcess(n->directory/"mission-owned-navigation.json","CLEANUP_OWNED_NAVIGATION");
-    // Cancellation of the mission also stops the AUTO explorer through authority.
-    for (const std::string ns : {"", "robot2/"}) {
-      if (!ns.empty() && !n->c.at("cooperative").get<bool>()) {continue;}
+    // Cancellation of the mission stops each robot through its navigation authority.
+    for (const std::string ns : {"robot1/", "robot2/"}) {
+      if (ns == "robot2/" && !n->c.at("cooperative").get<bool>() && !n->c.value("joint_mapping",false)) {continue;}
       auto client = n->create_client<std_srvs::srv::Trigger>("/"+ns+"navigation_authority/stop");
       auto until = Clock::now()+std::chrono::seconds(2);
       while (rclcpp::ok() && !client->service_is_ready() && Clock::now() < until) {

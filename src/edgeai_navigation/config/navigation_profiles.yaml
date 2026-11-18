@@ -67,7 +67,7 @@ baseline:
     collision_monitor:
       ros__parameters:
         FootprintApproach:
-          min_points: 3
+          min_points: 8
     controller_server:
       ros__parameters:
         failure_tolerance: 0.3

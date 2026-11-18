@@ -65,7 +65,8 @@ protected:
     map.metadata.resolution=.05;map.metadata.size_x=map.metadata.size_y=100;map.metadata.origin.orientation.w=1.;map.data.assign(10000,0);
     // A rear wall blocks both backup candidates but leaves a forward exit.
     for(unsigned y=0;y<100;++y){map.data[y*100+32]=254;}
-    if(occupied){map.data[40*100+40]=254;}
+    // Native Nav2 rasterizes the footprint boundary, so occupy the front edge.
+    if(occupied){map.data[40*100+42]=254;}
     map_pub->publish(map);
     geometry_msgs::msg::PolygonStamped foot;foot.header=map.header;
     for(const auto & xy:std::vector<std::pair<double,double>>{{.1225,.175},{-.3225,.175},{-.3225,-.175},{.1225,-.175}}){

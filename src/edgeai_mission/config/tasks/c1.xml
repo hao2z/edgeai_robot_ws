@@ -2,11 +2,10 @@
   <BehaviorTree ID="JointRescue">
     <Sequence>
       <TaskUnit operation="handover"/>
-      <!-- Startup readiness/localization can be retried without replaying map handover. -->
+      <!-- The mission owns AMCL. C1 reuses the completed convergence; only checks navigation readiness. -->
       <RetryTask attempts="{navigation_attempts}">
         <Sequence>
           <TaskUnit operation="wait_navigation_ready"/>
-          <TaskUnit operation="localize"/>
         </Sequence>
       </RetryTask>
       <TaskUnit operation="prepare_target"/>
@@ -24,9 +23,18 @@
                   <TaskUnit operation="recover_preplan_start"/>
                   <TaskUnit operation="select_parking_locked"/>
                 </Sequence>
+                <!-- 已开始的退让由对方导航执行至终态，再重新选点；
+                     C1 不在退让期间反复取消对方导航。 -->
+                <Sequence name="ReleasePeerRouteThenReplanParking">
+                  <Inverter><TaskErrorIs category="fatal"/></Inverter>
+                  <TaskUnit operation="cancel_all_navigation"/>
+                  <TaskUnit operation="yield_peer"/>
+                  <TaskUnit operation="select_parking"/>
+                </Sequence>
                 <!-- Retarget both only when no viable pair preserves the healthy robot. -->
                 <Sequence>
                   <Inverter><TaskErrorIs category="start_occupied"/></Inverter>
+                  <Inverter><TaskErrorIs category="fatal"/></Inverter>
                   <TaskUnit operation="cancel_all_navigation"/><TaskUnit operation="select_parking"/>
                 </Sequence>
               </Fallback>

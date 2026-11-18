@@ -44,7 +44,32 @@ def prepare(source, output):
                  '  // Zero delegates progress and recovery to Nav2 until a terminal result.\n'
                  '  if (params.frontier_suppression_no_progress_timeout_s <= 0.0) {\n'
                  '    return false;\n  }\n')
-    test = '''TEST(FrontierSuppressionCoreTests, Nav2OwnsRecoveryUntilTerminalResult)
+    test = '''TEST(FrontierSuppressionCoreTests, EndpointRequiresRoomForAtLeastOneHeading)
+{
+  auto grid = build_grid(30, 30, 100);
+  grid.info.resolution = 0.05;
+  const std::vector<double> body{.1225, .175, -.3225, .175, -.3225, -.175, .1225, -.175};
+  FrontierEndpointClearance all_headings;
+  all_headings.configure(body, {0., 1.5707963267948966});
+  FrontierEndpointClearance only_crosswise;
+  only_crosswise.configure(body, {0.});
+  for (int y = 0; y < 30; ++y) {
+    for (int x = 11; x <= 18; ++x) {grid.data[y * 30 + x] = 0;}
+  }
+  EXPECT_TRUE(all_headings.allows(OccupancyGrid2d(grid), .75, .75, 90));
+  EXPECT_FALSE(only_crosswise.allows(OccupancyGrid2d(grid), .75, .75, 90));
+  for (int y = 0; y < 30; ++y) {
+    grid.data[y * 30 + 11] = 100;
+    grid.data[y * 30 + 18] = 100;
+  }
+  EXPECT_FALSE(all_headings.allows(OccupancyGrid2d(grid), .75, .75, 90));
+  // Unknown neighbouring cells are allowed, while footprint outside the map is not.
+  grid.data.assign(900, -1);
+  EXPECT_TRUE(all_headings.allows(OccupancyGrid2d(grid), .75, .75, 90));
+  EXPECT_FALSE(all_headings.allows(OccupancyGrid2d(grid), .025, .025, 90));
+}
+
+TEST(FrontierSuppressionCoreTests, Nav2OwnsRecoveryUntilTerminalResult)
 {
   int64_t now_ns = 0;
   int dispatch_calls = 0;

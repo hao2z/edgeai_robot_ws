@@ -133,7 +133,7 @@ def render(snapshot):
     rows = []
     def row(name, value):
         rows.append('<tr><td><b>'+escape(name)+'</b></td><td>'+escape(value)+'</td></tr>')
-    mode = {'AUTO':'自动探索','MANUAL':'手动/任务接管','STOPPED':'停止'}.get(a.get('mode'),'未知')
+    mode = {'MANUAL':'手动/任务接管','STOPPED':'停止'}.get(a.get('mode'),'未知')
     row('任务', f'{mode} · #{a.get("generation","—")} · '+
         {'position':'位置到点','heading':'朝向到点','rescue':'救援到点','frontier':'前沿位置到点'}.get(policy,'无当前到点策略'))
     action = snapshot.get('navigation_action') or {}

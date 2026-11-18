@@ -1,246 +1,39 @@
 # EdgeAI Robot Workspace
 
-The canonical development workspace is this repository, on branch
-[`codex/Junnan-dev`](https://github.com/hao2z/edgeai_robot_ws/tree/codex/Junnan-dev).
+ROS 2 Jazzy / Gazebo 多机器人探索与救援。工作目录为本仓库；单机作为一台活动机器人的特例，使用 `/robot1`，双机使用 `/robot1`、`/robot2`，共享 `/map` 和 TF。
 
-| Directory | Purpose |
-|---|---|
-| `src/edgeai_robot_description/` | Robot URDF and basic RViz configuration |
-| `src/edgeai_simulation/` | Gazebo launch files, worlds, targets and arena tools |
-| `src/edgeai_navigation/` | Shared Nav2 configuration, independent controller tuning and control authority |
-| `src/edgeai_mission/` | Fixed-rule coordinator, S1/C1 task Actions and behavior trees |
-| `src/edgeai_perception/` | Continuous ArUco, RGB-D/laser hints and target localization |
-| `src/edgeai_exploration/` | Frontier configuration, upstream adapters and exploration visualization |
-| `src/edgeai_navigation_rviz/` | RViz navigation panel plugin |
-| `tests/` | Simulation and exploration checks, observation documentation |
-| `scripts/` | Build, environment, simulation, display and capture tools |
-| `docs/competition/` | Competition source documents |
-| `runtime/`, `tests/results/` | Local state, retired-script archives and per-run evidence; excluded from Git |
-
-当前已跑通单机建图、目标定位、S1 单救援与 C1 双机器人协作救援。
-默认 Windows 入口使用 native Jazzy + RPP + Smac Lattice；当前进度、成功轮次证据、限制和启动方式见
-[项目状态（2026-11-11）](docs/project-status.md)、[文档索引](docs/README.md)及[双机协作救援](docs/cooperative-rescue.md)。
-
-历史建图＋目标寻找版本的结果、截图和限制见
-[2026-10-30 开发基线](docs/mapping-target-search-baseline-2026-10-30.md)。
-
-当前可运行基线、常调参数位置、最近测试与已知限制见
-[AUTONOMOUS_EXPLORATION.md](AUTONOMOUS_EXPLORATION.md)。
-
-Linux队员从 [Linux上手说明](docs/linux-quickstart.md) 开始；统一入口为 `bash edgeai.sh mission`，帮助为 `bash edgeai.sh --help`。
-
-Windows/WSL entry points, run from this directory:
-
-中期检查新场地、S1/C1 标记和双机起点使用
-默认任务入口为 `Start-Autonomous-Mission.ps1`：robot1 探索并完成 S1，随后共享地图定位并执行 C1 双机救援。
-仅查看双机环境用 `Start-Simulation.ps1 -Robots 2`（[脚本职责](docs/windows-entrypoints.md)），见
-[中期仿真环境](docs/competition/midterm-environment.md)。
+默认流程：联合建图与寻找全部目标 → 保存地图、切换AMCL定位 → S1 → C1。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1
-powershell -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1 -Controller rpp -Arena midterm -Duration 3600
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Start-Autonomous-Mission.ps1
 ```
-
-Alternatively, run directly in the Ubuntu-24.04 WSL terminal:
 
 ```bash
-cd /mnt/d/KTH/Competition/edgeai_robot_ws
-bash scripts/simulation/start-autonomous-exploration.sh --controller rpp --planner lattice --arena midterm --duration 3600
+bash edgeai.sh build
+bash edgeai.sh mission --joint-mapping
 ```
 
-Both entries default to the native apt Jazzy environment. No manual `source`
-or Pixi activation is required. Use Linux `--backend native` / Windows
-`-Backend native` to override a saved backend. Linux `--check` / Windows
-`-CheckOnly` validates the environment and installed project packages without
-starting or stopping a session. Duration limits the exploration stage in wall-clock seconds; target search and rescue tasks have separate budgets. It is not a competition-wide timer.
+Windows启动参数在 `Start-Autonomous-Mission.ps1` 顶部；Linux入口运行 `bash edgeai.sh --help`。
 
-This opens Gazebo/RViz, stops registered previous project sessions and streams
-events in the current terminal. Per-run logs and the final map are saved under
-`tests/results/runs/`; completed history is pruned after the test, with a visible
-cleanup message. Windows monitor windows, automatic maximization and screenshot
-automation are supplied by the PowerShell launcher. With the direct WSL entry,
-close any old project terminal tabs yourself; Ctrl+C stops the active test.
-
-With the PowerShell launcher, restart closes previous project processes and terminal tabs. Gazebo opens
-maximized with an inclined arena overview. Raw logs, readable key events and
-startup/progress/final screenshots are retained per run. See the
-[observation workflow](tests/docs/test-observation.md) and
-[exploration results and limitations](AUTONOMOUS_EXPLORATION.md).
-Current axle-centred footprint, smaller curve primitives and the distinction
-between goal tolerance and measured accuracy are documented in
-[geometry and accuracy](docs/geometry-and-accuracy.md).
-RViz also shows global/local costs and paths, same-time footprint comparisons,
-SLAM correction and message ages; see [visualization and time alignment](docs/rviz-navigation-observability.md).
-Large heading changes use Nav2 Rotation Shim before RPP tracking; ordinary
-exploration gain updates no longer repeatedly cancel the active goal. See
-[turning and goal coordination diagnosis](docs/history/navigation-turn-diagnosis-2026-10-28.md).
-
-A ROS 2 workspace for a realistic differential-drive robot in Gazebo, with RViz visualization, LiDAR, an RGB-D camera, and SLAM toolbox mapping.
-
-The simulator now includes a noisy raw IMU, four development ArUco targets,
-configurable rescue-zone visuals and optional 1–4 robot namespaces. See
-[SIMULATION.md](SIMULATION.md) for configuration, frame conventions and tests.
-The midterm mission maps with robot1, completes S1, then hands the saved map to
-two AMCL instances for C1 cooperative rescue. Simultaneous multi-robot SLAM/map
-fusion and coordinated narrow-passage scheduling remain outside this baseline.
-
-## Environment
-
-- Ubuntu 24.04 (x86-64).
-- Gazebo Harmonic.
-- ROS 2 Jazzy from the official Ubuntu apt repository for the native backend.
-- A graphical desktop for Gazebo and RViz; Windows launchers use WSLg by default.
-
-Environment activation is centralized in `scripts/ros/with-ros-env.sh`.
-Select native ROS with `EDGEAI_ROS_BACKEND=native`, or save `native` in the
-machine-local `runtime/ros-backend` file after migration validation. Native ROS
-uses `/opt/ros/jazzy/setup.bash`. The retained Pixi backend and its lockfiles
-remain available for regression comparisons; start native ROS outside a
-Pixi/Conda shell.
-
-## Install and build
+手动导航使用 `Start-Navigation-Test.ps1`（如需确认实际专项入口，见[Windows入口](docs/windows-entrypoints.md)）或：
 
 ```bash
-git clone --branch codex/Junnan-dev https://github.com/hao2z/edgeai_robot_ws.git
-cd edgeai_robot_ws
-sudo bash scripts/setup/install-native-ros.sh
-EDGEAI_ROS_BACKEND=native bash scripts/setup/build-workspace.sh
+bash edgeai.sh navigation
 ```
 
-Run these commands from the repository root. Native build output is placed in
-`~/.cache/edgeai-native-build`, overridable with `EDGEAI_BUILD_ROOT`. The build
-uses this checkout's `src`; no separate editable WSL copy is required.
-Rebuild with `bash scripts/setup/build-workspace.sh` after package changes.
-During migration, the native frontier overlay is built separately from the
-pinned source cache with:
+## 日常维护入口
 
-```bash
-EDGEAI_ROS_BACKEND=native bash scripts/setup/build-frontier-runtime.sh
-```
+| 事项 | 唯一主要入口 |
+|---|---|
+| 安装与启动 | [Linux上手](docs/linux-quickstart.md)、[Windows入口](docs/windows-entrypoints.md) |
+| 任务、分配、机器人职责 | [任务层协调](docs/fleet-task-coordination.md) |
+| 导航策略与调参 | [分用途导航配置](docs/navigation-task-profiles.md) |
+| 验证方式 | [测试说明](tests/README.md) |
 
-The legacy Pixi installation entry is `scripts/setup/install-workspace.sh`;
-its dependency manifests remain in the repository. For the Pixi navigation
-backend, prepare its pinned environment and explorer with:
+比赛原文保存在 `docs/competition/`；专题资料与历史记录见[文档索引](docs/README.md)。
+单机全流程的最新验证限制见[命名空间验证记录](docs/native-namespace-validation.md)。
 
-```bash
-EDGEAI_ROS_BACKEND=pixi bash scripts/setup/prepare-open-source.sh
-```
+源码按职责放在 `src/edgeai_mapping`、`edgeai_exploration`、`edgeai_navigation`、`edgeai_mission`、`edgeai_perception`、`edgeai_simulation`、`edgeai_robot_description` 和 `edgeai_navigation_rviz`、`edgeai_mission_control`。
+`scripts/` 负责环境与启动；`runtime/`、`tests/results/` 保存本地状态和运行证据，不提交。
 
-## Start the simulation
-
-From the repository root:
-
-```bash
-bash start_sim.sh
-```
-
-The script resolves the workspace relative to its own location, activates the selected ROS backend,
-sources the build cache's `install/local_setup.bash`, launches
-`simulation_real.launch.py`, and opens RViz with `realistic_robot.rviz`.
-Press **Ctrl+C** in its terminal to stop the launched session.
-
-The low-level launch loads `edgeai_robot_real.urdf.xacro`, defaults to `worlds/midterm.sdf` and the midterm target/start configuration, spawns `edgeai_robot_real`, and starts the ROS–Gazebo bridge and robot transforms. `start_sim.sh` remains a simulation-only entry point; the Windows default mission entry runs mapping/target search, S1, then C1 with two robots.
-
-The default mission includes shared-map handover and two AMCL instances. See [task workflow](docs/task-workflow.md) for task Actions, checks and bounded retries. The first mapping task checks all required rescue targets and searches for missing markers before starting S1.
-
-## ROS commands in another terminal
-
-In each additional terminal, enter the cloned repository and activate its environment:
-
-```bash
-cd /path/to/edgeai_robot_ws
-EDGEAI_ROS_BACKEND=native bash scripts/ros/open-ros-terminal.sh
-```
-
-Replace `/path/to/edgeai_robot_ws` with your clone location. The following commands assume this setup and a running simulation.
-
-### Main topics
-
-| Topic | ROS message type | Purpose |
-| --- | --- | --- |
-| `/cmd_vel` | `geometry_msgs/msg/Twist` | Robot velocity commands |
-| `/odom` | `nav_msgs/msg/Odometry` | Gazebo DiffDrive odometry |
-| `/tf` | `tf2_msgs/msg/TFMessage` | Dynamic transforms, including `odom` → `base_footprint` |
-| `/tf_static` | `tf2_msgs/msg/TFMessage` | Fixed robot and sensor transforms |
-| `/joint_states` | `sensor_msgs/msg/JointState` | Simulated joint states |
-| `/scan` | `sensor_msgs/msg/LaserScan` | LiDAR scan |
-| `/camera/image` | `sensor_msgs/msg/Image` | RGB image |
-| `/camera/depth_image` | `sensor_msgs/msg/Image` | Depth image |
-| `/camera/camera_info` | `sensor_msgs/msg/CameraInfo` | Camera calibration |
-| `/camera/points` | `sensor_msgs/msg/PointCloud2` | RGB-D point cloud |
-| `/clock` | `rosgraph_msgs/msg/Clock` | Simulation time |
-| `/map` | `nav_msgs/msg/OccupancyGrid` | Occupancy map when SLAM toolbox is running |
-
-The saved RViz configuration uses `odom` as its fixed frame. To inspect available topics:
-
-```bash
-ros2 topic list
-ros2 topic echo /odom --once
-```
-
-### Move and stop
-
-In clear space, publish a slow forward command:
-
-```bash
-ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist \
-  '{linear: {x: 0.1}, angular: {z: 0.0}}'
-```
-
-Stop the publisher with **Ctrl+C**, then explicitly send a zero velocity command:
-
-```bash
-ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
-  '{linear: {x: 0.0}, angular: {z: 0.0}}'
-```
-
-Stopping the publisher alone should not be treated as a robot stop command.
-
-## Mapping with SLAM toolbox
-
-Keep the simulation running. In another prepared terminal at the repository root:
-
-```bash
-ros2 launch slam_toolbox online_async_launch.py \
-  slam_params_file:="$PWD/src/edgeai_simulation/config/slam_toolbox.yaml" \
-  use_sim_time:=true
-```
-
-The repository configuration uses `/scan`, `base_footprint`, `odom`, and `map`, with mapping mode enabled and a map resolution of 0.05 m. Simulation time comes from the bridged `/clock` topic. The simulation startup script does not start SLAM automatically.
-
-In RViz, set **Fixed Frame** to `map` after SLAM starts and add a **Map** display for `/map`. Drive slowly through free space to collect scans and revisit previously observed areas. Avoid sustained contact with walls or obstacles.
-
-### Save the occupancy map
-
-While SLAM is running and `/map` is available, use another prepared terminal at the repository root:
-
-```bash
-mkdir -p maps
-ros2 run nav2_map_server map_saver_cli -f "$PWD/maps/my_map" \
-  --ros-args -p use_sim_time:=true
-```
-
-This writes `maps/my_map.yaml` and its associated map image. Choose a new basename for each map you want to preserve. These files are occupancy-map exports, not a serialized SLAM toolbox pose graph for resuming a mapping session.
-
-The package also contains `src/edgeai_simulation/maps/edgeai_arena.yaml` and its map image. Saving `maps/my_map` does not overwrite the packaged map.
-
-## Known limitation: odometry drift during collisions
-
-In the reported movement tests, normal straight driving stayed synchronized between Gazebo and RViz, and an explicit stop command stopped the robot. When the robot contacted a wall or obstacle, its physical motion in Gazebo stopped while `/odom` continued changing and the robot in RViz continued moving.
-
-The current `/odom` source is the Gazebo DiffDrive plugin. Treat this odometry as an estimate rather than collision-corrected ground truth: wheel motion under contact or slip can diverge from actual displacement. The observed collision drift remains unresolved. Stop the robot when it becomes blocked, avoid driving into obstacles during mapping, and do not interpret continued RViz movement as physical motion in Gazebo. SLAM is not a guarantee that this behavior is corrected.
-
-## Repository layout
-
-See [workspace layout](docs/workspace-layout.md) for package boundaries,
-build locations and the archive of retired scripts. The root `start_sim.sh`
-remains the simulation entry point. The former root `algorithms/` and
-`simulation/` directories have been consolidated into the packages under `src/`.
-# 原生 Jazzy 环境
-
-原生 apt 环境的准备、测试结果和回退方法见 [迁移记录](docs/native-ros-migration.md)。
-
-建图时默认同步识别 ArUco 并记录目标地图坐标，配置和当前限制见
-[src/edgeai_perception/README.md](src/edgeai_perception/README.md)。
-
-单机器人建图后的一次普通救援、目标清单字段和常改参数见 [普通救援说明](docs/normal-rescue.md)。
+不再维护独立AUTO探索模式或Explore Lite分支。探索器只产生候选，由任务层派发导航；手动导航和专项运动测试保留。

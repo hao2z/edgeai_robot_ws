@@ -1,0 +1,4 @@
+# 建图任务完成后，顶层协调器先完成定位接管，再派发救援。
+startup_attempts: 2  # 启动/收敛失败后的总尝试次数；不重复建图任务。
+startup_timeout_s: 240.0  # 每次接管的墙钟预算，包含地图交接、生命周期启动及激光收敛。
+# AMCL初值、收敛与激光匹配阈值沿用 navigation/config/cooperative_rescue.yaml。

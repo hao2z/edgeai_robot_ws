@@ -11,6 +11,8 @@
 | 恢复顺序和重新规划频率 | `behavior_trees/explore_recovery.xml` |
 | 救援及补充搜寻任务 | `normal_rescue.yaml`、`midterm_single_rescue.yaml` |
 | 双机初始相对位姿、AMCL门槛、C1停车位与共同停留 | `cooperative_rescue.yaml` |
+| 联合建图初值、激光配准、公共图更新 | `edgeai_mapping/config/joint_mapping.yaml`（`-JointMapping` / `--joint-mapping`） |
+| 多机器人前沿分配、超时、重试与让路 | `edgeai_mission/config/exploration.yaml` |
 | 建图时过滤停放的第二台机器人回波 | `fleet_scan_filter.yaml` |
 | 历史baseline/safe配置与MPPI圆形对照差异 | `navigation_profiles.yaml` |
 

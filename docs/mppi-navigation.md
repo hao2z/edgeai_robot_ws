@@ -30,8 +30,8 @@ MPPI 预测轨迹通过 `optimal_trajectory → local_plan` 映射复用 RViz �
 启用轨迹发布但不默认显示所有采样轨迹；可视化抽样间隔 100/5 控制额外显示开销。
 如果改成部署环境，应评估关闭 visualize 的性能收益；关闭后当前 local_plan 显示也会停止更新。
 
-验证：`tests/exploration/test_mppi_profile.py` 检查与基线几何、规划器、安全配置一致，
-并验证执行器限制、预测窗口和路径方向性约束；图形运行结果见后续记录。
+配置回归：`tests/exploration/test_navigation_config.py` 检查各控制器的组合配置，
+`test_motion_limits.py` 检查速度约束联动。旧圆形/Navfn参数快照测试已删除；图形运行结果见后续记录。
 
 2026-10-29 起步验证未通过：164118、164408、164546、164841 运行均观察到目标与处理后的路径向前、
 控制输出向后的情况。164703 临时禁止普通倒车后停在起点，不能算通过。

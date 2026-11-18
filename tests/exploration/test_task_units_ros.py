@@ -8,6 +8,8 @@ import tempfile
 import threading
 import time
 import unittest
+import sys
+sys.path[:0]=[str(Path(__file__).resolve().parents[2]/'src/edgeai_mission'),str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation'),str(Path(__file__).resolve().parents[2]/'src/edgeai_navigation/scripts')]
 import yaml
 import rclpy
 from rclpy.action import ActionClient
@@ -15,7 +17,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rosgraph_msgs.msg import Clock
 from ament_index_python.packages import get_package_prefix
 from edgeai_mission.action import ExecuteTask
-from test_rescue_ros import FakeNavigation
+from fake_navigation import FakeNavigation
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -38,16 +40,30 @@ class TaskUnitsROS(unittest.TestCase):
                 settings.update(goal_source='map_pose',target_id=1,map_pose=[1.4 if retry else 1.,2.,0.],
                     dwell_s=.2,alignment_enabled=correction,wall_timeout_s=25.,approach_selection=dict(enabled=False))
                 if find_targets:
-                    settings.update(goal_source='detected_target',search_enabled=True,search_max_positions=3,search_timeout_s=15.)
+                    settings.update(goal_source='detected_target',search_enabled=True,search_max_positions=3,search_timeout_s=15.,search_frustum=dict(enabled=False))
                     fake.search_target_id=2;fake.search_target_type='cooperative';fake.search_discover_at=1
                     fake.retained_search_targets=[dict(id=1,type='normal',x=1.,y=2.,yaw=0.,spread_m=.01)]
                     fake.search_file=d/'targets.json'
                     fake.search_file.write_text(json.dumps(dict(frame_id='map',targets=fake.retained_search_targets)))
+                    from std_msgs.msg import String
+                    from rclpy.qos import QoSProfile,DurabilityPolicy
+                    registry_pub=fake.create_publisher(String,'/targets/estimates',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+                    from sensor_msgs.msg import CameraInfo
+                    info=CameraInfo();info.header.frame_id='robot1/base_footprint';info.width=640;info.height=480;info.k=[500.,0.,320.,0.,500.,240.,0.,0.,1.]
+                    camera_pub=fake.create_publisher(CameraInfo,'/robot1/camera/camera_info',10)
+                    fake.create_timer(.05,lambda:camera_pub.publish(info))
+                    fake.create_timer(.05,lambda:registry_pub.publish(String(data=fake.search_file.read_text())) if fake.search_file.exists() else None)
                 (d/'rescue-config.yaml').write_text(yaml.safe_dump(settings))
                 task='find_targets' if find_targets else 's1'
                 c=dict(required_targets=[dict(id=1,type='normal'),dict(id=2,type='cooperative')],directory=str(d),project_root=str(ROOT),wall_timeout_s=30.,
                     unit_worker_script=str(ROOT/'src/edgeai_mission/scripts/task_units.py'),
-                    task_trees={task:str(ROOT/'src/edgeai_mission/config/tasks'/f'{task}.xml')})
+                    task_trees={task:str(ROOT/'src/edgeai_mission/config/tasks'/('find_targets.xml' if find_targets else 's1.xml'))})
+                from edgeai_tasks.mission_fleet import fleet_layout
+                from edgeai_nav.fleet_config import namespaced_config
+                from navigation_config import load_navigation
+                c['fleet']=fleet_layout(False,False,[0.,-.6,0.])
+                nav=namespaced_config(load_navigation(ROOT/'src/edgeai_navigation/config','rpp'),'robot1')
+                (d/'nav2-runtime.yaml').write_text(yaml.safe_dump(nav))
                 config=d/'config.json';config.write_text(json.dumps(c))
                 binary=Path(get_package_prefix('edgeai_mission'))/'lib/edgeai_mission/task_executor'
                 with (d/'task.log').open('w+') as log:
@@ -62,7 +78,7 @@ class TaskUnitsROS(unittest.TestCase):
                     handle=wait(sent);self.assertTrue(handle.accepted)
                     terminal=wait(handle.get_result_async());log.flush();log.seek(0)
                     evidence=log.read()+'\n'+(d/('target-search.log' if find_targets else 'rescue.log')).read_text()
-                    evidence+='\n'+(d/'task-unit-events.jsonl').read_text()[-2400:]
+                    evidence+='\n'+((d/'task-unit-events.jsonl').read_text()[-2400:] if (d/'task-unit-events.jsonl').exists() else 'backend did not start')
                     self.assertEqual(terminal.status,4,evidence+'\n'+terminal.result.reason)
                     result=json.loads(terminal.result.result_json)
                     self.assertTrue(result['success'],evidence)

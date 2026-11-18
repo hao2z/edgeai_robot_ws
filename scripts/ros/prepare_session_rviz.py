@@ -68,4 +68,26 @@ if os.environ.get('EDGEAI_COOPERATIVE_RESCUE')=='true':
     manager['Displays']=shared+[
         {'Class':'rviz_common/Group','Name':f'Robot {i}','Enabled':True,'Displays':displays}
         for i,displays in enumerate(robots,1)]
+if os.environ.get('EDGEAI_JOINT_MAPPING')=='true':
+    def joint_displays(displays,robot=''):
+        for display in displays:
+            name=display.get('Name','')
+            current=robot
+            if name=='Robot 1':current='robot1'
+            elif name=='Robot 2':current='robot2'
+            field='Description Topic' if display.get('Class')=='rviz_default_plugins/RobotModel' else 'Topic'
+            topic=display.get(field,{})
+            if current=='robot1' and topic.get('Value') in ('/robot_description','/truth/markers'):
+                topic['Value']='/robot1'+topic['Value']
+            if topic.get('Value')=='/explore/frontiers':topic['Value']='/robot1/explore/frontiers'
+            if display.get('Displays'):joint_displays(display['Displays'],current)
+    joint_displays(manager['Displays'])
+def scope_primary(value):
+    if isinstance(value,dict):return {k:scope_primary(v) for k,v in value.items()}
+    if isinstance(value,list):return [scope_primary(v) for v in value]
+    if isinstance(value,str):
+        if value in ('base_link','base_footprint','odom','camera_optical_frame'):return 'robot1/'+value
+        if value.startswith('/') and not value.startswith(('/robot1/','/robot2/','/map','/targets/','/mission/','/joint_mapping/','/exploration/','/target_search/','/single_rescue/','/cooperative_rescue/')):return '/robot1'+value
+    return value
+config=scope_primary(config)
 output.write_text(yaml.safe_dump(config,sort_keys=False))

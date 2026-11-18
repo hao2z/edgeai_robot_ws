@@ -21,12 +21,13 @@ from suspect_geometry import panels, prefer_surface_normal, laser_support
 
 
 class Suspects(Node):
-    def __init__(self):
-        super().__init__('suspect_targets')
+    def __init__(self, camera_source=None, **node_options):
+        super().__init__('suspect_targets', **node_options)
+        self.camera_source = camera_source
         defaults=dict(processing_hz=5.,panel_size_m=.20,max_image_age_s=.5,
                       sync_slop_s=.05,confirmation_frames=2,candidate_ttl_s=8.,known_target_radius_m=.30,
                       enabled=True,depth_geometry_enabled=True,laser_enabled=True,
-                      laser_topic='/scan',laser_sync_slop_s=.15,laser_support_radius_m=.10,
+                      laser_topic='scan',laser_sync_slop_s=.15,laser_support_radius_m=.10,odom_frame='robot1/odom',
                       max_candidates=24,fusion_window=20,output_directory='')
         for key,value in defaults.items():
             self.declare_parameter(key,value)
@@ -44,14 +45,15 @@ class Suspects(Node):
         self.records=[];self.next_id=0;self.stats=Counter();self.last_diag=0.
         self.notified={}
         self.output=Path(self.p['output_directory']) if self.p['output_directory'] else None
-        self.create_subscription(Image,'/camera/image',lambda m:self.rgb.append(m),qos_profile_sensor_data)
-        self.create_subscription(Image,'/camera/depth_image',lambda m:self.depth.append(m),qos_profile_sensor_data)
-        self.create_subscription(CameraInfo,'/camera/camera_info',self.camera,qos_profile_sensor_data)
+        if camera_source is None:
+            self.create_subscription(Image,'camera/image',lambda m:self.rgb.append(m),qos_profile_sensor_data)
+            self.create_subscription(CameraInfo,'camera/camera_info',self.camera,qos_profile_sensor_data)
+        self.create_subscription(Image,'camera/depth_image',lambda m:self.depth.append(m),qos_profile_sensor_data)
         if self.p['laser_enabled']:
             self.create_subscription(LaserScan,self.p['laser_topic'],lambda m:self.scans.append(m),qos_profile_sensor_data)
         self.create_subscription(String,'/targets/estimates',self.known_received,1)
         qos=QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.publisher=self.create_publisher(String,'/targets/suspected',qos)
+        self.publisher=self.create_publisher(String,'targets/suspected',qos)
         self.create_timer(1/self.p['processing_hz'],self.process)
         self.get_logger().info(f'SUSPECT_READY: 独立持续检测 {self.p["processing_hz"]:g} Hz，深度几何与激光辅助，多帧候选保留至本次会话结束')
 
@@ -67,7 +69,7 @@ class Suspects(Node):
     def update_known(self):
         registry=self.known_registry
         if not registry or registry.get('frame_id')!='map':return
-        tf=self.buffer.lookup_transform('odom','map',Time()).transform
+        tf=self.buffer.lookup_transform(self.p['odom_frame'],'map',Time()).transform
         rotation=rotation_matrix(tf.rotation)
         translation=np.array([tf.translation.x,tf.translation.y,tf.translation.z])
         for target in registry.get('targets',[]):
@@ -98,7 +100,7 @@ class Suspects(Node):
             self.stats['known_excluded']+=before-len(self.records)
             ids={r['id'] for r in self.records}
             self.notified={k:v for k,v in self.notified.items() if k in ids}
-            tf=self.buffer.lookup_transform('map','odom',Time()).transform
+            tf=self.buffer.lookup_transform('map',self.p['odom_frame'],Time()).transform
             rotation=rotation_matrix(tf.rotation);translation=np.array([tf.translation.x,tf.translation.y,tf.translation.z])
             for record in self.records:
                 hint={k:v for k,v in record.items() if not k.startswith('_')}
@@ -155,23 +157,28 @@ class Suspects(Node):
             snapshot.replace(self.output/'suspect-candidates.json')
 
     def detect(self,now):
-        if not self.rgb or not self.depth or self.info is None:
+        if self.camera_source is None:
+            image = self.rgb[-1] if self.rgb else None
+            info = self.info
+        else:
+            image = self.camera_source['latest']
+            info = self.camera_source['info']
+        if image is None or not self.depth or info is None:
             self.stats['missing_input']+=1;return
         stamp=lambda m:Time.from_msg(m.header.stamp).nanoseconds/1e9
-        image=self.rgb[-1]; image_time=stamp(image)
+        image_time=stamp(image)
         if image_time==self.last_stamp:
             return
         depth=min(self.depth,key=lambda m:abs(stamp(m)-image_time))
         if not 0<=now-image_time<=self.p['max_image_age_s'] or abs(stamp(depth)-image_time)>self.p['sync_slop_s']:
             self.stats['stale_or_unsynced']+=1;return
-        info=self.info
         if (image.header.frame_id!=depth.header.frame_id or image.header.frame_id!=info.header.frame_id
             or (image.width,image.height)!=(depth.width,depth.height)
             or (image.width,image.height)!=(info.width,info.height) or any(abs(d)>1e-8 for d in info.d)):
             raise ValueError('Registered, undistorted RGB/depth/CameraInfo required')
         if depth.encoding not in ('32FC1','16UC1'):
             raise ValueError('Unsupported depth encoding')
-        tf=self.buffer.lookup_transform('odom',image.header.frame_id,Time.from_msg(image.header.stamp)).transform
+        tf=self.buffer.lookup_transform(self.p['odom_frame'],image.header.frame_id,Time.from_msg(image.header.stamp)).transform
         rgb=self.bridge.imgmsg_to_cv2(image,'bgr8')
         metres=self.bridge.imgmsg_to_cv2(depth,'passthrough').astype(float)
         if depth.encoding=='16UC1':
@@ -217,7 +224,7 @@ class Suspects(Node):
         if abs(stamp(scan)-image_time)+max(0.,scan.time_increment)*(len(scan.ranges)-1)>self.p['laser_sync_slop_s']:
             self.stats['laser_unsynced']+=1;return []
         try:
-            tf=self.buffer.lookup_transform('odom',scan.header.frame_id,Time.from_msg(scan.header.stamp)).transform
+            tf=self.buffer.lookup_transform(self.p['odom_frame'],scan.header.frame_id,Time.from_msg(scan.header.stamp)).transform
         except TransformException:
             self.stats['laser_tf_missing']+=1;return []
         ranges=np.asarray(scan.ranges)

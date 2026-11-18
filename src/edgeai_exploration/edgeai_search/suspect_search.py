@@ -115,9 +115,6 @@ class ParallelCandidates:
     def __init__(self, baseline, node, camera_provider=None):
         self.baseline=baseline;self.node=node;self.positions=baseline.positions
         self.used=[];self.used_positions=[];self.active_id=None;self.visits=0
-        if camera_provider is None:
-            from edgeai_tasks.search_candidates import camera_model
-            camera_provider=lambda:camera_model(node)
         self.camera_provider=camera_provider
 
     def next_view(self,robot):
@@ -134,14 +131,17 @@ class ParallelCandidates:
                    and h['confidence']>=c.get('min_confidence',.5)]
             fresh=without_known(fresh,node.read_target_registry(allow_handover=True),c.get('known_target_radius_m',.30))
             try:
-                camera=self.camera_provider()
+                if self.camera_provider is None:
+                    from edgeai_tasks.search_candidates import camera_model
+                    camera=camera_model(node)
+                else:camera=self.camera_provider()
             except ValueError:
                 camera=None
             views=normal_views(fresh,grid.data,grid.info.width,grid.info.height,grid.info.resolution,
                 (grid.info.origin.position.x,grid.info.origin.position.y),robot,
                 node.c.get('search_clearance_m',.4),c.get('standoff_m',.8),camera,c)
             views=[v for v in views if (v['suspect_id'],v['normal_axis'],v['normal_sign'],v['view_angle_offset_deg']) not in self.used
-                   and all(math.dist((v['x'],v['y']),p)>=c.get('min_view_spacing_m',.30) for p in self.used_positions)]
+                   and all(math.dist((v['x'],v['y']),p)>=c.get('min_view_spacing_m',.10) for p in self.used_positions)]
         same_round=[v for v in views if v['suspect_id']==self.active_id]
         if same_round:
             views=same_round

@@ -4,7 +4,9 @@ initial_relative_pose: [0.0, -0.60, 0.0]  # robot2相对robot1初始车体坐标
 initial_std_xy_m: 0.20
 initial_std_yaw_rad: 0.25
 localization_timeout_s: 90.0  # 墙钟；无有效定位时不派发救援导航
-localization_stable_s: 2.0  # 仿真秒
+localization_startup_timeout_s: 40.0  # 生命周期服务墙钟预算；失败由顶层定位接管重试。
+localization_stable_s: 2.0  # 仿真秒；首次接管收敛一次，S1/C1复用。
+nomotion_update_interval_s: 0.25  # 仿真秒；仅首次收敛且停车时强制AMCL更新，完成后停止。
 max_std_xy_m: 0.15
 max_std_yaw_rad: 0.20
 scan_match_distance_m: 0.18
@@ -29,6 +31,7 @@ preplan_recovery:  # 预规划起点占据时由C1任务树调用；成功后必
 rescue_repair_rounds: 3  # 导航成功但救援距离或朝向不达标：重新停车的重试上限
 radius_m: 0.70
 dwell_s: 10.0  # 两机同时满足距离、朝向和停车条件的连续仿真时间
+dwell_data_grace_s: 2.0  # 短暂数据中断保留停留计时；新鲜样本通过后才确认成功
 settle_margin_s: 1.0  # 额外连续停车时间，避开真值离散采样覆盖到停稳前的窗口。
 yaw_tolerance_rad: 0.25  # 按机器人到目标坐标的连线检查朝向；无需再次视觉发现。
 alignment_enabled: true

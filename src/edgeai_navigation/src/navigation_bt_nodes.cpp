@@ -164,7 +164,7 @@ public:
       const bool reference = rpp_current && rpp_.value("frame", "") == map_->header.frame_id &&
         rpp_.contains("carrot_x") && rpp_.contains("carrot_y");
       const bool occupied = !poseFree(grid, body, pose);
-      const auto overlap = occupiedOverlap(grid, body, pose);
+      const auto overlap = occupied ? occupiedOverlap(grid, body, pose) : OccupancyOverlap{};
       if (occupied && (actual_.size() < 3 || !overlap.valid)) {
         RCLCPP_WARN(node_->get_logger(), "RECOVERY_NO_SAFE_MOTION: %s",
           actual_.size() < 3 ? "actual footprint unavailable" :
@@ -188,7 +188,7 @@ public:
         const auto end = advanced(pose, motion, 1.0);
         const bool connection = reference && rppConnectionFree(grid, body, end,
           rpp_["carrot_x"].get<double>(), rpp_["carrot_y"].get<double>(), rpp_.value("allow_reversing", false));
-        const double score = clearance(grid, body, end) + (motion.kind == "spin" ? 0.0 : .02) +
+        const double score = footprintPreference(grid, body, end) + (motion.kind == "spin" ? 0.0 : .02) +
           (motion.kind == "backup" ? .01 : 0.0) + std::min(.1, std::abs(motion.amount)) * .01;
         if (!best || (connection && !best_connection) || (connection == best_connection && score > best_score)) {
           best = motion; best_score = score; best_connection = connection;

@@ -44,7 +44,14 @@ TEXT = {
 # Translate only the operator-facing projection. Raw logs and JSON evidence
 # retain their original strings, event identifiers, coordinates and timestamps.
 TEXT.update({
-    '搜寻全部救援目标': 'Find all rescue targets', 'S1 单机救援': 'S1 single-robot rescue',
+    '汇总双方导航结果': 'Collect navigation results', '检查让路进展': 'Check yielding progress',
+    '检查前沿更新': 'Check frontier updates',
+    '分配救援机器人及停车点': 'Assign rescue robot and parking',
+    '救援失败回退与重新分配': 'Recover and reassign rescue',
+    '诊断空闲车阻挡': 'Diagnose idle peer obstruction', '选择让路位置': 'Select yielding pose',
+    '派发让路导航': 'Dispatch yielding navigation', '分配前沿目标': 'Assign frontier goals',
+    '检查探索完成条件': 'Check exploration completion',
+    '双机协同探索': 'Cooperative exploration', '搜寻全部救援目标': 'Find all rescue targets', 'S1 单机救援': 'S1 single-robot rescue',
     'C1 双机救援': 'C1 cooperative rescue', '取得导航控制权': 'Acquire navigation control',
     '检查已定位目标': 'Check localized target', '搜寻缺失目标': 'Search for missing target',
     '切换搜寻目标': 'Switch search target', '核对目标清单': 'Check target list',
@@ -53,6 +60,9 @@ TEXT.update({
     '检查救援条件与停留时间': 'Check rescue conditions and dwell time', '微调救援位姿': 'Adjust rescue pose',
     '切换共享地图': 'Switch to shared map', '等待双机导航就绪': 'Wait for both robots to be ready',
     '激光定位': 'LiDAR localization', '核对 C1 位置': 'Check C1 position',
+    '建图完成，启动定位': 'Mapping complete; start localization',
+    '定位已就绪，允许后续任务': 'Localization ready; subsequent tasks enabled',
+    '定位接管失败': 'Localization handover failed',
     '选择双机停车点': 'Select parking poses for both robots',
     '重新选择未到位车辆的停车点': 'Reselect parking for robots not yet in position',
     '记录任务成功': 'Record task success', '结束探索动作': 'Finish exploration actions',

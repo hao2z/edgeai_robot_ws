@@ -1,4 +1,6 @@
-# 自主探索与救援入口
+# 自主探索与救援历史基线
+
+历史说明：本页保存此前基线，不再逐次维护。当前入口与职责见 [仓库说明](README.md) 和 [文档索引](docs/README.md)。
 
 当前基线（2026-11-11）为native ROS2 Jazzy、RPP/Rotation Shim、Smac Lattice、SLAM Toolbox和前沿探索。
 默认任务：robot1建图并找到S1/C1 → S1 → 最终地图交接 → 两机AMCL → C1。

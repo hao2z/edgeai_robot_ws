@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Peer footprint masks for mapping and localization; never change navigation scans."""
 import argparse
-import copy
 import json
 import math
 import time
@@ -17,24 +16,12 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from tf2_ros import Buffer, TransformListener, TransformException
 from edgeai_nav.geometry import compose, relative
+from edgeai_mapping.scan_mask import mask_scan
 
 
 def planar(p):
     q=p.orientation
     return [p.position.x,p.position.y,math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))]
-
-
-def mask_scan(scan,laser_in_other,bounds,margin):
-    """NaN means unobserved, never fabricate free space behind the robot."""
-    result=copy.deepcopy(scan);count=0
-    xmin,xmax,ymin,ymax=bounds;c,s=math.cos(laser_in_other[2]),math.sin(laser_in_other[2])
-    for i,distance in enumerate(scan.ranges):
-        if not math.isfinite(distance) or not scan.range_min<=distance<=scan.range_max:continue
-        a=scan.angle_min+i*scan.angle_increment;x,y=distance*math.cos(a),distance*math.sin(a)
-        x,y=laser_in_other[0]+c*x-s*y,laser_in_other[1]+s*x+c*y
-        if xmin-margin<=x<=xmax+margin and ymin-margin<=y<=ymax+margin:
-            result.ranges[i]=float('nan');count+=1
-    return result,count
 
 
 def covariance_reliable(covariance,max_xy,max_yaw):
@@ -52,7 +39,7 @@ class LocalizationScanFilter(Node):
     """One direction, using only time-aligned estimated TF and AMCL covariance."""
     def __init__(self,**node_options):
         super().__init__('localization_scan_filter',**node_options)
-        defaults=dict(other_base_frame='robot2/base_footprint',own_odom_frame='odom',
+        defaults=dict(other_base_frame='robot2/base_footprint',own_odom_frame='robot1/odom',
             other_odom_frame='robot2/odom',other_pose_topic='/robot2/amcl_pose',
             bounds=[-.3125,.1125,-.165,.165],margin_m=.05,max_age_s=.5,max_wait_s=.1,
             max_std_xy_m=.15,max_std_yaw_rad=.20)

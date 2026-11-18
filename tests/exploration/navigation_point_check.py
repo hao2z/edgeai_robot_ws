@@ -24,28 +24,28 @@ def main():
     args,ros_args=parser.parse_known_args();rclpy.init(args=ros_args)
     node=Node('navigation_point_check');buffer=Buffer();listener=TransformListener(buffer,node)
     state={};commands={};trace=[];attempts=[];handle=None;pending=None;plan_updates=[]
-    node.create_subscription(NavigationPath,'/plan',lambda m:plan_updates.append(
+    node.create_subscription(NavigationPath,'/robot1/plan',lambda m:plan_updates.append(
         node.get_clock().now().nanoseconds/1e9),1)
     def received(msg):state.update(json.loads(msg.data))
-    node.create_subscription(String,'/navigation_authority/state',received,
+    node.create_subscription(String,'/robot1/navigation_authority/state',received,
         QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
     for topic in ('cmd_vel_nav','cmd_vel_smoothed','cmd_vel'):
-        node.create_subscription(Twist,'/'+topic,
+        node.create_subscription(Twist,'/robot1/'+topic,
             lambda m,t=topic:commands.update({t:[m.linear.x,m.angular.z]}),1)
-    node.create_subscription(Odometry,'/odom',lambda m:commands.update(measured_odom=[
+    node.create_subscription(Odometry,'/robot1/odom',lambda m:commands.update(measured_odom=[
         math.hypot(m.twist.twist.linear.x,m.twist.twist.linear.y),m.twist.twist.angular.z],
         measured_forward_mps=m.twist.twist.linear.x),qos_profile_sensor_data)
     if os.environ.get('EDGEAI_CONTROLLER')=='rpp':
-        node.create_subscription(PointStamped,'/lookahead_point',lambda m:commands.update(
+        node.create_subscription(PointStamped,'/robot1/lookahead_point',lambda m:commands.update(
             rpp_lookahead=dict(frame=m.header.frame_id,x=m.point.x,y=m.point.y)),1)
     clients={kind:ActionClient(node,NavigateToPose,endpoint) for kind,endpoint in
-             [('position','/navigate_to_pose'),('heading','/navigation/heading_to_pose'),('rescue','/navigation/rescue_to_pose')]}
+             [('position','/robot1/navigate_to_pose'),('heading','/robot1/navigation/heading_to_pose'),('rescue','/robot1/navigation/rescue_to_pose')]}
     def wait(predicate,seconds):
         end=time.monotonic()+seconds
         while not predicate() and time.monotonic()<end:rclpy.spin_once(node,timeout_sec=.03)
         if not predicate():raise RuntimeError('Point check wait timeout')
     def pose():
-        tf=buffer.lookup_transform('map','base_footprint',Time()).transform
+        tf=buffer.lookup_transform('map','robot1/base_footprint',Time()).transform
         q=tf.rotation
         return [tf.translation.x,tf.translation.y,math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))]
     def pose_ready():
@@ -123,7 +123,7 @@ def main():
                 if now-start>sim_limit:break
                 if now-last>=.2:
                     p=pose();last=now
-                    odom=buffer.lookup_transform('odom','base_footprint',Time()).transform.translation
+                    odom=buffer.lookup_transform('robot1/odom','robot1/base_footprint',Time()).transform.translation
                     trace.append(dict(name=name,t=now,pose=p,odom=[odom.x,odom.y],distance=math.hypot(p[0]-gx,p[1]-gy),commands=dict(commands)))
             if not pending.done():
                 cancel=handle.cancel_goal_async();wait(cancel.done,3.);wait(pending.done,5.)
@@ -137,7 +137,7 @@ def main():
             path_length=0.
             for a,b in zip(samples,samples[1:]):
                 dt=b['t']-a['t'];v,w=b['commands'].get('measured_odom',[0.,0.])
-                path_length+=math.dist(a['odom'],b['odom'])
+                path_length+=math.dist(a['robot1/odom'],b['robot1/odom'])
                 if v<.01 and abs(w)<.05:stationary+=dt;longest=max(longest,stationary)
                 else:stationary=0.
                 if v<.01 and abs(w)>=.05:rotate_time+=dt

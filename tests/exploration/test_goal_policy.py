@@ -44,6 +44,31 @@ class GoalTrees(unittest.TestCase):
                 for tag in ('BackUp','Spin','RecoveryNode','ClearEntireCostmap'):
                     self.assertEqual(len(tree.findall('.//'+tag)),len(ET.parse(source).findall('.//'+tag)))
 
+    def test_root_namespace_with_joint_mapping_tf_prefix(self):
+        source=ROOT/'src/edgeai_navigation/config/behavior_trees/explore_recovery.xml'
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp)/'nav2-runtime.yaml').write_text(yaml.safe_dump({
+                'local_costmap':{'local_costmap':{'ros__parameters':{}}},
+                'bt_navigator':{'ros__parameters':{'robot_base_frame':'robot1/base_footprint'}}}))
+            for path in managed_trees(source,tmp,namespace='/').values():
+                tree=ET.parse(path)
+                self.assertEqual(tree.find('.//NavigateToPose').get('server_name'),
+                                 '/navigation/yield_peer')
+                for tag in ('PathNearRobot','SelectRecovery'):
+                    self.assertEqual(tree.find('.//'+tag).get('robot_frame'),
+                                     'robot1/base_footprint')
+
+    def test_robot2_yielding_does_not_call_root_requester_endpoint(self):
+        source=ROOT/'src/edgeai_navigation/config/behavior_trees/explore_recovery.xml'
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp)/'nav2-runtime.yaml').write_text(yaml.safe_dump({
+                'local_costmap':{'local_costmap':{'ros__parameters':{}}},
+                'bt_navigator':{'ros__parameters':{'robot_base_frame':'robot2/base_footprint'}}}))
+            for path in managed_trees(source,tmp,namespace="/robot2/").values():
+                self.assertEqual(ET.parse(path).find('.//NavigateToPose').get('server_name'),
+                                 '/robot2/navigation/yield_peer')
+
+
 
 if __name__=='__main__':
     unittest.main()

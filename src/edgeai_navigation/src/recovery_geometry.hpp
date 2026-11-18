@@ -6,6 +6,8 @@
 #include <vector>
 #include <set>
 #include "nav2_costmap_2d/costmap_2d.hpp"
+#include "nav2_costmap_2d/footprint_collision_checker.hpp"
+#include "nav2_costmap_2d/cost_values.hpp"
 #include "geometry_msgs/msg/point.hpp"
 
 namespace edgeai_navigation
@@ -26,49 +28,24 @@ inline Polygon transformed(const Polygon & body, RecoveryPose pose)
   return result;
 }
 
-inline bool intersects(const Polygon & a, const Polygon & b)
-{
-  // Separating-axis test for the convex published robot polygon and grid cells.
-  for (const auto * polygon : {&a, &b}) {
-    for (size_t i = 0; i < polygon->size(); ++i) {
-      const auto & u = (*polygon)[i]; const auto & v = (*polygon)[(i + 1) % polygon->size()];
-      const double nx = u.y - v.y, ny = v.x - u.x;
-      double amin = INFINITY, amax = -INFINITY, bmin = INFINITY, bmax = -INFINITY;
-      for (const auto & p : a) {const auto d = p.x * nx + p.y * ny; amin = std::min(amin, d); amax = std::max(amax, d);}
-      for (const auto & p : b) {const auto d = p.x * nx + p.y * ny; bmin = std::min(bmin, d); bmax = std::max(bmax, d);}
-      if (amax < bmin - 1e-9 || bmax < amin - 1e-9) {return false;}
-    }
-  }
-  return true;
-}
-
-inline bool poseFree(const nav2_costmap_2d::Costmap2D & map,
+// Use the same Nav2 footprint rasterizer and lethal threshold as native behaviors.
+// The caller owns a costmap snapshot; no subscriptions or extra map copies here.
+inline double footprintCost(nav2_costmap_2d::Costmap2D & map,
   const Polygon & body, RecoveryPose pose)
 {
-  if (body.size() < 3) {return false;}
-  const auto polygon = transformed(body, pose);
-  unsigned int xmin = map.getSizeInCellsX(), xmax = 0, ymin = map.getSizeInCellsY(), ymax = 0;
-  for (const auto & p : polygon) {
-    unsigned int x, y;
-    if (!map.worldToMap(p.x, p.y, x, y)) {return false;}
-    xmin = std::min(xmin, x); xmax = std::max(xmax, x);
-    ymin = std::min(ymin, y); ymax = std::max(ymax, y);
-  }
-  const double half = map.getResolution() / 2.0;
-  for (unsigned int y = ymin; y <= ymax; ++y) {
-    for (unsigned int x = xmin; x <= xmax; ++x) {
-      // Inflation is a soft cost for polygon collision checks; unknown is blocked.
-      if (map.getCost(x, y) < 254) {continue;}
-      double wx, wy; map.mapToWorld(x, y, wx, wy);
-      Polygon cell(4);
-      cell[0].x = wx - half; cell[0].y = wy - half;
-      cell[1].x = wx + half; cell[1].y = wy - half;
-      cell[2].x = wx + half; cell[2].y = wy + half;
-      cell[3].x = wx - half; cell[3].y = wy + half;
-      if (intersects(polygon, cell)) {return false;}
-    }
-  }
-  return true;
+  unsigned int mx, my;
+  if (body.size() < 3 || !std::isfinite(pose.x) || !std::isfinite(pose.y) ||
+    !std::isfinite(pose.yaw) || !map.worldToMap(pose.x, pose.y, mx, my))
+  {return nav2_costmap_2d::LETHAL_OBSTACLE;}
+  nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(&map);
+  return checker.footprintCostAtPose(pose.x, pose.y, pose.yaw, body);
+}
+
+inline bool poseFree(nav2_costmap_2d::Costmap2D & map,
+  const Polygon & body, RecoveryPose pose)
+{
+  const double cost = footprintCost(map, body, pose);
+  return cost >= 0.0 && cost < nav2_costmap_2d::LETHAL_OBSTACLE;
 }
 
 inline RecoveryPose advanced(RecoveryPose pose, const RecoveryMotion & motion, double fraction)
@@ -81,7 +58,7 @@ inline RecoveryPose advanced(RecoveryPose pose, const RecoveryMotion & motion, d
   return pose;
 }
 
-inline bool motionFree(const nav2_costmap_2d::Costmap2D & map, const Polygon & body,
+inline bool motionFree(nav2_costmap_2d::Costmap2D & map, const Polygon & body,
   RecoveryPose pose, const RecoveryMotion & motion)
 {
   const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(motion.amount) /
@@ -92,25 +69,12 @@ inline bool motionFree(const nav2_costmap_2d::Costmap2D & map, const Polygon & b
   return true;
 }
 
-inline double clearance(const nav2_costmap_2d::Costmap2D & map,
+// Rank already-feasible endpoints by native costmap cost (inflation is soft).
+// This replaces a full-map obstacle-distance scan for every recovery candidate.
+inline double footprintPreference(nav2_costmap_2d::Costmap2D & map,
   const Polygon & body, RecoveryPose pose)
 {
-  const auto polygon = transformed(body, pose);
-  double best = 1.0;
-  for (unsigned int y = 0; y < map.getSizeInCellsY(); ++y) {
-    for (unsigned int x = 0; x < map.getSizeInCellsX(); ++x) {
-      if (map.getCost(x, y) < 254) {continue;}
-      double wx, wy; map.mapToWorld(x, y, wx, wy);
-      for (size_t i = 0; i < polygon.size(); ++i) {
-        const auto & a = polygon[i]; const auto & b = polygon[(i + 1) % polygon.size()];
-        const double dx = b.x - a.x, dy = b.y - a.y;
-        const double t = std::clamp(((wx - a.x) * dx + (wy - a.y) * dy) /
-            std::max(1e-12, dx * dx + dy * dy), 0.0, 1.0);
-        best = std::min(best, std::hypot(wx - a.x - t * dx, wy - a.y - t * dy));
-      }
-    }
-  }
-  return std::max(0.0, best - map.getResolution() / std::sqrt(2.0));
+  return 1.0 - footprintCost(map, body, pose) / nav2_costmap_2d::LETHAL_OBSTACLE;
 }
 
 struct OccupancyOverlap
@@ -179,7 +143,7 @@ inline OccupancyOverlap occupiedOverlap(const nav2_costmap_2d::Costmap2D & map,
 
 // Exit existing known overlap, including actual body overlap. Both footprints
 // must lose overlap monotonically without touching any new occupied cells.
-inline bool occupiedEscapeFree(const nav2_costmap_2d::Costmap2D & map,
+inline bool occupiedEscapeFree(nav2_costmap_2d::Costmap2D & map,
   const Polygon & actual, const Polygon & padded, RecoveryPose pose,
   const RecoveryMotion & motion, const OccupancyOverlap & allowed,
   const OccupancyOverlap * original_actual = nullptr)
@@ -205,7 +169,7 @@ inline bool occupiedEscapeFree(const nav2_costmap_2d::Costmap2D & map,
     (previous < 1e-8 && poseFree(map, padded, advanced(pose, motion, 1.0)));
 }
 
-inline bool rppConnectionFree(const nav2_costmap_2d::Costmap2D & map,
+inline bool rppConnectionFree(nav2_costmap_2d::Costmap2D & map,
   const Polygon & body, RecoveryPose pose, double target_x, double target_y, bool reversing)
 {
   const double dx = target_x - pose.x, dy = target_y - pose.y;

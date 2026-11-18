@@ -4,13 +4,13 @@
 
 | 文件 | NavigateToPose Action入口 | 用途 |
 |---|---|---|
-| `position.yaml` | `/navigate_to_pose` | 普通点、换位 |
-| `frontier.yaml` | `/exploration/navigate_to_pose` | 前沿 |
-| `heading.yaml` | `/navigation/heading_to_pose` | 指定朝向 |
-| `rescue.yaml` | `/navigation/rescue_to_pose` | S1救援导航 |
-| `cooperative.yaml` | `/navigation/cooperative_to_pose` | C1救援导航 |
+| `position.yaml` | `/robotN/navigate_to_pose` | 普通点、换位 |
+| `frontier.yaml` | `/robotN/navigation/assigned_frontier_to_pose` | 前沿 |
+| `heading.yaml` | `/robotN/navigation/heading_to_pose` | 指定朝向 |
+| `rescue.yaml` | `/robotN/navigation/rescue_to_pose` | S1救援导航 |
+| `cooperative.yaml` | `/robotN/navigation/cooperative_to_pose` | C1救援导航 |
 
-robot2的入口加`/robot2`前缀。入口负责选择策略，权限节点仍负责唯一执行槽、取消和交接。S1/C1执行器分别调用各自入口；C1候选预规划也使用其独立规划器。
+`robotN`为`robot1`或`robot2`，单机也使用`robot1`。旧`exploration/navigate_to_pose`入口已删除，探索器不直接导航。入口负责选择策略，权限节点仍负责唯一执行槽、取消和交接。S1/C1执行器分别调用各自入口；C1候选预规划也使用其独立规划器。
 
 例如仅调整C1：
 

@@ -12,7 +12,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from nav2_msgs.action import Spin
 from std_msgs.msg import String
-from std_srvs.srv import SetBool
 from action_msgs.msg import GoalStatus
 
 
@@ -30,10 +29,9 @@ def main():
     state = {}
     def on_state(msg):
         state.clear(); state.update(json.loads(msg.data))
-    sub = node.create_subscription(String, '/navigation_authority/state', on_state,
+    sub = node.create_subscription(String, '/robot1/navigation_authority/state', on_state,
                                   QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-    client = ActionClient(node, Spin, '/navigation_backend/spin')
-    resume = node.create_client(SetBool, '/navigation_authority/set_manual')
+    client = ActionClient(node, Spin, '/robot1/navigation_backend/spin')
     handle = None
     result_future = None
     traveled = [0.0]
@@ -83,15 +81,8 @@ def main():
         if state.get('mode') != 'STOPPED' or state.get('command_sequence') != command_sequence:
             raise RuntimeError('Authority mode changed during scan; refusing automatic resume')
         node.get_logger().info('SCAN360_FINISHED: '+json.dumps(report))
-        if not resume.wait_for_service(timeout_sec=5):
-            raise RuntimeError('Authority resume service unavailable')
-        response = resume.call_async(SetBool.Request(data=False))
-        if not wait(response.done, 5) or not response.result().success:
-            raise RuntimeError('Failed to request automatic exploration')
-        if not wait(lambda: state.get('mode') == 'AUTO' and state.get('phase') == 'IDLE', 5):
-            raise RuntimeError('Automatic mode not confirmed')
-        if not report['success']:
-            node.get_logger().warning('SCAN360_INCOMPLETE: 旋转受阻或未完成一周；已确认终态，继续探索')
+        # Leave STOPPED; the task coordinator acquires the next task.
+
     except (RuntimeError, KeyboardInterrupt) as exc:
         report['reason'] = str(exc)
         if handle is not None and handle.accepted and not report['terminal_verified']:
@@ -106,7 +97,7 @@ def main():
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-    return 0 if state.get('mode') == 'AUTO' and report['terminal_verified'] else 1
+    return 0 if report['success'] and report['terminal_verified'] and 'reason' not in report else 1
 
 
 if __name__ == '__main__':

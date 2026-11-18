@@ -41,7 +41,7 @@ class RGBDNode(unittest.TestCase):
             if process.poll() is None:process.kill();process.wait()
 
     def test_mapping_memory_handover_reprojection_and_known_exclusion(self):
-        rclpy.init(args=['--ros-args','-p','use_sim_time:=false','-p','processing_hz:=10.0'])
+        rclpy.init(args=['--ros-args','-p','use_sim_time:=false','-p','processing_hz:=10.0','-p','odom_frame:=odom'])
         node=Suspects();feed=Node('suspect_test_camera');executor=SingleThreadedExecutor()
         executor.add_node(node);executor.add_node(feed)
         pubs=[feed.create_publisher(t,topic,10) for t,topic in

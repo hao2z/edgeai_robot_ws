@@ -89,12 +89,15 @@ def validate_config(c):
 def select_goal(config, registry):
     if config['goal_source'] == 'map_pose':
         x, y, yaw = map(float, config['map_pose'])
-        target_id = config['target_id']
+        target_id = config.get('target_id', -1)
     elif config['goal_source'] == 'detected_target':
+        requested_id = config.get('target_id')
+        allowed_ids = config.get('allowed_target_ids')
         rows = [r for r in registry.get('targets', [])
                 if r.get('type') == config.get('target_type', 'normal') and r.get('yaw') is not None
                 and (not config.get('require_confirmation', False) or r.get('confirmed'))
-                and (config['target_id'] < 0 or r['id'] == config['target_id'])]
+                and (allowed_ids is None or r['id'] in allowed_ids)
+                and (requested_id is None or requested_id < 0 or r['id'] == requested_id)]
         if registry.get('frame_id') != 'map' or not rows:
             raise ValueError('No eligible localized '+config.get('target_type', 'normal')+' target with map orientation')
         row = min(rows, key=lambda r: (-r.get('observations', 1), r['spread_m'], r['id']))
@@ -114,6 +117,14 @@ class Dwell:
     def __init__(self, config):
         self.config = config
         self.since = self.previous = None
+
+    def awaiting_data(self, now):
+        """Retain recent evidence without advancing time or confirming success."""
+        keep = (self.since is not None and self.previous is not None
+                and 0 <= now-self.previous <= self.config['max_data_age_s'])
+        if not keep:
+            self.since = self.previous = None
+        return keep
 
     def update(self, now, distance, yaw_error, linear, angular, fresh=True,position_limit=None):
         c = self.config

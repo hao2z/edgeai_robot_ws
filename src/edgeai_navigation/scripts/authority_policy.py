@@ -10,18 +10,13 @@ class AuthorityConfig:
     cancel_timeout_s: float = 5.0
     feedback_timeout_s: float = 10.0
     result_grace_s: float = 0.5
-    explorer_cancel_grace_s: float = 1.0
-    explorer_sync_timeout_s: float = 5.0
-    explorer_sync_retry_s: float = 1.0
-    backend_action: str = '/navigation_backend/navigate_to_pose'
-    auto_action: str = '/exploration/navigate_to_pose'
-    manual_action: str = '/navigate_to_pose'
-    explorer_control: str = '/exploration/control_exploration'
+    backend_action: str = 'navigation_backend/navigate_to_pose'
+    manual_action: str = 'navigate_to_pose'
 
 
 @dataclass
 class Authority:
-    mode: str = 'AUTO'
+    mode: str = 'MANUAL'
     phase: str = 'IDLE'
     owner: str = ''
     generation: int = 0
@@ -31,7 +26,7 @@ class Authority:
     cancel_sent_at: float | None = None
 
     def reserve(self, owner):
-        if self.phase != 'IDLE' or self.mode != owner:
+        if owner != 'MANUAL' or self.phase != 'IDLE' or self.mode != owner:
             return None
         self.generation += 1
         self.owner, self.phase = owner, 'SENDING'
@@ -41,7 +36,7 @@ class Authority:
         return self.generation
 
     def set_mode(self, mode):
-        if mode not in ('AUTO', 'MANUAL', 'STOPPED'):
+        if mode not in ('MANUAL', 'STOPPED'):
             raise ValueError(mode)
         changed = self.mode != mode
         if not changed:
@@ -59,9 +54,6 @@ class Authority:
         if self.mode_requested_at in (None, 0.0):
             self.mode_requested_at = monotonic_now
 
-    def should_force_cancel(self, monotonic_now, config=AuthorityConfig()):
-        return bool(self.cancel_requested and self.mode_requested_at is not None and
-                    monotonic_now - self.mode_requested_at >= config.explorer_cancel_grace_s)
 
     def mark_cancel_sent(self, monotonic_now):
         self.cancel_sent_at = monotonic_now

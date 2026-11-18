@@ -18,7 +18,7 @@ CONTROLLERS = {'position':'FollowPath','heading':'FollowPathHeading','rescue':'F
 
 # Task/request adapters own policy selection; the authority only arbitrates execution.
 ACTION_ROUTES = (
-    ('exploration/navigate_to_pose', 'AUTO', 'frontier'),
+    ('navigation/assigned_frontier_to_pose', 'MANUAL', 'frontier'),
     ('navigate_to_pose', 'MANUAL', 'position'),
     ('navigation/heading_to_pose', 'MANUAL', 'heading'),
     ('navigation/rescue_to_pose', 'MANUAL', 'rescue'),
@@ -106,7 +106,9 @@ def configure_controllers(config, profile_dir=None):
     behavior['global_frame']=config['global_costmap']['global_costmap']['ros__parameters']['global_frame']
 
 
-def managed_trees(source, directory):
+def managed_trees(source, directory, namespace=""):
+    """Use the ROS namespace for actions and runtime TF frames for geometry."""
+    namespace = namespace.strip("/")
     if not source:
         return dict.fromkeys(POLICIES, '')  # Test backends without a behavior tree.
     runtime=Path(directory)/'nav2-runtime.yaml'
@@ -130,6 +132,8 @@ def managed_trees(source, directory):
             elif parent.tag == 'FollowPath':
                 parent.set('goal_checker_id', checker)
                 parent.set('controller_id', CONTROLLERS[policy])
+            elif parent.tag == 'NavigateToPose' and parent.get('name') == 'YieldIdlePeer':
+                parent.set('server_name','/'+(namespace+'/' if namespace else '')+'navigation/yield_peer')
             elif parent.tag == 'SelectRecovery':
                 parent.set('controller_id', CONTROLLERS[policy])
                 parent.set('actual_footprint',actual)

@@ -27,4 +27,4 @@ aruco_targets:
     stale_after_s: 10.0
     output_directory: ''  # runner sets the current session directory
     # Development mapping only; replace with the competition's official ID/type table.
-    target_types: '1:normal,2:normal,3:normal,10:cooperative'
+    target_types: ''  # Set by the mission launcher from the selected target list.

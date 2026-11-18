@@ -17,9 +17,12 @@
 - For simulation tests, enable Gazebo/RViz, stop previous project sessions and
   terminal tabs before restarting, retain per-run logs and inspect actual GUI
   screenshots. Do not infer physical contact solely from a costmap warning.
-- Relevant checks: `tests/validate_layout.py`,
-  `tests/exploration/test_session_logging.py`,
-  `tests/simulation/validate_rectangle_footprint.py`, PowerShell syntax,
-  and a graphical smoke test after runtime/path changes.
+- Run checks for the affected behavior only. `bash edgeai.sh test` is the
+  quick entry; ROS contracts use `--profile ros-smoke`. Run a full graphical
+  mission at stage milestones or when launch/lifecycle changes require it,
+  not after every low-impact edit.
+- Main documentation owners are listed in `docs/README.md`. Update only the
+  affected public interface/configuration guide; do not synchronize historical
+  reports or duplicate implementation details and test lists across documents.
 - Before pushing, run `git diff --cached --check`; afterward verify local HEAD
   matches the remote branch SHA. Do not overwrite unrelated remote branches.

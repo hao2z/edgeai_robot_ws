@@ -16,9 +16,20 @@ class NavigationRequests:
             handle_accepted_callback=node.upstream_accepted,
             goal_callback=lambda request,owner=owner,policy=policy:node.admit(request,owner,policy),
             cancel_callback=node.cancel) for endpoint,owner,policy in ACTION_ROUTES]
+        self.servers.append(ActionServer(node,NavigateToPose,'navigation/yield_to_pose',
+            execute_callback=node.execute,callback_group=node.group,
+            handle_accepted_callback=node.upstream_accepted,
+            goal_callback=lambda request:node.admit(request,'MANUAL','position'),
+            cancel_callback=node.cancel))
         self.preference=node.create_service(SetBool,'navigation_authority/set_goal_heading',
             self.set_goal_heading,callback_group=node.group)
         self.subscription=node.create_subscription(PoseStamped,'goal_pose',self.manual_pose,1)
+
+    def destroy(self):
+        for server in self.servers:
+            server.destroy()
+        self.position.destroy()
+        self.heading.destroy()
 
     def set_goal_heading(self,request,response):
         self.require_heading=request.data
